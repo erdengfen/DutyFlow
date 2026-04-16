@@ -84,25 +84,34 @@ Demo 期最终必须实现以下完整链路：
 
 ### 未敲定问题
 
-- 应用启动命令最终采用 `uv run ...` 还是项目脚本入口。
-- 根目录 `main.py` 是删除、保留兼容提示，还是改为报错说明。
+- 已决策：全部运行和调试入口采用 `uv run`。
+- 已决策：删除根目录 `main.py`，后续以 `src/dutyflow/app.py` 和 `uv run dutyflow` 作为主入口。
 
 ### 任务清单
 
-- [ ] 创建 `src/dutyflow/` 包结构。
-- [ ] 创建 `src/dutyflow/app.py`。
-- [ ] 创建 `src/dutyflow/cli/main.py`。
-- [ ] 处理根目录 `main.py` 的长期入口职责。
-- [ ] 创建 `data/`、`skills/`、`test/` 基础目录。
-- [ ] 创建 `.env.example` 初版。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写 `test/test_app_entry.py`。
-- [ ] 执行本阶段完整链路检查。
+- [x] 创建 `src/dutyflow/` 包结构。
+- [x] 创建 `src/dutyflow/app.py`。
+- [x] 创建 `src/dutyflow/cli/main.py`。
+- [x] 处理根目录 `main.py` 的长期入口职责。
+- [x] 创建 `data/`、`skills/`、`test/` 基础目录。
+- [x] 创建 `.env.example` 初版。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写 `test/test_app_entry.py`。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 
-- [ ] 确认是否允许删除根目录 `main.py`，或仅保留兼容提示。
-- [ ] 确认应用启动命令偏好。
+- [x] 已确认删除根目录 `main.py`。
+- [x] 已确认采用 `uv run` 作为全部运行和调试入口，便于后续打包和 Docker 部署。
+
+### 验收记录
+
+- `uv run dutyflow --health`：通过。
+- `PYTHONPATH=src uv run python -m dutyflow.app --health`：通过。
+- `PYTHONPATH=src uv run python -m dutyflow.cli.main`：通过。
+- `PYTHONPATH=src uv run python test/test_app_entry.py`：通过。
+- `PYTHONPATH=src uv run python -m unittest discover -s test`：通过。
+- 说明：首次在沙箱内执行 `uv run` 时，uv 缓存目录不可写；经授权使用 uv 正常运行后通过。
 
 ## Step 1: 配置入口、Markdown 存储与日志基础
 
@@ -770,7 +779,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 
 | step | status | completed_at | notes |
 |---|---|---|---|
-| Step 0 | pending |  |  |
+| Step 0 | completed | 2026-04-17 | 已完成项目骨架、入口迁移、uv run 入口和 Step 0 测试。 |
 | Step 1 | pending |  |  |
 | Step 2 | pending |  |  |
 | Step 3 | pending |  |  |

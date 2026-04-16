@@ -2,3 +2,6 @@ docs/learn-claude-code
 docs/learn-claude-code/*
 
 .codex
+.env
+src/dutyflow.egg-info
+src/dutyflow.egg-info/*
