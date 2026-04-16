@@ -216,6 +216,7 @@ DutyFlow/
   AGENTS.md
   README.md
   PLANS.md
+  AGENT_BASE_TECH_NOTES.md
   pyproject.toml
   .python-version
   .env
@@ -231,53 +232,111 @@ DutyFlow/
     dutyflow/
       __init__.py
       app.py
+
       config/
         env.py
+
       agent/
+        runtime.py
+        model.py
+        messages.py
+        prompts.py
+        state.py
         tools.py
+        registry.py
+        router.py
+        executor.py
+        context.py
         skills.py
-        safety.py
+        permissions.py
+        hooks.py
+        recovery.py
+        workspace.py
+
+      tools/
+        identity_lookup.py
+        source_lookup.py
+        responsibility_lookup.py
+        approval_tools.py
+        decision_trace.py
+
       feishu/
         events.py
         client.py
         feedback.py
+
       identity/
         source_context.py
+        contact_resolver.py
+
       decision/
         weighting.py
+        rules.py
+
       context/
         short_context.py
+
       approval/
         approval_flow.py
+        task_interrupt.py
+
       tasks/
         task_state.py
+
       storage/
         file_store.py
+        markdown_store.py
+
       cli/
         main.py
+
       logging/
         audit_log.py
 
+  skills/
+    event_weighting/
+      SKILL.md
+
   data/
+    identity/
+      contacts/
+        index.md
+        people/
+          .gitkeep
+      sources/
+        index.md
+    state/
+      agent_state.md
     events/
     contexts/
     approvals/
+      pending/
+        .gitkeep
+      completed/
+        .gitkeep
     tasks/
     reports/
     logs/
     plans/
 
   test/
+    test_agent_runtime.py
     test_agent_tools.py
     test_agent_skills.py
-    test_agent_safety.py
+    test_agent_permissions.py
+    test_agent_hooks.py
+    test_agent_recovery.py
     test_feishu_events.py
     test_identity_source_context.py
+    test_identity_lookup.py
     test_decision_weighting.py
+    test_decision_rules.py
     test_context_short_context.py
     test_approval_flow.py
+    test_task_interrupt.py
     test_task_state.py
     test_file_store.py
+    test_markdown_store.py
     test_full_chain.py
 ```
 
