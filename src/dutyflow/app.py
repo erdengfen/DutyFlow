@@ -67,7 +67,7 @@ class DutyFlowApp:
         )
 
     def _ensure_runtime_layout(self) -> None:
-        """初始化 Step 1 所需的数据目录、Agent 控制状态和日志。"""
+        """初始化 Step 1 所需的数据目录、Agent 运行状态快照和日志。"""
         config = load_env_config(self.project_root)
         file_store = FileStore(self.project_root)
         markdown_store = MarkdownStore(file_store)
@@ -95,7 +95,7 @@ class DutyFlowApp:
             store.ensure_dir(relative)
 
     def _ensure_agent_control_state(self, store: MarkdownStore, data_dir: Path) -> None:
-        """缺失时创建最小 Agent 控制状态 Markdown 文件。"""
+        """缺失时创建最小 Agent 运行状态快照文件。"""
         state_path = data_dir / "state" / "agent_control_state.md"
         if store.exists(state_path):
             return
@@ -111,7 +111,7 @@ class DutyFlowApp:
                 "last_event_id": "",
             },
             body=(
-                "# Agent Control State\n\n"
+                "# Agent Control State Snapshot\n\n"
                 "## Runtime\n\n"
                 "- status: initialized\n"
                 "- current_model:\n"
@@ -124,7 +124,7 @@ class DutyFlowApp:
                 "| scope_id | continuation_attempts | compact_attempts | transport_attempts | tool_error_attempts |\n"
                 "|---|---:|---:|---:|---:|\n\n"
                 "## Notes\n\n"
-                "Step 1 initialized placeholder control state.\n"
+                "Step 1 initialized placeholder runtime snapshot.\n"
             ),
         )
         store.write_document(state_path, document)

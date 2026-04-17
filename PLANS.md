@@ -169,7 +169,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 实现指定 section 抽取。
 - [x] 实现基础审计日志。
 - [x] 初始化本地数据目录。
-- [x] 初始化 Agent Control State 文件。
+- [x] 初始化 `agent_control_state.md` 运行状态快照文件。
 - [x] 为新增 `.py` 文件添加自测入口。
 - [x] 编写对应测试文件。
 - [x] 执行本阶段完整链路检查。
@@ -181,13 +181,14 @@ Demo 期最终必须实现以下完整链路：
 
 ### 验收记录
 
-- `env PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
-- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，累计 10 个测试。
-- `env PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/config/env.py`：通过。
-- `env PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/storage/file_store.py`：通过。
-- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.storage.markdown_store`：通过。
-- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.logging.audit_log`：通过。
-- 说明：uv 在当前沙箱内无法写入用户级缓存目录，相关 `uv run` 命令经授权后完成。
+- 2026-04-17 复测：此前测试结果因 `agent_state` 与 `agent_control_state` 命名边界调整，默认作废并重新执行。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，累计 10 个测试。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/config/env.py`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/storage/file_store.py`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.storage.markdown_store`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.logging.audit_log`：通过。
+- 说明：本次复测使用 `/tmp/dutyflow-uv-cache` 作为 uv 缓存目录，未使用权限提升。
 - 未验证项：真实模型 API 调用和真实飞书事件订阅尚未执行，等待开发者提供真实 `.env` 配置和飞书测试环境。
 
 ## Step 2: Agent State 与 Agent 基架控制面
@@ -591,7 +592,7 @@ Demo 期最终必须实现以下完整链路：
 
 ### 验收标准
 
-- `/health` 返回配置、存储、Agent Control State、日志状态。
+- `/health` 返回配置、存储、`agent_control_state.md` 快照文件和日志状态。
 - `/model` 可查看或切换当前模型配置名。
 - `/logs` 可查看日志摘要。
 - `/tasks` 可查看任务状态。
