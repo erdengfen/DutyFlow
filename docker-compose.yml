@@ -1,0 +1,10 @@
+services:
+  dutyflow:
+    build: .
+    image: dutyflow-demo
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    stdin_open: true
+    tty: true

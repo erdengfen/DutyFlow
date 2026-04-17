@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.gitignore
+data/
+docs/learn-claude-code/
+*.egg-info/
