@@ -1,0 +1,84 @@
+# 本文件负责工具注册、查找和最小输入校验，不负责工具执行。
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from dutyflow.agent.tools import ToolCall, ToolResultEnvelope, ToolSpec
+
+if TYPE_CHECKING:
+    from dutyflow.agent.context import ToolUseContext
+
+ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
+
+
+@dataclass(frozen=True)
+class RegisteredTool:
+    """保存工具定义和可选 native handler。"""
+
+    spec: ToolSpec
+    handler: ToolHandler | None = None
+
+
+class ToolRegistry:
+    """维护工具注册表并提供基础输入校验。"""
+
+    def __init__(self) -> None:
+        """初始化空工具注册表。"""
+        self._tools: dict[str, RegisteredTool] = {}
+
+    def register(self, spec: ToolSpec, handler: ToolHandler | None = None) -> None:
+        """注册工具定义，native 工具必须提供 handler。"""
+        if spec.name in self._tools:
+            raise ValueError(f"Tool already registered: {spec.name}")
+        if spec.source == "native" and handler is None:
+            raise ValueError("native tool requires handler")
+        self._tools[spec.name] = RegisteredTool(spec=spec, handler=handler)
+
+    def get(self, name: str) -> ToolSpec:
+        """按名称获取工具定义。"""
+        return self._require_registered(name).spec
+
+    def get_handler(self, name: str) -> ToolHandler | None:
+        """按名称获取工具 handler。"""
+        return self._require_registered(name).handler
+
+    def has(self, name: str) -> bool:
+        """判断工具是否已注册。"""
+        return name in self._tools
+
+    def list_specs(self) -> tuple[ToolSpec, ...]:
+        """返回按名称排序的工具定义列表。"""
+        return tuple(self._tools[name].spec for name in sorted(self._tools))
+
+    def validate_tool_input(self, tool_call: ToolCall) -> None:
+        """按 ToolSpec 的 required 字段执行最小输入校验。"""
+        spec = self.get(tool_call.tool_name)
+        missing = [key for key in spec.required_inputs() if key not in tool_call.tool_input]
+        if missing:
+            raise ValueError("Missing required tool input: " + ", ".join(missing))
+
+    def _require_registered(self, name: str) -> RegisteredTool:
+        """获取已注册工具，不存在时给出明确错误。"""
+        if name not in self._tools:
+            raise KeyError(f"Tool is not registered: {name}")
+        return self._tools[name]
+
+
+def _self_test() -> None:
+    """验证注册表会拒绝重复工具名。"""
+    registry = ToolRegistry()
+    spec = ToolSpec("placeholder_tool", "demo", source="placeholder")
+    registry.register(spec)
+    try:
+        registry.register(spec)
+    except ValueError:
+        return
+    raise AssertionError("duplicate tool registration was not blocked")
+
+
+if __name__ == "__main__":
+    _self_test()
+    print("dutyflow tool registry self-test passed")
