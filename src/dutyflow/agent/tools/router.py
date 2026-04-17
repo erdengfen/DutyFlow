@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import sys
+
+_THIS_DIR = __file__.rsplit("/", 1)[0]
+if sys.path and sys.path[0] == _THIS_DIR:
+    sys.path.pop(0)
+
 from dataclasses import dataclass
 
-from dutyflow.agent.registry import ToolRegistry
-from dutyflow.agent.tools import ToolCall, ToolSpec
+from dutyflow.agent.tools.registry import ToolRegistry
+from dutyflow.agent.tools.types import ToolCall, ToolSpec
 
 
 @dataclass(frozen=True)

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import sys
+
+_THIS_DIR = __file__.rsplit("/", 1)[0]
+if sys.path and sys.path[0] == _THIS_DIR:
+    sys.path.pop(0)
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dutyflow.agent.tools import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
 
 if TYPE_CHECKING:
-    from dutyflow.agent.context import ToolUseContext
+    from dutyflow.agent.tools.context import ToolUseContext
 
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 

@@ -10,10 +10,6 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.agent.context import ToolUseContext  # noqa: E402
-from dutyflow.agent.executor import ToolExecutor  # noqa: E402
-from dutyflow.agent.registry import ToolRegistry  # noqa: E402
-from dutyflow.agent.router import ToolRoute, ToolRouter  # noqa: E402
 from dutyflow.agent.state import (  # noqa: E402
     AgentContentBlock,
     append_assistant_message,
@@ -21,6 +17,10 @@ from dutyflow.agent.state import (  # noqa: E402
     create_initial_agent_state,
 )
 from dutyflow.agent.tools import ToolCall, ToolResultEnvelope, ToolSpec  # noqa: E402
+from dutyflow.agent.tools.context import ToolUseContext  # noqa: E402
+from dutyflow.agent.tools.executor import ToolExecutor  # noqa: E402
+from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
+from dutyflow.agent.tools.router import ToolRoute, ToolRouter  # noqa: E402
 
 
 class TestAgentExecutor(unittest.TestCase):

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import sys
+
+_THIS_DIR = __file__.rsplit("/", 1)[0]
+if sys.path and sys.path[0] == _THIS_DIR:
+    sys.path.pop(0)
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from dutyflow.agent.context import ToolUseContext
-from dutyflow.agent.registry import ToolRegistry
-from dutyflow.agent.router import ToolRoute
 from dutyflow.agent.state import create_initial_agent_state
-from dutyflow.agent.tools import ToolResultEnvelope, error_envelope
+from dutyflow.agent.tools.context import ToolUseContext
+from dutyflow.agent.tools.registry import ToolRegistry
+from dutyflow.agent.tools.router import ToolRoute
+from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope
 
 
 @dataclass(frozen=True)
@@ -131,7 +137,7 @@ class ToolExecutor:
             return error_envelope(call, "missing_handler", "native tool handler is missing")
         return self._validate_input(call, route)
 
-    def _validate_input(self, call, route: ToolRoute) -> ToolResultEnvelope | None:
+    def _validate_input(self, call: ToolCall, route: ToolRoute) -> ToolResultEnvelope | None:
         """把 registry 输入校验错误封装为结果信封。"""
         try:
             self.registry.validate_tool_input(call)

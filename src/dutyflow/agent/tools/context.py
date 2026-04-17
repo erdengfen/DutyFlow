@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import sys
+
+_THIS_DIR = __file__.rsplit("/", 1)[0]
+if sys.path and sys.path[0] == _THIS_DIR:
+    sys.path.pop(0)
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from dutyflow.agent.registry import ToolRegistry
 from dutyflow.agent.state import AgentState, create_initial_agent_state
+from dutyflow.agent.tools.registry import ToolRegistry
 
 
 @dataclass(frozen=True)

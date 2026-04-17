@@ -9,9 +9,9 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.agent.registry import ToolRegistry  # noqa: E402
-from dutyflow.agent.router import ToolRouter  # noqa: E402
 from dutyflow.agent.tools import ToolCall, ToolResultEnvelope, ToolSpec  # noqa: E402
+from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
+from dutyflow.agent.tools.router import ToolRouter  # noqa: E402
 
 
 class TestAgentRouter(unittest.TestCase):

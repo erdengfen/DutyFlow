@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
+_THIS_DIR = __file__.rsplit("/", 1)[0]
+if sys.path and sys.path[0] == _THIS_DIR:
+    sys.path.pop(0)
+
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -140,4 +146,4 @@ def _self_test() -> None:
 
 if __name__ == "__main__":
     _self_test()
-    print("dutyflow agent tools self-test passed")
+    print("dutyflow agent tool types self-test passed")

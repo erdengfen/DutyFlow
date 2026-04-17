@@ -286,32 +286,10 @@ Demo 期最终必须实现以下完整链路：
 
 ### 任务清单
 
-- [x] 实现 Agent State 读写。
-  - [x] 明确 Agent State 与 `agent_control_state.md` 快照文件的边界。
-  - [x] 明确多轮 loop 所需的最小 Agent State 字段。
-  - [x] 明确 Agent State 更新方法和不变量。
-  - [x] 明确 Agent State 第一批测试用例。
-  - [x] 创建 `src/dutyflow/agent/state.py`。
-  - [x] 创建 `src/dutyflow/agent/__init__.py`。
-  - [x] 实现 `AgentState`、`AgentMessage`、`AgentContentBlock`。
-  - [x] 实现 `AgentTaskControl`、`AgentRecoveryState`。
-  - [x] 实现 `create_initial_agent_state`。
-  - [x] 实现 `append_user_message`。
-  - [x] 实现 `append_assistant_message`。
-  - [x] 实现 `append_tool_results`。
-  - [x] 实现 `mark_transition`。
-  - [x] 实现 `increment_turn`。
-  - [x] 实现 `to_dict` / `from_dict`。
-  - [x] 实现 `save_agent_state` / `load_agent_state` 字典封装，不执行磁盘读写。
-  - [x] 编写 `test/test_agent_state.py`。
-- [x] 实现 ToolSpec、ToolCall、ToolResultEnvelope。
-- [x] 实现 ToolRegistry。
-- [x] 实现 ToolRouter。
-- [x] 实现 ToolExecutor。
-- [ ] 将工具控制层文件收缩到 `src/dutyflow/agent/tools/`。
-- [ ] 封装完整可运行 Agent Loop。
-- [ ] 实现最基本多轮对话接口。
-- [ ] 在程序端提供多轮对话入口。
+- [x] Step 2.1：实现 Agent State 读写、不变量、序列化和工具结果回写。
+- [x] Step 2.2：实现 ToolSpec、ToolCall、ToolResultEnvelope、ToolRegistry、ToolRouter、ToolExecutor。
+- [x] Step 2.3：将工具控制层收缩到 `src/dutyflow/agent/tools/`，并完成 import 与测试更新。
+- [ ] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
 - [ ] 实现 PermissionGate。
 - [ ] 实现 HookRunner。
 - [ ] 实现 RecoveryManager。
@@ -324,257 +302,41 @@ Demo 期最终必须实现以下完整链路：
 
 - [ ] 确认是否需要通用 shell 工具；默认不实现真实 shell 执行。
 
-### Step 2.1 Agent State 读写摘要
+### Step 2.1 Agent State
 
-状态：已完成。
+状态：已完成。`src/dutyflow/agent/state.py` 实现纯内存 Agent State，维护多轮 `messages`、`pending_tool_use_ids`、任务控制字段、恢复字段和序列化能力。
 
-核心结果：
+关键约束：
 
-- `src/dutyflow/agent/state.py` 已实现纯内存 Agent State。
-- `test/test_agent_state.py` 已覆盖多轮消息、工具结果回写、不变量和序列化。
-- Agent State 不读写 `data/state/agent_control_state.md`。
-- `messages` 内部使用 tuple，序列化时输出 list，避免 runtime 直接 append 破坏不变量。
+- Agent State 是 agent loop 内部运行结构，不读写 `data/state/agent_control_state.md`。
+- `append_tool_results` 是工具结果写回 Agent State 的唯一入口。
+- `tool_result.tool_use_id` 必须匹配当前未完成工具调用。
+- `messages` 是下一轮模型调用上下文，不是展示用聊天记录。
 
-保留约束：
+测试记录：`test/test_agent_state.py`、`python -m dutyflow.agent.state`、`python -m unittest discover -s test` 已通过。
 
-- `messages` 不是展示用聊天记录，而是下一轮模型调用的工作上下文。
-- `tool_result` 必须带 `tool_use_id`。
-- `tool_result.tool_use_id` 必须能匹配当前 Agent State 中尚未完成的 `pending_tool_use_ids`。
-- `append_tool_results` 是当前唯一允许把工具结果写回 Agent State 的入口。
+### Step 2.2 Tool Call 控制链路
 
-### Step 2.1 本次变更记录
+状态：已完成。工具链路为 `ToolCall.from_agent_block -> ToolRegistry -> ToolRouter -> ToolExecutor -> ToolResultEnvelope -> append_tool_results`。
 
-- 更新 `src/dutyflow/agent/__init__.py`。
-- 新增 `src/dutyflow/agent/state.py`，实现纯内存 Agent State，不读写 `data/state/agent_control_state.md`。
-- 新增 `test/test_agent_state.py`，覆盖多轮消息、工具结果回写、不变量和序列化。
-- 更新 `PLANS.md`，记录本次实现范围和测试结果。
-- 已阅读 `docs/learn-claude-code` 中 agent loop、query control plane、request lifecycle、core data structures 相关文档。
-- 已将 Step 2 第一条拆解为 Agent State 的字段、方法、不变量和测试用例。
-- 已完成 Step 2 任务清单第一条 `实现 Agent State 读写`。
-- 未实现 ToolRegistry、ToolRouter、ToolExecutor、PermissionGate、HookRunner、RecoveryManager；这些仍属于 Step 2 后续任务。
+关键约束：
 
-### Step 2.1 测试记录
+- Registry 只注册、查找和校验输入，不执行工具。
+- Router 只输出 `ToolRoute`，未实现来源返回明确占位路线。
+- Executor 接收 `ToolRoute`，执行前二次校验，使用真实并发处理 concurrency-safe batch，exclusive batch 串行执行。
+- Executor 不修改 Agent State，只返回 `ToolResultEnvelope`；所有异常必须封装为错误信封。
+- Handler 签名固定为 `handler(tool_call, tool_use_context)`，共享内容通过 `ToolUseContext.tool_content` 显式传入。
 
-- 首次运行 `test/test_agent_state.py` 失败：`AgentState` 的 `default_factory` 引用了后定义的 `_now`，触发 `NameError`。
-- 已修复：将 `_now` 提前到 `AgentState` dataclass 定义之前。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_state.py`：通过，8 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.state`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/agent/__init__.py`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，18 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
-- `git diff --check -- PLANS.md`：通过。
-- 文档检查：确认 Step 2.1 中 `Agent State` 与 `agent_control_state.md` 的职责边界已写入。
-- `git diff --check`：通过。
-
-### Step 2.2 Tool Call 全链路设计
-
-状态：已完成。
-范围：只推进以下四项，不做 PermissionGate、HookRunner、RecoveryManager。
-
-- `ToolSpec`、`ToolCall`、`ToolResultEnvelope`
-- `ToolRegistry`
-- `ToolRouter`
-- `ToolExecutor`
-
-#### 目标链路
-
-```text
-assistant tool_use blocks
-  -> ToolCall.from_agent_block
-  -> ToolRegistry 校验工具是否存在和 schema
-  -> ToolRouter 判定能力来源和执行策略
-  -> ToolExecutor 分批调度、执行 handler、封装结果
-  -> ToolResultEnvelope 转 AgentContentBlock(type="tool_result")
-  -> append_tool_results 写回 Agent State
-```
-
-#### 分层职责
-
-`ToolSpec / ToolCall / ToolResultEnvelope`
-
-- `ToolSpec` 是给模型和 registry 看的工具定义，至少包含 `name`、`description`、`input_schema`、`source`、`is_concurrency_safe`、`requires_approval`。
-- `ToolCall` 是模型发出的动作意图，至少包含 `tool_use_id`、`tool_name`、`tool_input`、`source_message_index`、`call_index`。
-- `ToolResultEnvelope` 是工具执行统一出口，至少包含 `tool_use_id`、`tool_name`、`ok`、`content`、`is_error`、`error_kind`、`attachments`、`context_modifiers`。
-- Envelope 必须能转换为 `AgentContentBlock(type="tool_result")`，由 Agent State 统一回写。
-
-`ToolRegistry`
-
-- 只负责注册、查找、列出工具，不执行工具。
-- 注册时必须拒绝重复工具名。
-- 工具名必须稳定、非空，不允许 runtime 使用未注册工具。
-- 初版 input schema 只做最小校验：必填字段存在、输入必须是 dict；复杂 JSON Schema 校验后续再补。
-- Registry 不直接接触 Agent State。
-
-`ToolRouter`
-
-- 只负责把 ToolCall 路由到能力来源和执行策略，不直接执行 handler。
-- 初版能力来源：
-  - `native`
-  - `placeholder`
-  - `mcp_reserved`
-  - `agent_reserved`
-- 未实现来源必须返回明确占位路由，不得伪装真实可执行。
-- Router 必须输出稳定的 `ToolRoute`，包含 `tool_call`、`tool_spec`、`source`、`is_concurrency_safe`、`execution_mode`。
-
-`ToolExecutor`
-
-- 是本次开发重点。
-- Executor 必须接收 `ToolRoute` 批次，而不是裸 handler。
-- Executor 必须在执行前再次校验：
-  - tool 已注册
-  - tool_call 的 `tool_use_id` 非空
-  - tool_call 的 `tool_name` 和 route/spec 一致
-  - tool_input 是 dict
-  - handler 存在且来源允许执行
-- Executor 必须把所有成功、拒绝、未知工具、handler 异常都封装成 `ToolResultEnvelope`，不得让异常穿透到 agent loop。
-- Executor 不直接修改 Agent State；它只返回 envelope。回写必须由 `append_tool_results` 完成。
-
-#### 串行、并发与稳定回写
-
-- 工具调用必须先按 `is_concurrency_safe` 分批。
-- ToolExecutor 使用真实并发执行 concurrency-safe batch。
-  - concurrency-safe batch：使用 `ThreadPoolExecutor` 执行。
-  - exclusive batch：必须串行。
-- 多个工具结果必须按原始 `call_index` 稳定排序后返回，不能按完成顺序回写。
-- 并发安全不是默认值；未声明 `is_concurrency_safe=True` 的工具一律按 exclusive 处理。
-- 如果某个工具产生 `context_modifiers`，Executor 初版只收集在 envelope 中，不直接应用；后续由 ToolUseContext 或 runtime 按原始顺序合并。
-- 一个批次内某个工具失败，不应阻止其他已排队工具生成 envelope；是否中断后续批次留到 Recovery/Permission 阶段讨论。
-
-#### ToolUseContext 初版
-
-`src/dutyflow/agent/context.py`
-
-- `query_id`
-- `cwd`
-- `agent_state`
-- `registry`
-- `runtime_metadata`
-- `notifications`
-- `tool_content`
-
-约束：
-
-- handler 必须通过 ToolUseContext 读取共享环境。
-- handler 不得直接改 Agent State；如需影响上下文，返回 `context_modifiers`。
-- ToolUseContext 不持有 api_key 或真实飞书密钥。
-
-#### 初版占位工具
-
-为验证链路，需要至少提供两个 native 测试工具：
-
-- `echo_text`：并发安全，返回输入文本。
-- `fail_tool`：并发安全，用于验证异常封装或错误 envelope。
-
-真实 shell、文件写入、飞书发送、MCP、外部工具均不在 Step 2.2 实现。
-
-#### 涉及文件
-
-- `src/dutyflow/agent/tools/types.py`
-- `src/dutyflow/agent/tools/registry.py`
-- `src/dutyflow/agent/tools/router.py`
-- `src/dutyflow/agent/tools/executor.py`
-- `src/dutyflow/agent/tools/context.py`
-- `src/dutyflow/agent/state.py`
-- `test/test_agent_tools.py`
-- `test/test_agent_registry.py`
-- `test/test_agent_router.py`
-- `test/test_agent_executor.py`
-
-#### Step 2.2 任务清单
-
-- [x] 实现 `ToolSpec`。
-- [x] 实现 `ToolCall`。
-- [x] 实现 `ToolResultEnvelope`。
-- [x] 实现 ToolResultEnvelope 到 `AgentContentBlock(type="tool_result")` 的转换。
-- [x] 实现 `ToolRegistry.register`、`get`、`list_specs`。
-- [x] 实现 registry 重名拒绝和基础 input 校验。
-- [x] 实现 `ToolRoute`。
-- [x] 实现 `ToolRouter.route`。
-- [x] 实现未实现来源的明确占位路由。
-- [x] 实现 `ToolUseContext`，包含显式共享 `tool_content`。
-- [x] 实现 `ToolExecutionBatch`。
-- [x] 实现 `ToolExecutor.execute_routes`。
-- [x] 实现执行前二次校验。
-- [x] 实现 safe batch / exclusive batch 分批。
-- [x] 实现真实并发执行 concurrency-safe batch。
-- [x] 实现稳定顺序回写。
-- [x] 实现 handler 异常封装为 error envelope。
-- [x] 实现 `echo_text` 和 `fail_tool` 测试 handler。
-- [x] 将 envelope 结果通过 `append_tool_results` 写回 Agent State 的集成测试。
-- [x] 为新增 `.py` 文件添加自测入口。
-- [x] 执行 Step 2.2 分块测试和完整单测。
-
-#### Step 2.2 第一批测试
-
-- `test/test_agent_tools.py`
-  - ToolSpec 必填字段校验。
-  - ToolCall 必须有 `tool_use_id` 和 `tool_name`。
-  - ToolResultEnvelope 可转换为 tool_result block。
-- `test/test_agent_registry.py`
-  - 可注册并查找工具。
-  - 重复注册同名工具失败。
-  - 未注册工具查找失败。
-  - 缺失必填 input 字段失败。
-- `test/test_agent_router.py`
-  - native 工具路由成功。
-  - reserved 来源返回占位 route。
-  - 未注册工具不可路由为可执行 native。
-- `test/test_agent_executor.py`
-  - echo_text 执行成功并返回 envelope。
-  - fail_tool 异常被封装，不穿透。
-  - safe 和 exclusive 工具分批结果按 `call_index` 稳定排序。
-  - executor 不直接修改 Agent State。
-  - envelope 转 block 后可通过 `append_tool_results` 写回 Agent State。
-
-#### Step 2.2 验收命令
-
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_tools.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_registry.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_router.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_executor.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
-
-#### Step 2.2 本次变更记录
-
-- 新增 `src/dutyflow/agent/tools.py`。
-- 新增 `src/dutyflow/agent/registry.py`。
-- 新增 `src/dutyflow/agent/router.py`。
-- 新增 `src/dutyflow/agent/context.py`。
-- 新增 `src/dutyflow/agent/executor.py`。
-- 后续整理：上述工具控制层文件需要迁移到 `src/dutyflow/agent/tools/` 包下。
-- 新增 `test/test_agent_tools.py`。
-- 新增 `test/test_agent_registry.py`。
-- 新增 `test/test_agent_router.py`。
-- 新增 `test/test_agent_executor.py`。
-- ToolExecutor 已使用 `ThreadPoolExecutor` 对 concurrency-safe batch 做真实并发。
-- 原生 handler 签名固定为 `handler(tool_call, tool_use_context)`。
-- 当前只使用假工具验证链路，不引入真实 shell、文件写入、飞书、MCP 或外部工具。
-
-#### Step 2.2 测试记录
-
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_tools.py`：通过，4 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_registry.py`：通过，4 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_router.py`：通过，3 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_executor.py`：通过，9 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.tools`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.registry`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.router`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.context`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.executor`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，38 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
-- `git diff --check`：通过。
+测试记录：`test/test_agent_tools.py`、`test/test_agent_registry.py`、`test/test_agent_router.py`、`test/test_agent_executor.py` 已通过；完整单测 38 个通过。
 
 ### Step 2.3 工具控制层目录整理
 
-状态：待开发。
-范围：只做文件归位和 import 更新，不改变工具层行为。
-
-目标目录：
+状态：已完成。工具控制层已收缩到统一包：
 
 ```text
 src/dutyflow/agent/tools/
   __init__.py
+  __main__.py
   types.py
   registry.py
   router.py
@@ -582,36 +344,34 @@ src/dutyflow/agent/tools/
   executor.py
 ```
 
-迁移规则：
+变更结果：
 
-- `src/dutyflow/agent/tools.py` 迁移为 `src/dutyflow/agent/tools/types.py`。
-- `src/dutyflow/agent/registry.py` 迁移为 `src/dutyflow/agent/tools/registry.py`。
-- `src/dutyflow/agent/router.py` 迁移为 `src/dutyflow/agent/tools/router.py`。
-- `src/dutyflow/agent/context.py` 迁移为 `src/dutyflow/agent/tools/context.py`。
-- `src/dutyflow/agent/executor.py` 迁移为 `src/dutyflow/agent/tools/executor.py`。
-- `src/dutyflow/agent/tools/__init__.py` 只导出稳定公共类型，不写执行逻辑。
-- 更新所有测试和后续模块 import。
-- 迁移后不得保留同名旧文件，避免两个工具层入口并存。
+- 删除旧入口 `src/dutyflow/agent/tools.py`、`registry.py`、`router.py`、`context.py`、`executor.py`。
+- 更新测试 import，后续代码必须从 `dutyflow.agent.tools.*` 引入工具控制层模块。
+- `dutyflow.agent.tools` 仅懒导出稳定协议类型，不承载执行逻辑。
 
-验收命令：
+测试记录：
 
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_tools.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_registry.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_router.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_executor.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
+- `test/test_agent_tools.py`：通过，4 个测试。
+- `test/test_agent_registry.py`：通过，4 个测试。
+- `test/test_agent_router.py`：通过，3 个测试。
+- `test/test_agent_executor.py`：通过，9 个测试。
+- `python -m dutyflow.agent.tools`、`types`、`registry`、`router`、`context`、`executor`：通过。
+- 直接运行 `src/dutyflow/agent/tools/*.py` 自测入口：通过；已处理 `types.py` 直接运行时遮蔽标准库 `types` 的路径问题。
+- `python -m unittest discover -s test`：通过，38 个测试。
+- `uv run dutyflow --health`：通过。
 
 ### Step 2.4 Agent Loop 与最小多轮对话入口
 
 状态：待开发。
-范围：基于已完成的 Agent State 和 Tool Call 控制层，封装完整可运行 agent loop，并提供程序端最小多轮对话入口。
+范围：基于已完成的 Agent State 和 Tool Call 控制层，实现 CLI `/chat` 调试接口。此接口不是最终生产形态的 agent loop，只用于本地操作窗口验证多轮模型调用、工具调用和状态回写是否可见。
 
 #### 目标
 
-实现一条最小但真实可跑的 agent loop：
+`/chat` 内部执行一条最小多轮调试链路：
 
 ```text
-用户输入
+CLI /chat 用户输入
   -> create_initial_agent_state / append_user_message
   -> 模型调用
   -> assistant message 写回 Agent State
@@ -620,19 +380,22 @@ src/dutyflow/agent/tools/
   -> ToolResultEnvelope -> AgentContentBlock(type="tool_result")
   -> append_tool_results 写回 Agent State
   -> 下一轮模型调用
-  -> 无 tool_use 时结束并返回 assistant 文本
+  -> 无 tool_use 时结束
+  -> CLI 输出模型最终文本、完整 Agent State、Tool Result 列表
 ```
 
 #### 实现边界
 
 - 必须使用真实模型 key 做最终人工验收；key、base URL、模型名全部来自 `.env`。
 - 代码不得硬编码任何模型 API key、base URL 或模型名。
-- 初版只实现单用户单 query 的 loop，不实现后台任务、多 agent、权限审批和长期记忆。
+- `/chat` 只服务本地开发调试，不替代飞书用户前端，也不代表最终 agent loop 形态。
+- 初版只实现单用户单 query 的多轮调试，不实现后台任务、多 agent、权限审批和长期记忆。
 - 初版工具仍使用假工具验证链路，不接真实 shell、飞书、MCP 或外部工具。
 - Agent Loop 不直接执行工具 handler，必须通过 ToolRegistry、ToolRouter、ToolExecutor。
 - Agent Loop 不直接 append tool_result，必须通过 `append_tool_results`。
 - Agent Loop 必须设置 `max_turns`，防止无限循环。
 - 模型返回结构需要适配为内部 `AgentContentBlock`；真实 provider 字段不稳定时，适配层必须隔离在 `model_client.py`。
+- CLI 输出必须包含完整当前 Agent State 和本次 tool result，便于调试窗口直接检查状态变化。
 
 #### 涉及文件
 
@@ -654,16 +417,16 @@ src/dutyflow/agent/tools/
 
 #### 程序端入口
 
-初版提供两个入口：
+初版只提供 CLI 操作窗口入口：
 
-- `uv run dutyflow --agent-once "用户输入"`：执行一条最小 query，适合真实 key 验证。
-- CLI 命令 `/agent 用户输入`：在开发者控制台中触发一条最小 query。
+- `/chat 用户输入`：执行一条多轮调试 query。
 
 约束：
 
 - 入口只用于本地开发调试，不替代飞书用户前端。
 - 入口输出不得打印 `.env` 中的 key、token、secret。
 - 模型调用失败必须返回明确错误，不得伪装成功。
+- 输出必须包含 `final_text`、`agent_state`、`tool_results`、`stop_reason`、`turn_count`。
 
 #### 数据结构要求
 
@@ -676,6 +439,7 @@ src/dutyflow/agent/tools/
   - `final_text`
   - `stop_reason`
   - `turn_count`
+  - `tool_results`
   - `tool_result_count`
 
 #### 第一批测试
@@ -685,27 +449,29 @@ src/dutyflow/agent/tools/
 - fake model 连续返回 tool_use 超过 `max_turns` 时失败并返回明确错误。
 - loop 调用工具必须经过 ToolRegistry、ToolRouter、ToolExecutor。
 - executor envelope 必须通过 `append_tool_results` 回写 Agent State。
-- `--agent-once` 在 fake model 模式下可执行。
+- CLI `/chat` 在 fake model 模式下可执行。
+- CLI `/chat` 输出必须包含 `final_text`、完整 `agent_state` 和 `tool_results`。
 - `.env` 缺少模型配置时，真实模型入口返回明确缺失配置。
 
 #### 验收命令
 
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_loop.py`
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_model_client.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --agent-once "ping"`
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow`
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
 
 #### 真实 key 验收
 
 开发者提供真实 `.env` 后，需要补跑：
 
-- `uv run dutyflow --agent-once "用一句话回复 ping"`
+- 在 CLI 操作窗口执行 `/chat 用一句话回复 ping`
 
 验收标准：
 
 - 能调用真实模型。
 - 能返回 assistant 文本。
 - 如模型触发 fake tool，则工具链路可完成回写并继续下一轮。
+- CLI 可见完整当前 Agent State 和 Tool Result。
 - 日志不泄露 key、token、secret。
 
 ## Step 3: Skill 加载与权重 Skill 占位
@@ -730,8 +496,8 @@ src/dutyflow/agent/tools/
   - `SkillRegistry`
   - `load_skill`
 - `skills/event_weighting/SKILL.md`
-- `src/dutyflow/agent/registry.py`
-- `src/dutyflow/agent/executor.py`
+- `src/dutyflow/agent/tools/registry.py`
+- `src/dutyflow/agent/tools/executor.py`
 - `test/test_agent_skills.py`
 
 ### 未敲定问题
