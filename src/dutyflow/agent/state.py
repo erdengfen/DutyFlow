@@ -16,6 +16,7 @@ TRANSITION_REASONS = frozenset(
         "compact_retry",
         "transport_retry",
         "stop_hook_continuation",
+        "user_continuation",
         "finished",
         "failed",
     }

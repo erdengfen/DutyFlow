@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    _SCRIPT_DIR = Path(__file__).resolve().parent
+    _SRC_ROOT = _SCRIPT_DIR.parent
+    if sys.path and Path(sys.path[0]).resolve() == _SCRIPT_DIR:
+        sys.path.pop(0)
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
+
 import argparse
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Sequence
 
 from dutyflow.agent.debug_tools import create_debug_tool_registry
-from dutyflow.agent.loop import AgentLoop
+from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
@@ -138,13 +148,17 @@ class DutyFlowApp:
         if not user_text.strip():
             return _chat_error("empty_input", "usage: /chat 用户输入")
         try:
-            config = load_env_config(self.project_root)
-            client = OpenAICompatibleModelClient(config)
-            registry = create_debug_tool_registry()
-            result = AgentLoop(client, registry, self.project_root).run_until_stop(user_text)
+            result = self.create_chat_debug_session().run_turn(user_text)
         except Exception as exc:  # noqa: BLE001
             return _chat_error("chat_failed", str(exc))
         return result.to_debug_text()
+
+    def create_chat_debug_session(self) -> ChatDebugSession:
+        """创建可持续复用 Agent State 的 /chat 调试会话。"""
+        config = load_env_config(self.project_root)
+        client = OpenAICompatibleModelClient(config)
+        registry = create_debug_tool_registry()
+        return ChatDebugSession(AgentLoop(client, registry, self.project_root))
 
     def run(self, args: Sequence[str] | None = None) -> int:
         """根据命令参数启动健康检查或 CLI 控制台。"""
@@ -153,7 +167,7 @@ class DutyFlowApp:
         if parsed.health:
             print(self.health_check().to_text())
             return 0
-        return self.cli.start(interactive=parsed.interactive)
+        return self.cli.start(interactive=not parsed.no_interactive)
 
     def _build_parser(self) -> argparse.ArgumentParser:
         """构建应用启动参数解析器。"""
@@ -162,7 +176,12 @@ class DutyFlowApp:
         parser.add_argument(
             "--interactive",
             action="store_true",
-            help="启动本地 CLI 控制台",
+            help="兼容参数；默认已启动本地 CLI 控制台",
+        )
+        parser.add_argument(
+            "--no-interactive",
+            action="store_true",
+            help="只输出启动提示，不进入持续 CLI 控制台",
         )
         return parser
 

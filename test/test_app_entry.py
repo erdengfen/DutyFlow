@@ -1,8 +1,10 @@
 # 本文件验证 Step 0 应用入口、CLI 入口和基础目录骨架。
 
 from pathlib import Path
+import io
 import sys
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -32,6 +34,12 @@ class TestAppEntry(unittest.TestCase):
         self.assertIn("status=ok", output)
         self.assertIn("app_entry=src/dutyflow/app.py", output)
         self.assertIn("agent_control_state_exists=True", output)
+
+    def test_no_interactive_keeps_script_check_available(self) -> None:
+        """--no-interactive 应保留启动后立即退出的脚本检查能力。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(app.run(("--no-interactive",)), 0)
 
 
 def _self_test() -> None:

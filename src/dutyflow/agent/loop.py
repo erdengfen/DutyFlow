@@ -12,6 +12,7 @@ from dutyflow.agent.model_client import ModelClient
 from dutyflow.agent.state import (
     AgentContentBlock,
     AgentState,
+    append_user_message,
     append_assistant_message,
     append_tool_results,
     create_initial_agent_state,
@@ -53,6 +54,20 @@ class AgentLoopResult:
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+@dataclass
+class ChatDebugSession:
+    """维护 CLI /chat 子会话中的持续 Agent State。"""
+
+    loop: "AgentLoop"
+    state: AgentState | None = None
+
+    def run_turn(self, user_text: str) -> AgentLoopResult:
+        """执行 chat 子会话的一轮用户输入并更新当前状态。"""
+        result = self.loop.run_until_stop(user_text, state=self.state)
+        self.state = result.state
+        return result
+
+
 class AgentLoop:
     """执行基于 Agent State 和工具控制层的最小多轮调试链路。"""
 
@@ -76,22 +91,39 @@ class AgentLoop:
         user_text: str,
         query_id: str | None = None,
         tool_content: Mapping[str, Any] | None = None,
+        state: AgentState | None = None,
     ) -> AgentLoopResult:
-        """运行单条 /chat 调试 query，直到模型停止或达到轮数限制。"""
-        state = create_initial_agent_state(query_id or _new_query_id(), user_text)
-        state = replace(state, max_turns=self.max_turns)
+        """运行一轮 /chat 调试输入，直到模型停止或达到轮数限制。"""
+        state = self._prepare_state(user_text, query_id, state)
         tool_results: list[ToolResultEnvelope] = []
+        local_turns = 0
         while True:
             response = self.model_client.call_model(state, self.registry.list_specs())
             state = append_assistant_message(state, response.assistant_blocks)
             tool_calls = extract_tool_calls(state)
             if not tool_calls:
                 return _finish_result(state, _final_text(response.assistant_blocks), response.stop_reason, tool_results)
-            if state.turn_count >= state.max_turns:
+            local_turns += 1
+            if local_turns >= self.max_turns:
                 return _failed_result(state, "max_turns_reached", tool_results)
             envelopes = self._execute_tool_calls(state, tool_calls, tool_content or {})
             tool_results.extend(envelopes)
             state = append_tool_results(state, tuple(item.to_agent_block() for item in envelopes))
+
+    def _prepare_state(
+        self,
+        user_text: str,
+        query_id: str | None,
+        state: AgentState | None,
+    ) -> AgentState:
+        """创建或复用 Agent State，并追加本轮用户输入。"""
+        if state is None:
+            prepared = create_initial_agent_state(query_id or _new_query_id(), user_text)
+        else:
+            prepared = append_user_message(state, user_text)
+            prepared = replace(prepared, turn_count=prepared.turn_count + 1)
+            prepared = mark_transition(prepared, "user_continuation")
+        return replace(prepared, max_turns=prepared.turn_count + self.max_turns)
 
     def _execute_tool_calls(
         self,

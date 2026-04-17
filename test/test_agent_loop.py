@@ -10,7 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from dutyflow.agent.debug_tools import create_debug_tool_registry  # noqa: E402
-from dutyflow.agent.loop import AgentLoop  # noqa: E402
+from dutyflow.agent.loop import AgentLoop, ChatDebugSession  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
 
@@ -49,6 +49,18 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn('"tool_results"', text)
         self.assertIn('"final_text": "done"', text)
 
+    def test_chat_session_reuses_agent_state(self) -> None:
+        """持续 chat 会话应复用同一个 Agent State。"""
+        client = _FakeModelClient((_text_response("one"), _text_response("two")))
+        session = ChatDebugSession(_loop(client))
+        first = session.run_turn("first")
+        second = session.run_turn("second")
+        user_texts = _user_texts(second.state)
+        self.assertEqual(first.state.query_id, second.state.query_id)
+        self.assertEqual(second.turn_count, 2)
+        self.assertIn("first", user_texts)
+        self.assertIn("second", user_texts)
+
 
 class _FakeModelClient:
     """按顺序返回预设响应的测试模型。"""
@@ -83,6 +95,15 @@ def _tool_response() -> ModelResponse:
 def _text_response(text: str) -> ModelResponse:
     """构造文本模型响应。"""
     return ModelResponse((AgentContentBlock(type="text", text=text),), "stop")
+
+
+def _user_texts(state) -> tuple[str, ...]:
+    """提取 Agent State 中的用户文本。"""
+    texts: list[str] = []
+    for message in state.messages:
+        if message.role == "user":
+            texts.extend(block.text for block in message.content if block.type == "text")
+    return tuple(texts)
 
 
 def _self_test() -> None:

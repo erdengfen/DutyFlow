@@ -1,8 +1,10 @@
 # 本文件验证 CLI /chat 调试命令的解析和输出约束。
 
 from pathlib import Path
+import io
 import sys
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -26,6 +28,30 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"agent_state"', output)
         self.assertIn('"tool_results"', output)
 
+    def test_interactive_chat_session_keeps_running(self) -> None:
+        """交互式 /chat 应持续接收多轮输入直到 /back。"""
+        cli = CliConsole(_FakeApp())
+        inputs = iter(("/chat", "first", "/chat second", "/back", "/exit"))
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(cli.start(), 0)
+        output = stdout.getvalue()
+        self.assertIn("Chat debug started", output)
+        self.assertIn('"turn": 1', output)
+        self.assertIn('"turn": 2', output)
+        self.assertIn('"final_text": "second"', output)
+
+    def test_interactive_chat_turn_error_does_not_exit(self) -> None:
+        """Chat 单轮异常应封装输出，并允许返回主 CLI。"""
+        cli = CliConsole(_ErrorApp())
+        inputs = iter(("/chat", "boom", "/back", "/exit"))
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(cli.start(), 0)
+        output = stdout.getvalue()
+        self.assertIn("chat_turn_failed", output)
+        self.assertIn("DutyFlow CLI started", output)
+
 
 class _FakeApp:
     """提供 CLI 测试所需的最小 app 接口。"""
@@ -43,6 +69,52 @@ class _FakeApp:
             '  "tool_results": []\n'
             '}'
         )
+
+    def create_chat_debug_session(self) -> object:
+        """返回测试 chat 会话。"""
+        return _FakeChatSession()
+
+
+class _FakeChatSession:
+    """为 CLI 子会话测试提供最小对象。"""
+
+    def __init__(self) -> None:
+        """初始化轮次。"""
+        self.turn = 0
+
+    def run_turn(self, user_text: str) -> object:
+        """返回带 to_debug_text 的结果对象。"""
+        self.turn += 1
+        return _FakeChatResult(user_text, self.turn)
+
+
+class _FakeChatResult:
+    """提供 CLI 子会话测试输出。"""
+
+    def __init__(self, user_text: str, turn: int) -> None:
+        """保存用户输入和轮次。"""
+        self.user_text = user_text
+        self.turn = turn
+
+    def to_debug_text(self) -> str:
+        """返回测试调试文本。"""
+        return f'{{"final_text": "{self.user_text}", "turn": {self.turn}}}'
+
+
+class _ErrorApp(_FakeApp):
+    """提供会抛错的 Chat 会话。"""
+
+    def create_chat_debug_session(self) -> object:
+        """返回错误会话。"""
+        return _ErrorChatSession()
+
+
+class _ErrorChatSession:
+    """模拟第二轮模型/API异常。"""
+
+    def run_turn(self, user_text: str) -> object:
+        """抛出测试异常。"""
+        raise RuntimeError("fake chat error")
 
 
 def _self_test() -> None:
