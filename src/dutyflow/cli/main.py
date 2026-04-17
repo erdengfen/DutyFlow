@@ -11,6 +11,9 @@ class HealthCheckProvider(Protocol):
     def health_check(self) -> object:
         """返回应用健康检查结果。"""
 
+    def run_chat_debug(self, user_text: str) -> str:
+        """运行 /chat 调试链路并返回可打印结果。"""
+
 
 class CliConsole:
     """处理 /... 风格的本地开发者调试命令。"""
@@ -31,6 +34,8 @@ class CliConsole:
         normalized = command.strip()
         if normalized == "/health":
             return self._format_health()
+        if normalized == "/chat" or normalized.startswith("/chat "):
+            return self._handle_chat(normalized)
         if normalized in {"/help", "help", ""}:
             return self._help_text()
         return f"Unsupported command: {normalized}"
@@ -56,9 +61,20 @@ class CliConsole:
             return to_text()
         return str(status)
 
+    def _handle_chat(self, command: str) -> str:
+        """执行 CLI /chat 调试命令。"""
+        user_text = command.removeprefix("/chat").strip()
+        return self.app.run_chat_debug(user_text)
+
     def _help_text(self) -> str:
-        """返回 Step 0 阶段已支持的 CLI 命令说明。"""
-        return "Supported commands: /health, /help, /exit"
+        """返回当前 CLI 命令说明。"""
+        return (
+            "Supported commands:\n"
+            "/help - 查看命令\n"
+            "/health - 查看健康状态\n"
+            "/chat 用户输入 - 进入多轮对话调试，输出模型结果、Agent State 和 Tool Result\n"
+            "/exit - 退出交互控制台"
+        )
 
 
 class _SelfTestApp:
@@ -68,12 +84,17 @@ class _SelfTestApp:
         """返回自测健康状态。"""
         return "status=ok"
 
+    def run_chat_debug(self, user_text: str) -> str:
+        """返回自测 chat 结果。"""
+        return f"chat={user_text}"
+
 
 def _self_test() -> None:
     """验证 CLI 命令解析的最小行为。"""
     cli = CliConsole(_SelfTestApp())
     assert "status=ok" in cli.handle_command("/health")
     assert "Supported commands" in cli.handle_command("/help")
+    assert "chat=ping" in cli.handle_command("/chat ping")
 
 
 if __name__ == "__main__":

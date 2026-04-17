@@ -289,7 +289,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] Step 2.1：实现 Agent State 读写、不变量、序列化和工具结果回写。
 - [x] Step 2.2：实现 ToolSpec、ToolCall、ToolResultEnvelope、ToolRegistry、ToolRouter、ToolExecutor。
 - [x] Step 2.3：将工具控制层收缩到 `src/dutyflow/agent/tools/`，并完成 import 与测试更新。
-- [ ] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
+- [x] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
 - [ ] 实现 PermissionGate。
 - [ ] 实现 HookRunner。
 - [ ] 实现 RecoveryManager。
@@ -363,7 +363,7 @@ src/dutyflow/agent/tools/
 
 ### Step 2.4 Agent Loop 与最小多轮对话入口
 
-状态：待开发。
+状态：已完成自动验收；真实 key 链路待开发者填入 `.env` 后人工测试。
 范围：基于已完成的 Agent State 和 Tool Call 控制层，实现 CLI `/chat` 调试接口。此接口不是最终生产形态的 agent loop，只用于本地操作窗口验证多轮模型调用、工具调用和状态回写是否可见。
 
 #### 目标
@@ -407,18 +407,23 @@ CLI /chat 用户输入
 - `src/dutyflow/agent/model_client.py`
   - `ModelClient`
   - `ModelResponse`
+  - `OpenAICompatibleModelClient`
   - `call_model`
+- `src/dutyflow/agent/debug_tools.py`
+  - `create_debug_tool_registry`
 - `src/dutyflow/agent/tools/`
 - `src/dutyflow/agent/state.py`
 - `src/dutyflow/app.py`
 - `src/dutyflow/cli/main.py`
 - `test/test_agent_loop.py`
 - `test/test_model_client.py`
+- `test/test_cli_chat.py`
 
 #### 程序端入口
 
 初版只提供 CLI 操作窗口入口：
 
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONPATH=src uv run python -m dutyflow.app --interactive`：启动当前 Demo 主程序并进入 CLI。
 - `/chat 用户输入`：执行一条多轮调试 query。
 
 约束：
@@ -457,7 +462,7 @@ CLI /chat 用户输入
 
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_loop.py`
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_model_client.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow`
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.app --interactive`
 - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
 
 #### 真实 key 验收
@@ -473,6 +478,27 @@ CLI /chat 用户输入
 - 如模型触发 fake tool，则工具链路可完成回写并继续下一轮。
 - CLI 可见完整当前 Agent State 和 Tool Result。
 - 日志不泄露 key、token、secret。
+
+#### Step 2.4 自动验收记录
+
+- `test/test_agent_loop.py`：通过，4 个测试。
+- `test/test_model_client.py`：通过，3 个测试。
+- `test/test_cli_chat.py`：通过，2 个测试。
+- `python -m dutyflow.agent.loop`：通过。
+- `python -m dutyflow.agent.model_client`：通过。
+- `python -m dutyflow.agent.debug_tools`：通过。
+- `python -m dutyflow.cli.main`：通过。
+- `python -m dutyflow.app --health`：通过。
+- `python -m unittest discover -s test`：通过，47 个测试。
+- `uv run dutyflow --health`：通过。
+- `uv run dutyflow --interactive` 后输入 `/help`：通过，可见 `/chat`。
+- `python -m dutyflow.app --interactive` 后输入 `/chat ping` 且无 `.env`：通过，返回缺失模型配置错误，不伪装成功。
+- `git diff --check`：通过。
+
+#### Step 2.4 待人工确认
+
+- [ ] 开发者填入真实 `.env` 后，执行 `/chat 用一句话回复 ping`。
+- [ ] 确认真实模型 base URL 是否为 OpenAI-compatible `/chat/completions` 结构；当前适配层会在 base URL 后追加 `/chat/completions`，若已包含该路径则不重复追加。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 

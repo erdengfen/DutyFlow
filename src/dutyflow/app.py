@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from dutyflow.agent.debug_tools import create_debug_tool_registry
+from dutyflow.agent.loop import AgentLoop
+from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
 from dutyflow.logging.audit_log import AuditLogger
@@ -129,6 +133,19 @@ class DutyFlowApp:
         )
         store.write_document(state_path, document)
 
+    def run_chat_debug(self, user_text: str) -> str:
+        """运行 CLI /chat 调试链路并返回完整可见结果。"""
+        if not user_text.strip():
+            return _chat_error("empty_input", "usage: /chat 用户输入")
+        try:
+            config = load_env_config(self.project_root)
+            client = OpenAICompatibleModelClient(config)
+            registry = create_debug_tool_registry()
+            result = AgentLoop(client, registry, self.project_root).run_until_stop(user_text)
+        except Exception as exc:  # noqa: BLE001
+            return _chat_error("chat_failed", str(exc))
+        return result.to_debug_text()
+
     def run(self, args: Sequence[str] | None = None) -> int:
         """根据命令参数启动健康检查或 CLI 控制台。"""
         parser = self._build_parser()
@@ -154,6 +171,20 @@ def main(args: Sequence[str] | None = None) -> int:
     """提供 uv run dutyflow 使用的程序入口。"""
     app = DutyFlowApp()
     return app.run(args)
+
+
+def _chat_error(error_kind: str, message: str) -> str:
+    """格式化 /chat 调试错误，避免泄露密钥。"""
+    payload = {
+        "error": error_kind,
+        "message": message,
+        "final_text": "",
+        "agent_state": {},
+        "tool_results": [],
+        "stop_reason": "failed",
+        "turn_count": 0,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _self_test() -> None:
