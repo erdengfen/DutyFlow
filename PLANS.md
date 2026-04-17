@@ -197,6 +197,17 @@ Demo 期最终必须实现以下完整链路：
 
 系统具备最小 Agent Runtime、Agent State、工具注册表、工具路由、工具执行器、权限闸门、Hook Runner、恢复管理器。模型调用和真实工具执行可以先占位，但控制链路必须成立。
 
+### 本次限定范围
+
+2026-04-17 本次只细化并约束任务清单第一条：`实现 Agent State 读写`。
+本次不实现 ToolRegistry、ToolRouter、ToolExecutor、PermissionGate、HookRunner、RecoveryManager，也不改代码文件。
+
+本次明确边界：
+
+- `Agent State` 是 agent 基架和 loop 内部的运行数据结构，负责多轮更新、流程判断、状态控制和上下文携带。
+- `data/state/agent_control_state.md` 是本地运行状态快照文件，只用于可见性和日志型记录，不参与 agent loop 的条件判断、状态控制或上下文传递。
+- Step 2 的 `Agent State` 设计参考 `docs/learn-claude-code` 中 `s01-the-agent-loop.md`、`s00a-query-control-plane.md`、`s00b-one-request-lifecycle.md` 和 `data-structures.md`。
+
 ### 验收标准
 
 - Agent Runtime 能加载 Agent State。
@@ -204,6 +215,9 @@ Demo 期最终必须实现以下完整链路：
 - ToolResultEnvelope 统一封装成功、失败和占位结果。
 - 权限拒绝、hook 拦截、工具错误都可记录到审计日志。
 - Agent State 可记录任务权重、尝试轮数、审批状态、重试状态。
+- Agent State 能维护多轮 `messages`，并把工具结果作为下一轮可见输入写回消息流。
+- Agent State 能记录每轮继续原因 `transition_reason`，禁止无原因地进入下一轮。
+- Agent State 的流程状态不得写入或依赖 `data/state/agent_control_state.md`。
 
 ### 涉及文件、类、方法、模块
 
@@ -247,10 +261,26 @@ Demo 期最终必须实现以下完整链路：
 - `ToolUseContext` 内部字段是否全部落正式数据模型。
 - Hook 初版是否允许外部脚本；当前建议只做内置 Python hook。
 - 权限规则是否允许写回本地配置。
+- Agent State 是否需要在 Demo 期做磁盘持久化仍未敲定；当前约束为代码内 runtime state，可通过 `to_dict`/`from_dict` 支持测试和未来恢复，但不得与 `agent_control_state.md` 混用。
+- 模型 API 的真实 response block 结构未敲定；Step 2.1 先使用项目内规范化 `AgentMessage`/`AgentContentBlock`，后续模型适配层负责转换。
 
 ### 任务清单
 
 - [ ] 实现 Agent State 读写。
+  - [x] 明确 Agent State 与 `agent_control_state.md` 快照文件的边界。
+  - [x] 明确多轮 loop 所需的最小 Agent State 字段。
+  - [x] 明确 Agent State 更新方法和不变量。
+  - [x] 明确 Agent State 第一批测试用例。
+  - [ ] 创建 `src/dutyflow/agent/state.py`。
+  - [ ] 实现 `AgentState`、`AgentMessage`、`AgentContentBlock`。
+  - [ ] 实现 `create_initial_agent_state`。
+  - [ ] 实现 `append_user_message`。
+  - [ ] 实现 `append_assistant_message`。
+  - [ ] 实现 `append_tool_results`。
+  - [ ] 实现 `mark_transition`。
+  - [ ] 实现 `increment_turn`。
+  - [ ] 实现 `to_dict` / `from_dict`。
+  - [ ] 编写 `test/test_agent_state.py`。
 - [ ] 实现 ToolSpec、ToolCall、ToolResultEnvelope。
 - [ ] 实现 ToolRegistry。
 - [ ] 实现 ToolRouter。
@@ -266,6 +296,136 @@ Demo 期最终必须实现以下完整链路：
 ### 人工确认
 
 - [ ] 确认是否需要通用 shell 工具；默认不实现真实 shell 执行。
+
+### Step 2.1 Agent State 读写设计
+
+本小节是任务清单第一条的执行约束，后续代码必须按此实现，除非先更新本文档。
+
+#### 目标
+
+Agent State 必须支撑一条 query 在多轮 loop 中持续推进：
+
+```text
+输入消息
+  -> 模型回复
+  -> assistant 消息写回 Agent State
+  -> 如有 tool_use，执行结果以 tool_result 写回 messages
+  -> 记录 transition_reason
+  -> turn_count 增加
+  -> 下一轮继续
+```
+
+关键原则：
+
+- `messages` 不是展示用聊天记录，而是下一轮模型调用的工作上下文。
+- 工具执行结果必须回写为 `tool_result`，并能通过 `tool_use_id` 对应上一轮工具调用。
+- `turn_count`、`transition_reason`、恢复计数、审批状态属于流程状态，不得硬塞进自然语言消息正文。
+- Agent State 可以被序列化用于测试和未来恢复，但 Demo 期不把它落到 `data/state/agent_control_state.md`。
+
+#### 需要实现的类和字段
+
+`src/dutyflow/agent/state.py`
+
+- `AgentContentBlock`
+  - `type`：`text`、`tool_use`、`tool_result`、`placeholder`
+  - `text`
+  - `tool_use_id`
+  - `tool_name`
+  - `tool_input`
+  - `content`
+  - `is_error`
+- `AgentMessage`
+  - `role`：`user`、`assistant`、`system`
+  - `content`：`list[AgentContentBlock]`
+- `AgentTaskControl`
+  - `task_id`
+  - `weight_level`
+  - `attempt_count`
+  - `approval_status`
+  - `retry_status`
+  - `next_action`
+- `AgentRecoveryState`
+  - `continuation_attempts`
+  - `compact_attempts`
+  - `transport_attempts`
+  - `tool_error_attempts`
+- `AgentState`
+  - `query_id`
+  - `messages`
+  - `turn_count`
+  - `transition_reason`
+  - `current_event_id`
+  - `current_task_id`
+  - `pending_tool_use_ids`
+  - `last_tool_result_ids`
+  - `task_control`
+  - `recovery`
+  - `max_turns`
+  - `created_at`
+  - `updated_at`
+
+#### 需要实现的方法
+
+- `create_initial_agent_state(query_id, user_text, current_event_id="")`
+- `append_user_message(state, text)`
+- `append_assistant_message(state, blocks)`
+- `append_tool_results(state, results)`
+- `mark_transition(state, reason)`
+- `increment_turn(state)`
+- `validate_agent_state(state)`
+- `to_dict(state)`
+- `from_dict(payload)`
+
+#### transition_reason 初版枚举
+
+- `start`
+- `tool_result_continuation`
+- `max_tokens_recovery`
+- `compact_retry`
+- `transport_retry`
+- `stop_hook_continuation`
+- `finished`
+- `failed`
+
+#### 不变量
+
+- `turn_count` 初始值为 `1`，只有进入下一轮时增加。
+- 只要 loop 继续，`transition_reason` 必须是非空明确原因。
+- `tool_result` 必须带 `tool_use_id`。
+- `tool_result.tool_use_id` 必须能匹配当前 Agent State 中尚未完成的 `pending_tool_use_ids`。
+- `append_assistant_message` 发现 `tool_use` 时，必须记录对应 `pending_tool_use_ids`。
+- `append_tool_results` 写入结果后，必须从 `pending_tool_use_ids` 移除已完成项，并把结果作为新的 `user` 消息写回 `messages`。
+- `messages` 只能通过 Agent State 方法更新，不允许 runtime 直接修改列表。
+- Agent State 不读取、不写入 `data/state/agent_control_state.md`。
+
+#### 第一批测试用例
+
+`test/test_agent_state.py`
+
+- 初始化 Agent State 后，包含一条 user message，`turn_count == 1`，`transition_reason == "start"`。
+- 追加 assistant text 回复后，消息数量增加，未产生 pending tool。
+- 追加 assistant tool_use 后，`pending_tool_use_ids` 记录 tool id。
+- 追加 tool_result 后，结果以 user message 写回 `messages`，pending tool 被清理，`transition_reason == "tool_result_continuation"`，`turn_count == 2`。
+- 缺少 `tool_use_id` 的 tool_result 必须失败。
+- 未匹配 pending tool 的 tool_result 必须失败。
+- `to_dict` / `from_dict` 后关键字段保持一致。
+- Agent State 初始化和更新不得创建或读取 `data/state/agent_control_state.md`。
+
+### Step 2.1 本次变更记录
+
+- 只更新 `PLANS.md`。
+- 已阅读 `docs/learn-claude-code` 中 agent loop、query control plane、request lifecycle、core data structures 相关文档。
+- 已将 Step 2 第一条拆解为 Agent State 的字段、方法、不变量和测试用例。
+- 未做代码实现，任务清单第一条仍保持未完成，待下一次按本节落地代码。
+
+### Step 2.1 测试记录
+
+- 本次为开发计划文档更新，未运行 Python 单元测试。
+- `git diff --check -- PLANS.md`：通过。
+- 文档检查：确认 Step 2.1 中 `Agent State` 与 `agent_control_state.md` 的职责边界已写入。
+- 后续代码落地后必须运行：
+  - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_state.py`
+  - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
 
 ## Step 3: Skill 加载与权重 Skill 占位
 
