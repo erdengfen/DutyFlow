@@ -227,6 +227,16 @@ Demo 期最终必须实现以下完整链路：
   - `handle_tool_call`
 - `src/dutyflow/agent/state.py`
   - `AgentState`
+  - `AgentMessage`
+  - `AgentContentBlock`
+  - `AgentTaskControl`
+  - `AgentRecoveryState`
+  - `create_initial_agent_state`
+  - `append_user_message`
+  - `append_assistant_message`
+  - `append_tool_results`
+  - `mark_transition`
+  - `increment_turn`
   - `load_agent_state`
   - `save_agent_state`
 - `src/dutyflow/agent/tools.py`
@@ -251,6 +261,7 @@ Demo 期最终必须实现以下完整链路：
 - `src/dutyflow/agent/recovery.py`
   - `RecoveryManager`
 - `test/test_agent_runtime.py`
+- `test/test_agent_state.py`
 - `test/test_agent_tools.py`
 - `test/test_agent_permissions.py`
 - `test/test_agent_hooks.py`
@@ -266,21 +277,24 @@ Demo 期最终必须实现以下完整链路：
 
 ### 任务清单
 
-- [ ] 实现 Agent State 读写。
+- [x] 实现 Agent State 读写。
   - [x] 明确 Agent State 与 `agent_control_state.md` 快照文件的边界。
   - [x] 明确多轮 loop 所需的最小 Agent State 字段。
   - [x] 明确 Agent State 更新方法和不变量。
   - [x] 明确 Agent State 第一批测试用例。
-  - [ ] 创建 `src/dutyflow/agent/state.py`。
-  - [ ] 实现 `AgentState`、`AgentMessage`、`AgentContentBlock`。
-  - [ ] 实现 `create_initial_agent_state`。
-  - [ ] 实现 `append_user_message`。
-  - [ ] 实现 `append_assistant_message`。
-  - [ ] 实现 `append_tool_results`。
-  - [ ] 实现 `mark_transition`。
-  - [ ] 实现 `increment_turn`。
-  - [ ] 实现 `to_dict` / `from_dict`。
-  - [ ] 编写 `test/test_agent_state.py`。
+  - [x] 创建 `src/dutyflow/agent/state.py`。
+  - [x] 创建 `src/dutyflow/agent/__init__.py`。
+  - [x] 实现 `AgentState`、`AgentMessage`、`AgentContentBlock`。
+  - [x] 实现 `AgentTaskControl`、`AgentRecoveryState`。
+  - [x] 实现 `create_initial_agent_state`。
+  - [x] 实现 `append_user_message`。
+  - [x] 实现 `append_assistant_message`。
+  - [x] 实现 `append_tool_results`。
+  - [x] 实现 `mark_transition`。
+  - [x] 实现 `increment_turn`。
+  - [x] 实现 `to_dict` / `from_dict`。
+  - [x] 实现 `save_agent_state` / `load_agent_state` 字典封装，不执行磁盘读写。
+  - [x] 编写 `test/test_agent_state.py`。
 - [ ] 实现 ToolSpec、ToolCall、ToolResultEnvelope。
 - [ ] 实现 ToolRegistry。
 - [ ] 实现 ToolRouter。
@@ -336,7 +350,7 @@ Agent State 必须支撑一条 query 在多轮 loop 中持续推进：
   - `is_error`
 - `AgentMessage`
   - `role`：`user`、`assistant`、`system`
-  - `content`：`list[AgentContentBlock]`
+  - `content`：内部使用 `tuple[AgentContentBlock, ...]`，序列化时输出 list
 - `AgentTaskControl`
   - `task_id`
   - `weight_level`
@@ -351,7 +365,7 @@ Agent State 必须支撑一条 query 在多轮 loop 中持续推进：
   - `tool_error_attempts`
 - `AgentState`
   - `query_id`
-  - `messages`
+  - `messages`：内部使用 `tuple[AgentMessage, ...]`，序列化时输出 list
   - `turn_count`
   - `transition_reason`
   - `current_event_id`
@@ -413,19 +427,27 @@ Agent State 必须支撑一条 query 在多轮 loop 中持续推进：
 
 ### Step 2.1 本次变更记录
 
-- 只更新 `PLANS.md`。
+- 更新 `src/dutyflow/agent/__init__.py`。
+- 新增 `src/dutyflow/agent/state.py`，实现纯内存 Agent State，不读写 `data/state/agent_control_state.md`。
+- 新增 `test/test_agent_state.py`，覆盖多轮消息、工具结果回写、不变量和序列化。
+- 更新 `PLANS.md`，记录本次实现范围和测试结果。
 - 已阅读 `docs/learn-claude-code` 中 agent loop、query control plane、request lifecycle、core data structures 相关文档。
 - 已将 Step 2 第一条拆解为 Agent State 的字段、方法、不变量和测试用例。
-- 未做代码实现，任务清单第一条仍保持未完成，待下一次按本节落地代码。
+- 已完成 Step 2 任务清单第一条 `实现 Agent State 读写`。
+- 未实现 ToolRegistry、ToolRouter、ToolExecutor、PermissionGate、HookRunner、RecoveryManager；这些仍属于 Step 2 后续任务。
 
 ### Step 2.1 测试记录
 
-- 本次为开发计划文档更新，未运行 Python 单元测试。
+- 首次运行 `test/test_agent_state.py` 失败：`AgentState` 的 `default_factory` 引用了后定义的 `_now`，触发 `NameError`。
+- 已修复：将 `_now` 提前到 `AgentState` dataclass 定义之前。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_state.py`：通过，8 个测试。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.agent.state`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/agent/__init__.py`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，18 个测试。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
 - `git diff --check -- PLANS.md`：通过。
 - 文档检查：确认 Step 2.1 中 `Agent State` 与 `agent_control_state.md` 的职责边界已写入。
-- 后续代码落地后必须运行：
-  - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_state.py`
-  - `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
+- `git diff --check`：通过。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 
