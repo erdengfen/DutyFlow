@@ -90,8 +90,8 @@ data/
 
 ## 2. Agent State
 
-Agent State 是运行控制面，不是模型自由判断结果。  
-权重 skill、身份工具、来源工具补充的信息，都必须回到 Agent State 后再参与最终控制决策。
+-Agent State 是运行控制面，不是模型自由判断结果。
+-权重 skill、身份工具、来源工具补充的信息，都必须回到 Agent State 后再参与最终控制决策。
 
 文件位置：
 
@@ -107,8 +107,8 @@ id: agent_state_local_user
 updated_at: 2026-04-16T00:00:00+08:00
 current_model: ""
 permission_mode: default
-active_task_ids: []
-waiting_approval_task_ids: []
+active_task_ids: ""
+waiting_approval_task_ids: ""
 last_event_id: ""
 ```
 

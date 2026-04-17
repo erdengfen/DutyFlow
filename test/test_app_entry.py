@@ -23,6 +23,7 @@ class TestAppEntry(unittest.TestCase):
         self.assertTrue(status.data_dir_exists)
         self.assertTrue(status.skills_dir_exists)
         self.assertTrue(status.test_dir_exists)
+        self.assertTrue(status.agent_control_state_exists)
 
     def test_cli_health_command_uses_app(self) -> None:
         """CLI 的 /health 命令应通过应用实例获取健康状态。"""
@@ -30,6 +31,7 @@ class TestAppEntry(unittest.TestCase):
         output = app.cli.handle_command("/health")
         self.assertIn("status=ok", output)
         self.assertIn("app_entry=src/dutyflow/app.py", output)
+        self.assertIn("agent_control_state_exists=True", output)
 
 
 def _self_test() -> None:

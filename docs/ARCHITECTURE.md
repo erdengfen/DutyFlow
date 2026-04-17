@@ -306,7 +306,7 @@ DutyFlow/
       sources/
         index.md
     state/
-      agent_state.md
+      agent_control_state.md
     events/
     contexts/
     approvals/

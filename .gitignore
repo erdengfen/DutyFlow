@@ -5,3 +5,7 @@ docs/learn-claude-code/*
 .env
 src/dutyflow.egg-info
 src/dutyflow.egg-info/*
+__pycache__/
+*.pyc
+data/*
+!data/.gitkeep

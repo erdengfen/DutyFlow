@@ -124,7 +124,7 @@ Demo 期最终必须实现以下完整链路：
 - 缺失必要配置时返回明确错误。
 - `.env.example` 包含模型、飞书占位、本地存储和日志配置类别。
 - Markdown frontmatter 可读写。
-- 可初始化 `data/state/agent_state.md`、日志文件和基础目录。
+- 可初始化 `data/state/agent_control_state.md`、日志文件和基础目录。
 - 日志不泄露密钥或用户私有配置。
 
 ### 涉及文件、类、方法、模块
@@ -155,27 +155,40 @@ Demo 期最终必须实现以下完整链路：
 
 ### 未敲定问题
 
-- `.env` 中飞书真实字段命名未敲定。
-- Markdown frontmatter 是否允许列表和复杂嵌套需要在实现时限制。
-- 日志按天一个 Markdown 文件还是按事件追加到单文件仍需确认。
+- 已决策：模型配置键名使用 `DUTYFLOW_MODEL_API_KEY`、`DUTYFLOW_MODEL_BASE_URL`、`DUTYFLOW_MODEL_NAME`；真实 key 和真实模型链路由开发者后续提供后补测。
+- 已决策：飞书基础配置占位使用 `DUTYFLOW_FEISHU_APP_ID`、`DUTYFLOW_FEISHU_APP_SECRET`、`DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN`、`DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY`。
+- 暂定字段：`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 为项目接入需要的本地配置字段，需在真实飞书开放平台事件订阅配置时核实。
+- 已决策：Markdown frontmatter 只允许简单 `key: value` 字符串，不允许复杂列表和嵌套。
+- 已决策：日志按天一个 Markdown 文件，路径为 `data/logs/YYYY-MM-DD.md`。
 
 ### 任务清单
 
-- [ ] 实现 `.env` 统一读取。
-- [ ] 实现配置校验。
-- [ ] 实现 Markdown frontmatter 读写。
-- [ ] 实现指定 section 抽取。
-- [ ] 实现基础审计日志。
-- [ ] 初始化本地数据目录。
-- [ ] 初始化 Agent State 文件。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写对应测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [x] 实现 `.env` 统一读取。
+- [x] 实现配置校验。
+- [x] 实现 Markdown frontmatter 读写。
+- [x] 实现指定 section 抽取。
+- [x] 实现基础审计日志。
+- [x] 初始化本地数据目录。
+- [x] 初始化 Agent Control State 文件。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写对应测试文件。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 
-- [ ] 提供或确认模型 API 配置键名。
-- [ ] 提供或确认飞书配置键名占位方案。
+- [x] 已确认模型 API 真实 key 后续提供；本阶段先建立配置入口和缺失配置提示。
+- [x] 已确认飞书真实 API 字段未知时先网络检索；无法确定的项目接入字段标记为暂定。
+
+### 验收记录
+
+- `env PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
+- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，累计 10 个测试。
+- `env PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/config/env.py`：通过。
+- `env PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/storage/file_store.py`：通过。
+- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.storage.markdown_store`：通过。
+- `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.logging.audit_log`：通过。
+- 说明：uv 在当前沙箱内无法写入用户级缓存目录，相关 `uv run` 命令经授权后完成。
+- 未验证项：真实模型 API 调用和真实飞书事件订阅尚未执行，等待开发者提供真实 `.env` 配置和飞书测试环境。
 
 ## Step 2: Agent State 与 Agent 基架控制面
 
@@ -578,7 +591,7 @@ Demo 期最终必须实现以下完整链路：
 
 ### 验收标准
 
-- `/health` 返回配置、存储、Agent State、日志状态。
+- `/health` 返回配置、存储、Agent Control State、日志状态。
 - `/model` 可查看或切换当前模型配置名。
 - `/logs` 可查看日志摘要。
 - `/tasks` 可查看任务状态。
@@ -769,8 +782,8 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 
 ## 当前阻塞与风险记录
 
-- [ ] 飞书真实 API 结构、权限、事件 payload、回馈方式未敲定。
-- [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定。
+- [ ] 飞书真实 API 结构、权限、事件 payload、回馈方式未敲定；`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 仍为项目暂定字段。
+- [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定；真实 key 提供后需要补跑完整链路。
 - [ ] 权重 skill 第一版提示词和输出格式未敲定。
 - [ ] 审批在飞书端的交互形式未敲定。
 - [ ] Demo 期是否提供通用 shell 工具未敲定；默认不提供真实通用 shell 执行。
@@ -780,7 +793,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | step | status | completed_at | notes |
 |---|---|---|---|
 | Step 0 | completed | 2026-04-17 | 已完成项目骨架、入口迁移、uv run 入口和 Step 0 测试。 |
-| Step 1 | pending |  |  |
+| Step 1 | completed | 2026-04-17 | 已完成配置入口、Markdown 存储、按天审计日志、运行目录初始化和 Step 1 测试；真实模型与飞书链路待配置后补测。 |
 | Step 2 | pending |  |  |
 | Step 3 | pending |  |  |
 | Step 4 | pending |  |  |
