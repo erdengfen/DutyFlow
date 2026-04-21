@@ -89,6 +89,12 @@ def create_runtime_tool_registry() -> ToolRegistry:
                 tool.contract,
                 is_concurrency_safe=tool.is_concurrency_safe,
                 requires_approval=tool.requires_approval,
+                timeout_seconds=float(getattr(tool, "timeout_seconds", 30.0)),
+                max_retries=int(getattr(tool, "max_retries", 3)),
+                retry_policy=str(getattr(tool, "retry_policy", "transient_only")),
+                idempotency=str(getattr(tool, "idempotency", "read_only")),
+                degradation_mode=str(getattr(tool, "degradation_mode", "none")),
+                fallback_tool_names=tuple(getattr(tool, "fallback_tool_names", ())),
             ),
             tool.handle,
         )

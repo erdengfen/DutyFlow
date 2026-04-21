@@ -48,6 +48,9 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn('"agent_state"', text)
         self.assertIn('"tool_results"', text)
         self.assertIn('"final_text": "done"', text)
+        self.assertIn('"attempt_count": 1', text)
+        self.assertIn('"context_modifiers"', text)
+        self.assertIn('"retry_exhausted": false', text)
 
     def test_chat_session_reuses_agent_state(self) -> None:
         """持续 chat 会话应复用同一个 Agent State。"""

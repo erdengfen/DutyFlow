@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from numbers import Real
 
 _THIS_DIR = __file__.rsplit("/", 1)[0]
 if sys.path and sys.path[0] == _THIS_DIR:
@@ -14,6 +15,9 @@ from typing import Any, Mapping
 from dutyflow.agent.state import AgentContentBlock
 
 TOOL_SOURCES = frozenset({"native", "placeholder", "mcp_reserved", "agent_reserved"})
+TOOL_RETRY_POLICIES = frozenset({"none", "transient_only"})
+TOOL_IDEMPOTENCY_MODES = frozenset({"read_only", "idempotent", "unsafe"})
+TOOL_DEGRADATION_MODES = frozenset({"none", "narrow", "fallback", "escalate"})
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,14 @@ class ToolSpec:
     source: str = "native"
     is_concurrency_safe: bool = False
     requires_approval: bool = False
+    # 关键开关：单次工具执行的默认超时秒数；超时后本轮执行立即判定失败。
+    timeout_seconds: float = 30.0
+    # 关键开关：本工具允许的最大重试次数；0 表示失败后不自动重试。
+    max_retries: int = 3
+    retry_policy: str = "transient_only"
+    idempotency: str = "read_only"
+    degradation_mode: str = "none"
+    fallback_tool_names: tuple[str, ...] = ()
     provider_contract: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -38,6 +50,18 @@ class ToolSpec:
             raise ValueError(f"Unknown tool source: {self.source}")
         if not isinstance(self.input_schema, Mapping):
             raise ValueError("ToolSpec.input_schema must be a mapping")
+        if not isinstance(self.timeout_seconds, Real) or self.timeout_seconds <= 0:
+            raise ValueError("ToolSpec.timeout_seconds must be > 0")
+        if not isinstance(self.max_retries, int) or self.max_retries < 0:
+            raise ValueError("ToolSpec.max_retries must be >= 0")
+        if self.retry_policy not in TOOL_RETRY_POLICIES:
+            raise ValueError(f"Unknown ToolSpec.retry_policy: {self.retry_policy}")
+        if self.idempotency not in TOOL_IDEMPOTENCY_MODES:
+            raise ValueError(f"Unknown ToolSpec.idempotency: {self.idempotency}")
+        if self.degradation_mode not in TOOL_DEGRADATION_MODES:
+            raise ValueError(f"Unknown ToolSpec.degradation_mode: {self.degradation_mode}")
+        if not isinstance(self.fallback_tool_names, tuple):
+            raise ValueError("ToolSpec.fallback_tool_names must be a tuple")
         if self.provider_contract:
             _validate_tool_contract(self.provider_contract)
 
@@ -55,6 +79,12 @@ class ToolSpec:
         source: str = "native",
         is_concurrency_safe: bool = False,
         requires_approval: bool = False,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 3,
+        retry_policy: str = "transient_only",
+        idempotency: str = "read_only",
+        degradation_mode: str = "none",
+        fallback_tool_names: tuple[str, ...] = (),
     ) -> "ToolSpec":
         """从工具 contract 结构加载 ToolSpec。"""
         _validate_tool_contract(contract)
@@ -66,6 +96,12 @@ class ToolSpec:
             source=source,
             is_concurrency_safe=is_concurrency_safe,
             requires_approval=requires_approval,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_policy=retry_policy,
+            idempotency=idempotency,
+            degradation_mode=degradation_mode,
+            fallback_tool_names=tuple(fallback_tool_names),
             provider_contract=dict(contract),
         )
 
@@ -136,6 +172,10 @@ class ToolResultEnvelope:
     attachments: tuple[str, ...] = ()
     context_modifiers: tuple[Mapping[str, Any], ...] = ()
     call_index: int = 0
+    # 关键计数：记录本次工具实际执行了多少次，包含首轮执行和后续重试。
+    attempt_count: int = 1
+    retryable: bool = False
+    retry_exhausted: bool = False
 
     def __post_init__(self) -> None:
         """校验结果信封必须可回写到 tool_result。"""
@@ -145,6 +185,8 @@ class ToolResultEnvelope:
             raise ValueError("ToolResultEnvelope.tool_name is required")
         if self.is_error and not self.error_kind:
             raise ValueError("ToolResultEnvelope.error_kind is required for errors")
+        if self.attempt_count < 1:
+            raise ValueError("ToolResultEnvelope.attempt_count must be >= 1")
 
     def to_agent_block(self) -> AgentContentBlock:
         """转换为 Agent State 可回写的 tool_result 内容块。"""

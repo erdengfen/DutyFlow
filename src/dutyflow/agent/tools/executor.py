@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sys
+import time
+from random import uniform
 
 _THIS_DIR = __file__.rsplit("/", 1)[0]
 if sys.path and sys.path[0] == _THIS_DIR:
     sys.path.pop(0)
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -28,6 +30,19 @@ class ToolExecutionBatch:
     routes: tuple[ToolRoute, ...]
 
 
+RETRYABLE_ERROR_KINDS = frozenset(
+    {
+        "tool_timeout",
+        "temporary_transport_error",
+        "rate_limited",
+        "upstream_unavailable",
+    }
+)
+
+# 关键阈值：任务控制中的 attempt_count 达到 3 后，工具失败会附带人工确认升级建议。
+MANUAL_REVIEW_ATTEMPT_THRESHOLD = 3
+
+
 class ToolExecutor:
     """执行已路由工具并把所有结果封装为 ToolResultEnvelope。"""
 
@@ -36,6 +51,8 @@ class ToolExecutor:
         self.registry = registry
         # 关键开关：concurrency-safe 工具批次的最大并发数量；当前默认最多并发 4 个工具调用。
         self.max_workers = max(1, max_workers)
+        # 关键开关：可重试错误的最大重试次数；当前默认失败后最多追加 3 次重试。
+        self.max_retries = 3
 
     def execute_routes(
         self,
@@ -99,12 +116,191 @@ class ToolExecutor:
         validation = self._validate_route(route, context)
         if validation is not None:
             return validation
-        try:
-            handler = self.registry.get_handler(route.tool_call.tool_name)
-            result = handler(route.tool_call, context)  # type: ignore[misc]
-        except Exception as exc:  # noqa: BLE001
-            return error_envelope(route.tool_call, "handler_exception", str(exc))
+        result = self._execute_with_retry(route, context)
         return self._normalize_handler_result(route, result)
+
+    def _execute_with_retry(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> ToolResultEnvelope:
+        """对可重试错误执行统一重试，不把重试逻辑散落到其它层。"""
+        last_result: ToolResultEnvelope | None = None
+        retry_budget = self._retry_budget(route)
+        for attempt in range(retry_budget + 1):
+            result = self._run_handler_with_timeout(route, context)
+            if not isinstance(result, ToolResultEnvelope):
+                return error_envelope(
+                    route.tool_call,
+                    "invalid_result",
+                    "handler returned invalid result",
+                )
+            retryable = bool((not result.ok) and result.error_kind in RETRYABLE_ERROR_KINDS)
+            should_retry = self._should_retry(route, result, attempt)
+            normalized = replace(
+                result,
+                attempt_count=attempt + 1,
+                retryable=retryable,
+                retry_exhausted=retryable and (attempt >= retry_budget),
+            )
+            normalized = self._attach_degradation_hints(route, context, normalized)
+            last_result = normalized
+            if normalized.ok or not should_retry:
+                return normalized
+            self._sleep_before_retry(self._backoff_delay(attempt))
+        if last_result is None:
+            return error_envelope(route.tool_call, "handler_exception", "tool execution failed without result")
+        return last_result
+
+    def _run_handler_with_timeout(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> ToolResultEnvelope:
+        """在统一超时预算内执行 handler。
+
+        注意：
+        - 当前线程模型下，超时只能判定本轮失败，不能强制停止已在运行的线程。
+        - 真正可能长时间阻塞的工具必须在自身 I/O 层继续设置 timeout。
+        """
+        handler = self.registry.get_handler(route.tool_call.tool_name)
+        spec = route.tool_spec
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(handler, route.tool_call, context)  # type: ignore[misc]
+        try:
+            result = future.result(timeout=spec.timeout_seconds)
+        except FutureTimeoutError:
+            future.cancel()
+            return error_envelope(
+                route.tool_call,
+                "tool_timeout",
+                f"tool execution exceeded timeout: {spec.timeout_seconds:.3f}s",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._classify_handler_exception(route, exc)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        if isinstance(result, ToolResultEnvelope):
+            return result
+        return error_envelope(route.tool_call, "invalid_result", "handler returned invalid result")
+
+    def _classify_handler_exception(
+        self,
+        route: ToolRoute,
+        exc: Exception,
+    ) -> ToolResultEnvelope:
+        """把 handler 异常归类为可重试或不可重试错误。"""
+        if isinstance(exc, TimeoutError):
+            return error_envelope(route.tool_call, "temporary_transport_error", str(exc))
+        if isinstance(exc, ConnectionError):
+            return error_envelope(route.tool_call, "temporary_transport_error", str(exc))
+        if isinstance(exc, OSError):
+            return error_envelope(route.tool_call, "temporary_transport_error", str(exc))
+        return error_envelope(route.tool_call, "handler_exception", str(exc))
+
+    def _should_retry(self, route: ToolRoute, result: ToolResultEnvelope, attempt: int) -> bool:
+        """判断本次失败是否进入下一次重试。"""
+        if result.ok:
+            return False
+        if attempt >= self._retry_budget(route):
+            return False
+        return self._retry_allowed_by_policy(route, result)
+
+    def _retry_budget(self, route: ToolRoute) -> int:
+        """返回当前工具声明允许的最大重试次数。"""
+        return max(0, min(self.max_retries, route.tool_spec.max_retries))
+
+    def _retry_allowed_by_policy(self, route: ToolRoute, result: ToolResultEnvelope) -> bool:
+        """根据工具声明判断当前错误是否允许进入重试。"""
+        spec = route.tool_spec
+        if spec.retry_policy == "none":
+            return False
+        if spec.idempotency == "unsafe":
+            return False
+        if spec.retry_policy == "transient_only":
+            return result.error_kind in RETRYABLE_ERROR_KINDS
+        return False
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """返回下一次重试前的退避秒数。"""
+        # 关键开关：重试退避基数固定为 0.5 秒，按指数增长；附加最多 0.1 秒随机抖动，避免瞬时重放。
+        return (0.5 * (2 ** attempt)) + uniform(0.0, 0.1)
+
+    def _sleep_before_retry(self, delay_seconds: float) -> None:
+        """在下一次重试前等待退避时间。"""
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+
+    def _attach_degradation_hints(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+        result: ToolResultEnvelope,
+    ) -> ToolResultEnvelope:
+        """为失败结果附加降级或人工确认建议，但本阶段不自动执行这些建议。"""
+        if result.ok:
+            return result
+        hints = list(result.context_modifiers)
+        spec = route.tool_spec
+        task_control = context.agent_state.task_control
+        if spec.degradation_mode == "narrow":
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "narrow_scope",
+                    "reason": "tool_declared_narrow_fallback",
+                    "tool_name": route.tool_call.tool_name,
+                }
+            )
+        if spec.degradation_mode == "fallback" and spec.fallback_tool_names:
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "fallback_tool",
+                    "reason": "tool_declared_fallback_candidates",
+                    "tool_name": route.tool_call.tool_name,
+                    "fallback_tool_names": spec.fallback_tool_names,
+                }
+            )
+        if spec.degradation_mode == "escalate" or spec.idempotency == "unsafe":
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "approval_or_manual_review",
+                    "reason": "unsafe_side_effect_or_declared_escalation",
+                    "tool_name": route.tool_call.tool_name,
+                }
+            )
+        if result.retry_exhausted:
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "approval_or_manual_review",
+                    "reason": "retry_exhausted",
+                    "tool_name": route.tool_call.tool_name,
+                }
+            )
+        if task_control.weight_level in {"high", "urgent", "critical"}:
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "approval_or_manual_review",
+                    "reason": "high_weight_failure",
+                    "tool_name": route.tool_call.tool_name,
+                    "weight_level": task_control.weight_level,
+                }
+            )
+        if task_control.attempt_count >= MANUAL_REVIEW_ATTEMPT_THRESHOLD:
+            hints.append(
+                {
+                    "type": "degradation_hint",
+                    "strategy": "approval_or_manual_review",
+                    "reason": "task_attempt_threshold_reached",
+                    "tool_name": route.tool_call.tool_name,
+                    "attempt_count": task_control.attempt_count,
+                }
+            )
+        return replace(result, context_modifiers=tuple(hints))
 
     def _validate_route(
         self,

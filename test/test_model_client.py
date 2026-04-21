@@ -40,6 +40,11 @@ class TestModelClient(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing required env keys"):
             OpenAICompatibleModelClient(_empty_config())
 
+    def test_endpoint_uses_base_url_as_is(self) -> None:
+        """BASE_URL 应直接作为完整端点使用，不再自动拼接路径。"""
+        client = OpenAICompatibleModelClient(_filled_config("https://example.com/custom-endpoint"))
+        self.assertEqual(client._endpoint(), "https://example.com/custom-endpoint")
+
 
 def _tool_call() -> dict:
     """构造 provider tool_call 响应。"""
@@ -56,6 +61,24 @@ def _empty_config() -> EnvConfig:
         model_api_key="",
         model_base_url="",
         model_name="",
+        feishu_app_id="",
+        feishu_app_secret="",
+        feishu_event_verify_token="",
+        feishu_event_encrypt_key="",
+        feishu_event_callback_url="",
+        data_dir=Path("data"),
+        log_dir=Path("data/logs"),
+        runtime_env="test",
+        log_level="INFO",
+    )
+
+
+def _filled_config(base_url: str) -> EnvConfig:
+    """构造最小可用模型配置。"""
+    return EnvConfig(
+        model_api_key="key",
+        model_base_url=base_url,
+        model_name="demo-model",
         feishu_app_id="",
         feishu_app_secret="",
         feishu_event_verify_token="",

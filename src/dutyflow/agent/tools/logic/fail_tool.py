@@ -12,6 +12,12 @@ class FailTool:
     contract = FAIL_TOOL_CONTRACT
     is_concurrency_safe = False
     requires_approval = False
+    timeout_seconds = 30.0
+    max_retries = 0
+    retry_policy = "none"
+    idempotency = "unsafe"
+    degradation_mode = "escalate"
+    fallback_tool_names = ()
 
     def handle(self, tool_call, tool_use_context):
         """始终抛出异常，供执行层封装为 error envelope。"""

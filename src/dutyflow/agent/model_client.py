@@ -63,11 +63,8 @@ class OpenAICompatibleModelClient:
         return parse_model_response(response)
 
     def _endpoint(self) -> str:
-        """返回 chat completions 端点。"""
-        base_url = self.config.model_base_url.rstrip("/")
-        if base_url.endswith("/chat/completions"):
-            return base_url
-        return base_url + "/chat/completions"
+        """返回环境中直接提供的完整模型端点。"""
+        return self.config.model_base_url
 
     def _headers(self) -> dict[str, str]:
         """构造模型请求头，不对外暴露密钥。"""

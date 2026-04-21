@@ -13,6 +13,12 @@ class EchoTextTool:
     contract = ECHO_TEXT_TOOL_CONTRACT
     is_concurrency_safe = True
     requires_approval = False
+    timeout_seconds = 30.0
+    max_retries = 3
+    retry_policy = "transient_only"
+    idempotency = "read_only"
+    degradation_mode = "none"
+    fallback_tool_names = ()
 
     def handle(
         self,

@@ -63,6 +63,12 @@ class TestAgentTools(unittest.TestCase):
         spec = ToolSpec.from_contract(contract, is_concurrency_safe=True)
         self.assertEqual(spec.name, "echo_text")
         self.assertTrue(spec.is_concurrency_safe)
+        self.assertEqual(spec.timeout_seconds, 30.0)
+        self.assertEqual(spec.max_retries, 3)
+        self.assertEqual(spec.retry_policy, "transient_only")
+        self.assertEqual(spec.idempotency, "read_only")
+        self.assertEqual(spec.degradation_mode, "none")
+        self.assertEqual(spec.fallback_tool_names, ())
         self.assertEqual(spec.to_contract()["function"]["description"], "Echo text.")
 
 

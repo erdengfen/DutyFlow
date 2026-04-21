@@ -187,6 +187,10 @@ def _tool_result_to_dict(result: ToolResultEnvelope) -> dict[str, Any]:
         "is_error": result.is_error,
         "error_kind": result.error_kind,
         "call_index": result.call_index,
+        "attempt_count": result.attempt_count,
+        "retryable": result.retryable,
+        "retry_exhausted": result.retry_exhausted,
+        "context_modifiers": [dict(item) for item in result.context_modifiers],
     }
 
 

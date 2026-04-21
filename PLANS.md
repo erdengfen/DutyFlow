@@ -438,10 +438,129 @@ src/dutyflow/agent/tools/
 
 #### Step 2.4 待人工确认
 
-- [ ] 确认真实模型 base URL 是否为 OpenAI-compatible `/chat/completions` 结构；当前适配层会在 base URL 后追加 `/chat/completions`，若已包含该路径则不重复追加。
+- [x] 真实模型 `BASE_URL` 不再在代码内自动拼接 `/chat/completions`；完整路由由环境内 `BASE_URL` 直接控制。
 - [x] `ToolSpec` 已支持从工具 contract 结构加载，并由模型侧 schema 暴露逻辑统一读取 contract。
 - [x] 已明确 `ToolUseContext.agent_state` 是主 `AgentState` 的只读视图，禁止工具直接修改主状态。
 - [x] 工具失败降级、重试、审批升级等策略本次不实现，已在文档中明确当前未覆盖。
+
+## Step 2.5: 工具超时、重试与最小失败恢复
+
+### 最终效果
+
+工具执行层具备最小失败恢复能力：统一超时、有限重试、可重试错误判定、退避等待和最终失败回传。降级策略本阶段只完成技术接口与分类约束，不实现 fallback tool 自动切换。
+
+### 验收标准
+
+- 工具执行有统一超时控制，默认 `30s`。
+- 工具执行失败后不会立即回上层；对可重试错误最多重试 `3` 次。
+- 不可重试错误不进入重试，直接返回最终错误信封。
+- 重试只在 executor 一层发生，不在其它层重复叠加。
+- 重试过程带退避等待和随机抖动，避免连续瞬时重放。
+- 最终结果仍通过 `ToolResultEnvelope -> tool_result` 链路回写。
+- 高风险副作用工具默认不自动重试，需靠工具声明明确约束。
+- 降级策略本阶段不落地 fallback tool，只保留分类和接口位置。
+
+### 涉及文件、类、方法、模块
+
+- `src/dutyflow/agent/tools/executor.py`
+  - `ToolExecutor`
+  - `execute_routes`
+  - `_execute_one_route`
+  - `_execute_with_retry`
+  - `_should_retry`
+  - `_backoff_delay`
+- `src/dutyflow/agent/tools/types.py`
+  - `ToolSpec`
+  - `ToolResultEnvelope`
+- `src/dutyflow/agent/tools/registry.py`
+- `src/dutyflow/agent/tools/context.py`
+- `src/dutyflow/agent/tools/logic/`
+- `src/dutyflow/agent/model_client.py`
+- `src/dutyflow/agent/state.py`
+- `test/test_agent_executor.py`
+- `test/test_agent_loop.py`
+- `test/test_runtime_tool_registry.py`
+
+### 关键约束
+
+- 工具超时默认值先采用 `30s`；后续允许工具级覆盖。
+- 最大重试次数先采用 `3`；后续允许工具级覆盖。
+- 重试只针对可重试错误，如超时、临时网络错误、限流、上游暂时不可用。
+- 参数错误、权限错误、审批缺失、handler 缺失、路由错误等确定性失败不得重试。
+- 副作用工具不能按只读工具同样处理；未来若无幂等保障，默认不自动重试。
+- 当前 Python 线程执行模型下，超时只能判定失败，不能强制终止已在运行的线程；真正可能长时间阻塞的工具必须自行设置 I/O timeout。
+
+### Step 2.5.1 统一超时框架
+
+目标：在 executor 中引入工具级超时控制，不修改上层 loop 形态。
+
+任务清单：
+
+- [x] 在 `ToolSpec` 或工具声明中加入 `timeout_seconds`。
+- [x] 在 executor 中实现单次工具执行超时判定。
+- [x] 默认超时设为 `30s`，并允许工具级覆写。
+- [x] 明确超时结果的 `error_kind`。
+- [x] 为超时路径补自测和单测。
+
+### Step 2.5.2 可重试错误分类与重试循环
+
+目标：只对 transient failure 做有限重试，不对确定性错误重复执行。
+
+任务清单：
+
+- [x] 在 executor 中加入统一重试入口 `_execute_with_retry`。
+- [x] 定义可重试错误分类，如 timeout、temporary transport、429、5xx、unavailable。
+- [x] 定义不可重试错误分类，如 invalid_input、approval_required、missing_handler、route_mismatch。
+- [x] 最大重试次数默认设为 `3`。
+- [x] 最终失败时返回最终错误信封，并保留最后一次失败原因。
+
+### Step 2.5.3 退避等待与执行留痕
+
+目标：避免失败后瞬时连续重放，并让后续状态层能看到尝试轨迹。
+
+任务清单：
+
+- [x] 实现指数退避 + jitter。
+- [x] 把尝试次数、是否重试耗尽等信息写入 `ToolResultEnvelope` 或相邻状态字段。
+- [x] 让调试输出能区分“首轮失败”和“重试后失败”。
+- [x] 为退避与重试耗尽补对应测试。
+
+### Step 2.5.4 工具声明扩展与幂等约束
+
+目标：让重试策略由工具声明控制，而不是只靠 executor 猜测。
+
+任务清单：
+
+- [x] 在工具声明中加入 `max_retries`。
+- [x] 在工具声明中加入 `retry_policy`。
+- [x] 在工具声明中加入 `idempotency`。
+- [x] 为只读工具、幂等写工具、非幂等副作用工具定义第一版分类。
+- [x] 让 registry 加载这些字段并传入执行层。
+
+### Step 2.5.5 降级策略接口预留
+
+目标：先定约束，不在本阶段直接做 fallback tool 自动降级。
+
+任务清单：
+
+- [x] 定义第一版降级分类：同工具缩窄执行 / fallback tool / 人工确认升级。
+- [x] 明确本阶段不实现 fallback tool 自动切换。
+- [x] 明确高权重、失败次数多、或副作用工具失败时应上抛给审批或人工确认。
+- [x] 为后续降级策略预留字段或接口位置。
+
+### 未敲定问题
+
+- `timeout_seconds`、`max_retries`、`retry_policy`、`idempotency` 最终放在 `ToolSpec` 还是 logic class。
+- 超时后尝试次数和失败轨迹记录在 `ToolResultEnvelope` 还是 `AgentRecoveryState`。
+- 外部工具的 transient error 分类边界。
+- 后续 fallback tool 是否允许跨 source 降级。
+
+### 人工确认
+
+- [x] `BASE_URL` 由环境完整控制，不在代码内自动拼接 `/chat/completions`。
+- [x] 默认工具超时先采用 `30s`。
+- [x] 默认最大重试次数先采用 `3`。
+- [x] 本阶段不落地 fallback tool 自动降级，只先完成超时、重试和错误分类。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 
