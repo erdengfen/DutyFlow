@@ -55,6 +55,7 @@ class AgentTaskControl:
 
     task_id: str = ""
     weight_level: str = ""
+    # 关键计数：记录当前任务已尝试次数，供后续硬规则或审批升级使用。
     attempt_count: int = 0
     approval_status: str = "none"
     retry_status: str = "none"
@@ -65,6 +66,7 @@ class AgentTaskControl:
 class AgentRecoveryState:
     """记录主循环错误恢复路径的尝试次数。"""
 
+    # 关键计数：以下字段当前只做状态留痕，不代表对应重试策略已经实现。
     continuation_attempts: int = 0
     compact_attempts: int = 0
     transport_attempts: int = 0
@@ -77,6 +79,7 @@ class AgentState:
 
     query_id: str
     messages: tuple[AgentMessage, ...]
+    # 关键计数：AgentState 当前已进入的轮数，从 1 开始累计。
     turn_count: int = 1
     transition_reason: str = "start"
     current_event_id: str = ""
@@ -85,6 +88,7 @@ class AgentState:
     last_tool_result_ids: tuple[str, ...] = ()
     task_control: AgentTaskControl = field(default_factory=AgentTaskControl)
     recovery: AgentRecoveryState = field(default_factory=AgentRecoveryState)
+    # 关键开关：状态层允许的最大轮数上限；超过后由状态校验直接拒绝继续推进。
     max_turns: int = 20
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)

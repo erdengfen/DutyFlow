@@ -42,6 +42,7 @@ class OpenAICompatibleModelClient:
         if not validation.ok:
             raise ValueError(validation.message())
         self.config = config
+        # 关键开关：单次模型 HTTP 请求超时秒数；当前默认 60 秒。
         self.timeout_seconds = timeout_seconds
 
     def call_model(

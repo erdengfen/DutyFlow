@@ -34,6 +34,7 @@ class ToolExecutor:
     def __init__(self, registry: ToolRegistry, max_workers: int = 4) -> None:
         """绑定注册表并设置并发执行上限。"""
         self.registry = registry
+        # 关键开关：concurrency-safe 工具批次的最大并发数量；当前默认最多并发 4 个工具调用。
         self.max_workers = max(1, max_workers)
 
     def execute_routes(
@@ -72,6 +73,7 @@ class ToolExecutor:
         context: ToolUseContext,
     ) -> tuple[ToolResultEnvelope, ...]:
         """真实并发执行 concurrency-safe 批次。"""
+        # 关键开关：单批实际线程数不会超过配置上限，也不会超过当前批次的工具数量。
         max_workers = min(self.max_workers, len(batch.routes)) or 1
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = [

@@ -84,6 +84,7 @@ class AgentLoop:
         self.router = ToolRouter(registry)
         self.executor = ToolExecutor(registry)
         self.cwd = cwd
+        # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
 
     def run_until_stop(
@@ -123,6 +124,7 @@ class AgentLoop:
             prepared = append_user_message(state, user_text)
             prepared = replace(prepared, turn_count=prepared.turn_count + 1)
             prepared = mark_transition(prepared, "user_continuation")
+        # 关键开关：把本次 loop 允许追加的最大轮数写回 AgentState，供状态层统一兜底校验。
         return replace(prepared, max_turns=prepared.turn_count + self.max_turns)
 
     def _execute_tool_calls(
