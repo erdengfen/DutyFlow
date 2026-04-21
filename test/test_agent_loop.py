@@ -9,10 +9,10 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.agent.debug_tools import create_debug_tool_registry  # noqa: E402
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
+from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 
 
 class TestAgentLoop(unittest.TestCase):
@@ -78,7 +78,7 @@ class _FakeModelClient:
 
 def _loop(client: _FakeModelClient, max_turns: int = 6) -> AgentLoop:
     """构造测试用 AgentLoop。"""
-    return AgentLoop(client, create_debug_tool_registry(), PROJECT_ROOT, max_turns=max_turns)
+    return AgentLoop(client, create_runtime_tool_registry(), PROJECT_ROOT, max_turns=max_turns)
 
 
 def _tool_response() -> ModelResponse:

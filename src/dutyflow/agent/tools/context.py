@@ -18,7 +18,12 @@ from dutyflow.agent.tools.registry import ToolRegistry
 
 @dataclass(frozen=True)
 class ToolUseContext:
-    """提供工具执行时可读取的共享环境，不保存任何密钥。"""
+    """提供工具执行时可读取的共享环境，不保存任何密钥。
+
+    说明：
+    - `agent_state` 指向当前 Agent 主状态，只允许工具只读访问。
+    - 工具不得直接修改主状态；状态变更只能通过 ToolResultEnvelope 回写链路完成。
+    """
 
     query_id: str
     cwd: Path

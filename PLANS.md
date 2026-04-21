@@ -363,129 +363,64 @@ src/dutyflow/agent/tools/
 
 ### Step 2.4 Agent Loop 与最小多轮对话入口
 
-状态：已完成自动验收；真实 key 链路待开发者填入 `.env` 后人工测试。
-范围：基于已完成的 Agent State 和 Tool Call 控制层，实现 CLI `/chat` 调试接口。此接口不是最终生产形态的 agent loop，只用于本地操作窗口验证多轮模型调用、工具调用和状态回写是否可见。
+状态：已完成。范围：实现 CLI `/chat` 调试接口，验证多轮模型调用、工具调用、状态回写和最小工具注册链路；此接口只用于本地调试，不代表最终生产形态的 agent loop。
 
-#### 目标
+#### 当前闭环
 
-`/chat` 内部执行一条最小多轮调试链路：
+`/chat` 当前链路：
 
 ```text
-CLI /chat 用户输入
-  -> create_initial_agent_state / append_user_message
+用户输入
+  -> AgentState 初始化 / 续写
   -> 模型调用
-  -> assistant message 写回 Agent State
+  -> assistant 写回 AgentState
   -> 提取 tool_use
   -> ToolRegistry / ToolRouter / ToolExecutor
-  -> ToolResultEnvelope -> AgentContentBlock(type="tool_result")
-  -> append_tool_results 写回 Agent State
-  -> 下一轮模型调用
-  -> 无 tool_use 时结束
-  -> CLI 输出模型最终文本、完整 Agent State、Tool Result 列表
+  -> ToolResultEnvelope -> append_tool_results
+  -> 下一轮模型调用或结束
+  -> CLI 输出 final_text / agent_state / tool_results
 ```
 
-#### 实现边界
+当前入口：
 
-- 必须使用真实模型 key 做最终人工验收；key、base URL、模型名全部来自 `.env`。
-- 代码不得硬编码任何模型 API key、base URL 或模型名。
-- `/chat` 只服务本地开发调试，不替代飞书用户前端，也不代表最终 agent loop 形态。
-- 初版只实现单用户单 query 的多轮调试，不实现后台任务、多 agent、权限审批和长期记忆。
-- 初版工具仍使用假工具验证链路，不接真实 shell、飞书、MCP 或外部工具。
-- Agent Loop 不直接执行工具 handler，必须通过 ToolRegistry、ToolRouter、ToolExecutor。
-- Agent Loop 不直接 append tool_result，必须通过 `append_tool_results`。
-- Agent Loop 必须设置 `max_turns`，防止无限循环。
-- 模型返回结构需要适配为内部 `AgentContentBlock`；真实 provider 字段不稳定时，适配层必须隔离在 `model_client.py`。
-- CLI 输出必须包含完整当前 Agent State 和本次 tool result，便于调试窗口直接检查状态变化。
+- `uv run src/dutyflow/app.py`
+- `uv run src/dutyflow/app.py --no-interactive`
+- `DutyFlow> /chat`
+- `Chat> /back`
+- `Chat> /exit`
 
-#### 涉及文件
+#### 当前工具接入方式
 
-- `src/dutyflow/agent/loop.py`
-  - `AgentLoop`
-  - `run_turn`
-  - `run_until_stop`
-  - `extract_tool_calls`
-- `src/dutyflow/agent/model_client.py`
-  - `ModelClient`
-  - `ModelResponse`
-  - `OpenAICompatibleModelClient`
-  - `call_model`
-- `src/dutyflow/agent/debug_tools.py`
-  - `create_debug_tool_registry`
-- `src/dutyflow/agent/tools/`
-- `src/dutyflow/agent/state.py`
-- `src/dutyflow/app.py`
-- `src/dutyflow/cli/main.py`
-- `test/test_agent_loop.py`
-- `test/test_model_client.py`
-- `test/test_cli_chat.py`
+新增一个工具的最小流程：
 
-#### 程序端入口
+1. 新增 contract 文件。
+2. 新增 logic 文件。
+3. 在 `src/dutyflow/agent/tools/registry.py` 里 import。
+4. 手动加入 `TOOL_REGISTRY`。
 
-初版只提供 CLI 操作窗口入口：
+说明：
 
-- `uv run src/dutyflow/app.py`：启动当前 Demo 主程序并默认进入持续 CLI。
-- `uv run src/dutyflow/app.py --no-interactive`：仅用于脚本检查，启动后立即退出。
-- `/chat`：进入持续多轮调试子会话，提示符为 `Chat>`。
-- `/chat 用户输入`：以首条消息进入持续多轮调试子会话。
-- `Chat> /back`：返回主 CLI；`Chat> /exit`：退出程序。
+- 当前已经支持 contract 与 logic 分层。
+- `ToolSpec` 已支持从 contract 结构加载。
+- executor 会读取 `is_concurrency_safe` 做分批执行。
+- 当前仍未实现自动发现 / 自动装载；新增工具不是“只加文件即可接入”，仍需要手动登记注册表。
 
-约束：
+#### 关键实现约束
 
-- 入口只用于本地开发调试，不替代飞书用户前端。
-- 入口输出不得打印 `.env` 中的 key、token、secret。
-- 模型调用失败必须返回明确错误，不得伪装成功。
-- 输出必须包含 `final_text`、`agent_state`、`tool_results`、`stop_reason`、`turn_count`。
+- 模型配置全部来自 `.env`，不得硬编码。
+- `/chat` 只用于本地调试，不替代飞书前端。
+- Agent Loop 不直接执行 handler，必须经过 ToolRegistry、ToolRouter、ToolExecutor。
+- Tool Result 不得直接写消息流，必须通过 `append_tool_results` 回写。
+- CLI 输出必须包含 `final_text`、`agent_state`、`tool_results`、`stop_reason`、`turn_count`。
 
-#### 数据结构要求
+#### 未完善部分
 
-- `ModelResponse`
-  - `assistant_blocks`
-  - `stop_reason`
-  - `raw_provider`
-- `AgentLoopResult`
-  - `state`
-  - `final_text`
-  - `stop_reason`
-  - `turn_count`
-  - `tool_results`
-  - `tool_result_count`
-- `ChatDebugSession`
-  - `state`
-  - `run_turn`
-
-#### 第一批测试
-
-- fake model 第一轮返回 `tool_use`，第二轮返回 text，loop 能完成两轮。
-- fake model 返回纯 text，loop 一轮结束。
-- fake model 连续返回 tool_use 超过 `max_turns` 时失败并返回明确错误。
-- loop 调用工具必须经过 ToolRegistry、ToolRouter、ToolExecutor。
-- executor envelope 必须通过 `append_tool_results` 回写 Agent State。
-- CLI `/chat` 在 fake model 模式下可执行。
-- CLI `/chat` 必须进入持续子会话，并复用同一个 Agent State。
-- CLI `/chat` 输出必须包含 `final_text`、完整 `agent_state` 和 `tool_results`。
-- `.env` 缺少模型配置时，真实模型入口返回明确缺失配置。
-
-#### 验收命令
-
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_agent_loop.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python test/test_model_client.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run src/dutyflow/app.py`
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`
-
-#### 真实 key 验收
-
-开发者已提供真实 `.env`，已补跑：
-
-- `uv run src/dutyflow/app.py --interactive` 后执行 `/chat 用一句话回复 ping`。
-- `uv run src/dutyflow/app.py --interactive` 后执行 `/chat 请调用 echo_text 工具，参数 text 为 hello，然后根据工具结果回答`。
-
-验收标准：
-
-- [x] 能调用真实模型。
-- [x] 能返回 assistant 文本。
-- [x] 如模型触发 fake tool，则工具链路可完成回写并继续下一轮。
-- [x] CLI 可见完整当前 Agent State 和 Tool Result。
-- [x] 日志不泄露 key、token、secret。
+- `agent_state` 问题：
+  当前 `src/dutyflow/agent/tools/context.py` 中传给工具的是主 `AgentState`，只是通过注释声明只读；这还不够严，后续应改为专门的只读视图，而不是直接把主状态对象传给工具。
+- 降级 / 重试问题：
+  当前 executor 只有错误封装，没有失败降级、没有重试、没有审批升级策略；这部分目前只在文档中记录，尚未落地。
+- 自动注册问题：
+  当前新增工具仍依赖手动 import 和手动登记 `TOOL_REGISTRY`，后续需要补自动发现 / 自动装载。
 
 #### Step 2.4 自动验收记录
 
@@ -494,35 +429,19 @@ CLI /chat 用户输入
 - 修复：`/chat` 原实现只执行单条 query 并输出一次 Agent State，未进入持续多轮对话；已新增 `ChatDebugSession`，`/chat` 进入 `Chat>` 子会话，每轮复用同一个 Agent State，`/back` 返回主 CLI。
 - 修复：`Chat>` 内再次输入 `/chat 用户输入` 时会按当前 Chat State 继续一轮，不再作为普通文本或异常命令处理。
 - 修复：Chat 子会话单轮模型/API异常会封装为 `chat_turn_failed` JSON 输出，CLI 不因第二轮异常直接退出。
-- `uv run src/dutyflow/app.py`：通过，进入持续 CLI，提示 `DutyFlow> `，可继续输入 `/help`、`/chat`、`/exit`。
-- `uv run src/dutyflow/app.py --no-interactive`：通过，输出 ready 后退出。
-- `uv run src/dutyflow/app.py --health`：通过。
-- `uv run python src/dutyflow/app.py --health`：通过。
-- `uv run src/dutyflow/app.py --interactive` 后输入 `/help`：通过，可见 `/chat`。
-- PTY 真实终端模拟 `uv run src/dutyflow/app.py` 后输入 `/help` 和 `/exit`：通过。
-- 默认入口真实模型 `/chat 用一句话回复 ping`：通过，返回模型文本、完整 `agent_state`、空 `tool_results`。
-- 默认入口真实模型 `/chat` 子会话连续两轮：通过，第二轮复用同一 `query_id`，`agent_state.messages` 同时包含第一轮和第二轮 user/assistant，`turn_count` 更新为 2。
-- 默认入口真实模型 `Chat>` 内输入 `/chat second`：通过，按同一会话第二轮执行，复用同一 `query_id`。
-- 沙箱内首次真实 `/chat` 请求因网络权限返回 `Operation not permitted`；已按权限流程放行网络后复测通过。
-- 真实模型 `/chat 用一句话回复 ping`：通过，返回模型文本、完整 `agent_state`、空 `tool_results`。
-- 真实模型 `/chat 请调用 echo_text 工具，参数 text 为 hello，然后根据工具结果回答`：通过，模型触发 `echo_text`，`tool_results` 含 1 条成功结果，Agent State 中包含 tool_use、tool_result 和第二轮 assistant 文本。
-- `test/test_agent_loop.py`：通过，5 个测试。
-- `test/test_model_client.py`：通过，3 个测试。
-- `test/test_cli_chat.py`：通过，4 个测试。
-- `python -m dutyflow.agent.loop`：通过。
-- `python -m dutyflow.agent.model_client`：通过。
-- `python -m dutyflow.agent.debug_tools`：通过。
-- `python -m dutyflow.cli.main`：通过。
-- `python -m dutyflow.app --health`：通过。
-- `python -m unittest discover -s test`：通过，51 个测试。
-- `uv run dutyflow --health`：通过。
-- `uv run dutyflow --interactive` 后输入 `/help`：通过，可见 `/chat`。
-- `python -m dutyflow.app --interactive` 后输入 `/chat ping` 且无 `.env`：通过，返回缺失模型配置错误，不伪装成功。
-- `git diff --check`：通过。
+- 调整：已删除错误新增的平级 `src/dutyflow/tools/`；测试用占位工具现迁移到 `src/dutyflow/agent/tools/contracts/` 与 `src/dutyflow/agent/tools/logic/`，统一注册入口收回 `src/dutyflow/agent/tools/registry.py`；`src/dutyflow/agent/debug_tools.py` 仅保留兼容包装。
+- 调整：`ToolSpec` 已支持从 contract 结构加载，模型侧暴露 schema 改为统一读取 contract。
+- 真实模型验收：`/chat 用一句话回复 ping` 通过；`/chat 请调用 echo_text 工具，参数 text 为 hello，然后根据工具结果回答` 通过。
+- 多轮会话验收：`/chat` 子会话连续两轮通过；第二轮复用同一 `query_id`，`turn_count` 正常递增。
+- 自动化测试：`test/test_agent_loop.py` 通过（5 个）；`test/test_model_client.py` 通过（3 个）；`test/test_cli_chat.py` 通过（4 个）；`test/test_runtime_tool_registry.py` 通过（2 个）；`python -m unittest discover -s test` 通过（54 个）。
+- 运行检查：`uv run src/dutyflow/app.py --health` 通过；`git diff --check` 通过。
 
 #### Step 2.4 待人工确认
 
 - [ ] 确认真实模型 base URL 是否为 OpenAI-compatible `/chat/completions` 结构；当前适配层会在 base URL 后追加 `/chat/completions`，若已包含该路径则不重复追加。
+- [x] `ToolSpec` 已支持从工具 contract 结构加载，并由模型侧 schema 暴露逻辑统一读取 contract。
+- [x] 已明确 `ToolUseContext.agent_state` 是主 `AgentState` 的只读视图，禁止工具直接修改主状态。
+- [x] 工具失败降级、重试、审批升级等策略本次不实现，已在文档中明确当前未覆盖。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 
@@ -588,11 +507,11 @@ CLI /chat 用户输入
 
 ### 涉及文件、类、方法、模块
 
-- `src/dutyflow/tools/identity_lookup.py`
+- `src/dutyflow/agent/tools/identity_lookup.py`
   - `lookup_contact_identity`
-- `src/dutyflow/tools/source_lookup.py`
+- `src/dutyflow/agent/tools/source_lookup.py`
   - `lookup_source_context`
-- `src/dutyflow/tools/responsibility_lookup.py`
+- `src/dutyflow/agent/tools/responsibility_lookup.py`
   - `lookup_responsibility_context`
 - `src/dutyflow/identity/contact_resolver.py`
   - `ContactResolver`
@@ -703,7 +622,7 @@ CLI /chat 用户输入
 - `src/dutyflow/decision/rules.py`
   - `DecisionRuleEngine`
   - `apply_hard_rules`
-- `src/dutyflow/tools/decision_trace.py`
+- `src/dutyflow/agent/tools/decision_trace.py`
   - `record_decision_trace`
 - `src/dutyflow/agent/state.py`
 - `data/reports/`
@@ -763,7 +682,7 @@ CLI /chat 用户输入
   - `TaskInterrupt`
   - `create_interrupt`
   - `resume_interrupt`
-- `src/dutyflow/tools/approval_tools.py`
+- `src/dutyflow/agent/tools/approval_tools.py`
   - `create_approval_request`
   - `resume_after_approval`
 - `data/tasks/`

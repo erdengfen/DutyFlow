@@ -18,7 +18,6 @@ import json
 from dataclasses import dataclass
 from typing import Sequence
 
-from dutyflow.agent.debug_tools import create_debug_tool_registry
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.cli.main import CliConsole
@@ -26,6 +25,7 @@ from dutyflow.config.env import load_env_config
 from dutyflow.logging.audit_log import AuditLogger
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
+from dutyflow.agent.tools.registry import create_runtime_tool_registry
 
 
 @dataclass
@@ -157,7 +157,7 @@ class DutyFlowApp:
         """创建可持续复用 Agent State 的 /chat 调试会话。"""
         config = load_env_config(self.project_root)
         client = OpenAICompatibleModelClient(config)
-        registry = create_debug_tool_registry()
+        registry = create_runtime_tool_registry()
         return ChatDebugSession(AgentLoop(client, registry, self.project_root))
 
     def run(self, args: Sequence[str] | None = None) -> int:

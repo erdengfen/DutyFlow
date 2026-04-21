@@ -13,11 +13,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.logic.echo_text import EchoTextTool
+from dutyflow.agent.tools.logic.fail_tool import FailTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext
 
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
+
+TOOL_REGISTRY = {
+    EchoTextTool.name: EchoTextTool(),
+    FailTool.name: FailTool(),
+}
 
 
 @dataclass(frozen=True)
@@ -73,14 +80,31 @@ class ToolRegistry:
         return self._tools[name]
 
 
+def create_runtime_tool_registry() -> ToolRegistry:
+    """根据 contract 层和 logic 层生成运行时工具注册表。"""
+    registry = ToolRegistry()
+    for tool in TOOL_REGISTRY.values():
+        registry.register(
+            ToolSpec.from_contract(
+                tool.contract,
+                is_concurrency_safe=tool.is_concurrency_safe,
+                requires_approval=tool.requires_approval,
+            ),
+            tool.handle,
+        )
+    return registry
+
+
 def _self_test() -> None:
-    """验证注册表会拒绝重复工具名。"""
+    """验证注册表会拒绝重复工具名，并可生成运行时注册表。"""
     registry = ToolRegistry()
     spec = ToolSpec("placeholder_tool", "demo", source="placeholder")
     registry.register(spec)
     try:
         registry.register(spec)
     except ValueError:
+        runtime_registry = create_runtime_tool_registry()
+        assert runtime_registry.has("echo_text")
         return
     raise AssertionError("duplicate tool registration was not blocked")
 

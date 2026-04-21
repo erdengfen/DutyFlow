@@ -50,6 +50,21 @@ class TestAgentTools(unittest.TestCase):
         self.assertEqual(block.tool_use_id, "tool_1")
         self.assertEqual(block.content, "hello")
 
+    def test_tool_spec_loads_from_contract(self) -> None:
+        """ToolSpec 应支持从 contract 结构加载。"""
+        contract = {
+            "type": "function",
+            "function": {
+                "name": "echo_text",
+                "description": "Echo text.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        }
+        spec = ToolSpec.from_contract(contract, is_concurrency_safe=True)
+        self.assertEqual(spec.name, "echo_text")
+        self.assertTrue(spec.is_concurrency_safe)
+        self.assertEqual(spec.to_contract()["function"]["description"], "Echo text.")
+
 
 def _self_test() -> None:
     """运行本文件单元测试。"""

@@ -156,18 +156,7 @@ def _tool_result_to_provider(block: AgentContentBlock) -> dict[str, Any]:
 
 def _tools_to_provider(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
     """把工具定义转换为 provider 可见 schema。"""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": dict(tool.input_schema) or {"type": "object", "properties": {}},
-            },
-        }
-        for tool in tools
-        if tool.source == "native"
-    ]
+    return [tool.to_contract() for tool in tools if tool.source == "native"]
 
 
 def _blocks_from_provider_message(message: Mapping[str, Any]) -> tuple[AgentContentBlock, ...]:
