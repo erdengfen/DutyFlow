@@ -61,6 +61,23 @@ class TestAgentExecutor(unittest.TestCase):
         self.assertTrue(result.retry_exhausted)
         self.assertEqual(len(executor.retry_delays), 3)
 
+    def test_timeout_failure_is_written_into_recovery_state(self) -> None:
+        """超时重试耗尽后应把恢复 scope 回写到 AgentState。"""
+        registry = _registry()
+        call = ToolCall("tool_1", "timeout_tool", {"text": "x"}, 0, 0)
+        executor = _TestExecutor(registry, max_workers=4)
+        context = _context(registry)
+        routes = ToolRouter(registry).route_many((call,))
+        result = executor.execute_routes(routes, context)[0]
+        self.assertFalse(result.ok)
+        self.assertEqual(context.agent_state.recovery.tool_error_attempts, 1)
+        self.assertEqual(context.agent_state.recovery.latest_interruption_reason, "wait_next_retry_window")
+        self.assertEqual(context.agent_state.recovery.recovery_scopes[0].status, "scheduled")
+        self.assertEqual(context.agent_state.recovery.recovery_scopes[0].failure_kind, "tool_timeout")
+        self.assertEqual(context.agent_state.task_control.attempt_count, 1)
+        self.assertEqual(context.agent_state.task_control.retry_status, "retrying")
+        self.assertEqual(context.agent_state.task_control.next_action, "retry_tool_call_later")
+
     def test_retryable_error_retries_until_success(self) -> None:
         """可重试错误应在统一重试循环内重试并最终成功。"""
         attempts: list[int] = []
@@ -293,15 +310,18 @@ class TestAgentExecutor(unittest.TestCase):
             _echo_handler,
         )
         call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
-        result = _execute(
+        context = _context(
             registry,
-            (call,),
             approval_requester=lambda tool_name, reason, tool_input: approvals.append((tool_name, reason)) or True,
-        )[0]
+        )
+        routes = ToolRouter(registry).route_many((call,))
+        result = ToolExecutor(registry).execute_routes(routes, context)[0]
         self.assertTrue(result.ok)
         self.assertEqual(result.content, "hello")
         self.assertEqual(len(approvals), 1)
         self.assertEqual(approvals[0][0], "approval_tool")
+        self.assertEqual(context.agent_state.task_control.approval_status, "approved")
+        self.assertEqual(context.agent_state.task_control.next_action, "resume_after_approval")
 
     def test_sensitive_tool_returns_rejected_when_cli_denies(self) -> None:
         """敏感工具被用户拒绝时不应继续执行。"""
@@ -322,6 +342,29 @@ class TestAgentExecutor(unittest.TestCase):
             any(item.get("type") == "permission_decision" for item in result.context_modifiers)
         )
 
+    def test_permission_waiting_and_rejection_are_written_into_recovery_state(self) -> None:
+        """ask 路径和审批拒绝应在 recovery state 中留下恢复记录。"""
+        registry = ToolRegistry()
+        registry.register(
+            _spec("approval_tool", True, requires_approval=True),
+            _echo_handler,
+        )
+        call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
+        context = _context(
+            registry,
+            approval_requester=lambda tool_name, reason, tool_input: False,
+        )
+        routes = ToolRouter(registry).route_many((call,))
+        result = ToolExecutor(registry).execute_routes(routes, context)[0]
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "approval_rejected")
+        self.assertEqual(context.agent_state.recovery.tool_error_attempts, 2)
+        self.assertEqual(context.agent_state.recovery.recovery_scopes[0].status, "exhausted")
+        self.assertEqual(context.agent_state.recovery.recovery_scopes[0].failure_kind, "approval_waiting")
+        self.assertEqual(context.agent_state.task_control.attempt_count, 1)
+        self.assertEqual(context.agent_state.task_control.approval_status, "rejected")
+        self.assertEqual(context.agent_state.task_control.next_action, "report_approval_rejected")
+
     def test_auto_mode_denies_sensitive_tool_without_prompt(self) -> None:
         """auto 模式下敏感工具应直接拒绝且不走人工审批。"""
         approvals: list[str] = []
@@ -331,15 +374,18 @@ class TestAgentExecutor(unittest.TestCase):
             _echo_handler,
         )
         call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
-        result = _execute(
+        context = _context(
             registry,
-            (call,),
             permission_mode="auto",
             approval_requester=lambda tool_name, reason, tool_input: approvals.append(tool_name) or True,
-        )[0]
+        )
+        routes = ToolRouter(registry).route_many((call,))
+        result = ToolExecutor(registry).execute_routes(routes, context)[0]
         self.assertFalse(result.ok)
         self.assertEqual(result.error_kind, "permission_denied")
         self.assertEqual(approvals, [])
+        self.assertEqual(context.agent_state.task_control.attempt_count, 1)
+        self.assertEqual(context.agent_state.task_control.next_action, "report_permission_denied")
 
     def test_permission_decision_is_logged(self) -> None:
         """权限层决定应写入审计日志接口。"""

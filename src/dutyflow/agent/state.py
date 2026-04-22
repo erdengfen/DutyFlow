@@ -6,8 +6,16 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from dutyflow.agent.recovery import (
+    RECOVERY_INTERRUPTION_REASONS,
+    RECOVERY_RESUME_POINTS,
+    RecoveryScope,
+)
+
 ALLOWED_BLOCK_TYPES = frozenset({"text", "tool_use", "tool_result", "placeholder"})
 ALLOWED_ROLES = frozenset({"user", "assistant", "system"})
+APPROVAL_STATUSES = frozenset({"none", "waiting", "approved", "rejected", "deferred"})
+RETRY_STATUSES = frozenset({"none", "retrying", "exhausted"})
 TRANSITION_REASONS = frozenset(
     {
         "start",
@@ -21,6 +29,39 @@ TRANSITION_REASONS = frozenset(
         "failed",
     }
 )
+RECOVERY_ATTEMPT_FAILURE_KINDS = {
+    "model_max_tokens": "continuation_attempts",
+    "context_overflow": "compact_attempts",
+    "model_transport_error": "transport_attempts",
+    "tool_timeout": "tool_error_attempts",
+    "tool_transient_error": "tool_error_attempts",
+    "tool_retry_exhausted": "tool_error_attempts",
+    "tool_side_effect_uncertain": "tool_error_attempts",
+    "permission_denied": "tool_error_attempts",
+    "approval_waiting": "tool_error_attempts",
+    "approval_rejected": "tool_error_attempts",
+    "feedback_delivery_failed": "tool_error_attempts",
+    "persistence_write_failed": "tool_error_attempts",
+}
+TASK_CONTROL_ATTEMPT_FAILURE_KINDS = frozenset(RECOVERY_ATTEMPT_FAILURE_KINDS) - {"approval_rejected"}
+TASK_CONTROL_RETRYING_FAILURE_KINDS = frozenset(
+    {
+        "model_max_tokens",
+        "model_transport_error",
+        "context_overflow",
+        "tool_timeout",
+        "tool_transient_error",
+        "feedback_delivery_failed",
+        "persistence_write_failed",
+    }
+)
+TASK_CONTROL_EXHAUSTED_FAILURE_KINDS = frozenset(
+    {
+        "tool_retry_exhausted",
+        "tool_side_effect_uncertain",
+    }
+)
+TASK_CONTROL_RECOVERABLE_FAILURE_KINDS = TASK_CONTROL_RETRYING_FAILURE_KINDS | TASK_CONTROL_EXHAUSTED_FAILURE_KINDS
 
 
 def _now() -> str:
@@ -71,6 +112,9 @@ class AgentRecoveryState:
     compact_attempts: int = 0
     transport_attempts: int = 0
     tool_error_attempts: int = 0
+    latest_interruption_reason: str = ""
+    latest_resume_point: str = ""
+    recovery_scopes: tuple[RecoveryScope, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -170,12 +214,95 @@ def increment_turn(state: AgentState) -> AgentState:
     return validate_agent_state(replace(state, turn_count=next_turn, updated_at=_now()))
 
 
+def record_recovery_attempt(
+    state: AgentState,
+    failure_kind: str,
+    interruption_reason: str = "",
+    resume_point: str = "",
+) -> AgentState:
+    """记录一次恢复尝试，并同步更新聚合计数。"""
+    counter_name = RECOVERY_ATTEMPT_FAILURE_KINDS.get(failure_kind)
+    if counter_name is None:
+        raise ValueError(f"Unknown recovery failure kind: {failure_kind}")
+    current_value = getattr(state.recovery, counter_name)
+    recovery = replace(
+        state.recovery,
+        **{
+            counter_name: current_value + 1,
+            "latest_interruption_reason": interruption_reason,
+            "latest_resume_point": resume_point,
+        },
+    )
+    task_control = _task_control_for_recovery_attempt(
+        state.task_control,
+        failure_kind,
+        interruption_reason,
+        resume_point,
+    )
+    return validate_agent_state(
+        replace(state, recovery=recovery, task_control=task_control, updated_at=_now())
+    )
+
+
+def upsert_recovery_scope(
+    state: AgentState,
+    scope: RecoveryScope,
+) -> AgentState:
+    """新增或更新一个 scope 级恢复记录。"""
+    scopes = [item for item in state.recovery.recovery_scopes if item.recovery_id != scope.recovery_id]
+    scopes.append(scope)
+    recovery = replace(
+        state.recovery,
+        latest_interruption_reason=scope.interruption_reason,
+        latest_resume_point=scope.resume_point,
+        recovery_scopes=tuple(scopes),
+    )
+    return validate_agent_state(replace(state, recovery=recovery, updated_at=_now()))
+
+
+def resolve_recovery_scope(
+    state: AgentState,
+    recovery_id: str,
+    status: str = "resolved",
+    last_error: str = "",
+) -> AgentState:
+    """将指定 recovery scope 标记为已解决或已耗尽。"""
+    scopes: list[RecoveryScope] = []
+    found = False
+    resolved_scope: RecoveryScope | None = None
+    for scope in state.recovery.recovery_scopes:
+        if scope.recovery_id != recovery_id:
+            scopes.append(scope)
+            continue
+        found = True
+        resolved_scope = replace(
+            scope,
+            status=status,
+            last_error=last_error or scope.last_error,
+            updated_at=_now(),
+        )
+        scopes.append(resolved_scope)
+    if not found:
+        raise ValueError(f"Unknown recovery_id: {recovery_id}")
+    recovery = replace(state.recovery, recovery_scopes=tuple(scopes))
+    task_control = _task_control_for_scope_resolution(
+        state.task_control,
+        resolved_scope,
+        status,
+    )
+    return validate_agent_state(
+        replace(state, recovery=recovery, task_control=task_control, updated_at=_now())
+    )
+
+
 def validate_agent_state(state: AgentState) -> AgentState:
     """验证 Agent State 的核心不变量。"""
     _validate_state_header(state)
+    _validate_task_control(state.task_control)
     for message in state.messages:
         _validate_message(message)
     _validate_pending_ids(state.pending_tool_use_ids)
+    _validate_recovery_state(state.recovery)
     return state
 
 
@@ -296,6 +423,16 @@ def _validate_message(message: AgentMessage) -> None:
         _validate_block(block)
 
 
+def _validate_task_control(task_control: AgentTaskControl) -> None:
+    """验证任务控制状态中的稳定枚举字段。"""
+    if task_control.attempt_count < 0:
+        raise ValueError("task_control.attempt_count must be >= 0")
+    if task_control.approval_status not in APPROVAL_STATUSES:
+        raise ValueError("task_control.approval_status is invalid")
+    if task_control.retry_status not in RETRY_STATUSES:
+        raise ValueError("task_control.retry_status is invalid")
+
+
 def _validate_block(block: AgentContentBlock) -> None:
     """验证消息块的类型和工具 ID 约束。"""
     if block.type not in ALLOWED_BLOCK_TYPES:
@@ -374,13 +511,16 @@ def _task_control_from_dict(payload: Mapping[str, Any]) -> AgentTaskControl:
     )
 
 
-def _recovery_to_dict(recovery: AgentRecoveryState) -> dict[str, int]:
+def _recovery_to_dict(recovery: AgentRecoveryState) -> dict[str, Any]:
     """序列化恢复计数。"""
     return {
         "continuation_attempts": recovery.continuation_attempts,
         "compact_attempts": recovery.compact_attempts,
         "transport_attempts": recovery.transport_attempts,
         "tool_error_attempts": recovery.tool_error_attempts,
+        "latest_interruption_reason": recovery.latest_interruption_reason,
+        "latest_resume_point": recovery.latest_resume_point,
+        "recovery_scopes": [_recovery_scope_to_dict(item) for item in recovery.recovery_scopes],
     }
 
 
@@ -391,6 +531,201 @@ def _recovery_from_dict(payload: Mapping[str, Any]) -> AgentRecoveryState:
         compact_attempts=int(payload.get("compact_attempts", 0)),
         transport_attempts=int(payload.get("transport_attempts", 0)),
         tool_error_attempts=int(payload.get("tool_error_attempts", 0)),
+        latest_interruption_reason=str(payload.get("latest_interruption_reason", "")),
+        latest_resume_point=str(payload.get("latest_resume_point", "")),
+        recovery_scopes=tuple(
+            _recovery_scope_from_dict(item) for item in payload.get("recovery_scopes", ())
+        ),
+    )
+
+
+def _validate_recovery_state(recovery: AgentRecoveryState) -> None:
+    """验证恢复状态中的聚合字段和 scope 记录。"""
+    for field_name in (
+        "continuation_attempts",
+        "compact_attempts",
+        "transport_attempts",
+        "tool_error_attempts",
+    ):
+        if getattr(recovery, field_name) < 0:
+            raise ValueError(f"{field_name} must be >= 0")
+    if (
+        recovery.latest_interruption_reason
+        and recovery.latest_interruption_reason not in RECOVERY_INTERRUPTION_REASONS
+    ):
+        raise ValueError("latest_interruption_reason is invalid")
+    if recovery.latest_resume_point and recovery.latest_resume_point not in RECOVERY_RESUME_POINTS:
+        raise ValueError("latest_resume_point is invalid")
+    _validate_recovery_scope_ids(recovery.recovery_scopes)
+
+
+def _validate_recovery_scope_ids(scopes: Sequence[RecoveryScope]) -> None:
+    """验证 recovery scope 的稳定 ID 不重复。"""
+    ids = tuple(scope.recovery_id for scope in scopes)
+    if len(ids) != len(set(ids)):
+        raise ValueError("recovery_scopes cannot contain duplicate recovery_id")
+
+
+def _task_control_for_recovery_attempt(
+    task_control: AgentTaskControl,
+    failure_kind: str,
+    interruption_reason: str,
+    resume_point: str,
+) -> AgentTaskControl:
+    """根据恢复事件摘要回写任务控制字段。"""
+    return replace(
+        task_control,
+        attempt_count=_attempt_count_for_failure(task_control, failure_kind),
+        approval_status=_approval_status_for_recovery_attempt(task_control, failure_kind),
+        retry_status=_retry_status_for_recovery_attempt(task_control, failure_kind),
+        next_action=_next_action_for_recovery_attempt(failure_kind, interruption_reason, resume_point),
+    )
+
+
+def _task_control_for_scope_resolution(
+    task_control: AgentTaskControl,
+    scope: RecoveryScope | None,
+    status: str,
+) -> AgentTaskControl:
+    """根据恢复 scope 的终态刷新任务控制摘要。"""
+    if scope is None:
+        return task_control
+    if status == "resolved":
+        return _task_control_for_resolved_scope(task_control, scope)
+    if status == "exhausted":
+        return _task_control_for_exhausted_scope(task_control, scope)
+    return task_control
+
+
+def _attempt_count_for_failure(task_control: AgentTaskControl, failure_kind: str) -> int:
+    """返回当前失败类型应写回的任务尝试次数。"""
+    if failure_kind not in TASK_CONTROL_ATTEMPT_FAILURE_KINDS:
+        return task_control.attempt_count
+    return task_control.attempt_count + 1
+
+
+def _approval_status_for_recovery_attempt(
+    task_control: AgentTaskControl,
+    failure_kind: str,
+) -> str:
+    """根据恢复事件返回新的审批摘要状态。"""
+    if failure_kind == "approval_waiting":
+        return "waiting"
+    if failure_kind == "approval_rejected":
+        return "rejected"
+    return task_control.approval_status
+
+
+def _retry_status_for_recovery_attempt(
+    task_control: AgentTaskControl,
+    failure_kind: str,
+) -> str:
+    """根据恢复事件返回新的重试摘要状态。"""
+    if failure_kind in TASK_CONTROL_RETRYING_FAILURE_KINDS:
+        return "retrying"
+    if failure_kind in TASK_CONTROL_EXHAUSTED_FAILURE_KINDS:
+        return "exhausted"
+    return task_control.retry_status
+
+
+def _next_action_for_recovery_attempt(
+    failure_kind: str,
+    interruption_reason: str,
+    resume_point: str,
+) -> str:
+    """根据恢复事件生成稳定的下一步动作摘要。"""
+    action_map = {
+        "approval_waiting": "wait_for_approval",
+        "approval_rejected": "report_approval_rejected",
+        "permission_denied": "report_permission_denied",
+        "model_max_tokens": "continue_model_generation",
+        "context_overflow": "compact_context_then_retry",
+        "tool_retry_exhausted": "manual_review_required",
+        "tool_side_effect_uncertain": "manual_review_required",
+        "feedback_delivery_failed": "retry_feedback_delivery",
+        "persistence_write_failed": "retry_persistence_write",
+    }
+    if failure_kind in action_map:
+        return action_map[failure_kind]
+    if interruption_reason == "wait_next_retry_window" and resume_point == "before_tool_execute":
+        return "retry_tool_call_later"
+    if interruption_reason == "wait_next_retry_window":
+        return "retry_model_call_later"
+    if resume_point == "before_tool_execute":
+        return "retry_tool_call"
+    if resume_point == "before_model_call":
+        return "retry_model_call"
+    return ""
+
+
+def _task_control_for_resolved_scope(
+    task_control: AgentTaskControl,
+    scope: RecoveryScope,
+) -> AgentTaskControl:
+    """在恢复 scope 成功解决后清理或推进任务控制摘要。"""
+    if scope.failure_kind == "approval_waiting":
+        return replace(
+            task_control,
+            approval_status="approved",
+            retry_status="none",
+            next_action="resume_after_approval",
+        )
+    if scope.failure_kind in TASK_CONTROL_RECOVERABLE_FAILURE_KINDS:
+        return replace(task_control, retry_status="none", next_action="")
+    return task_control
+
+
+def _task_control_for_exhausted_scope(
+    task_control: AgentTaskControl,
+    scope: RecoveryScope,
+) -> AgentTaskControl:
+    """在恢复 scope 耗尽后写回最终的任务控制摘要。"""
+    if scope.failure_kind == "approval_waiting":
+        return replace(task_control, approval_status="rejected", next_action="report_approval_rejected")
+    if scope.failure_kind == "permission_denied":
+        return replace(task_control, next_action="report_permission_denied")
+    if scope.failure_kind in TASK_CONTROL_RECOVERABLE_FAILURE_KINDS:
+        return replace(task_control, retry_status="exhausted", next_action="manual_review_required")
+    return task_control
+
+
+def _recovery_scope_to_dict(scope: RecoveryScope) -> dict[str, Any]:
+    """序列化单条恢复 scope 记录。"""
+    return {
+        "recovery_id": scope.recovery_id,
+        "scope_type": scope.scope_type,
+        "scope_id": scope.scope_id,
+        "status": scope.status,
+        "failure_kind": scope.failure_kind,
+        "interruption_reason": scope.interruption_reason,
+        "strategy": scope.strategy,
+        "attempt_count": scope.attempt_count,
+        "max_attempts": scope.max_attempts,
+        "next_retry_at": scope.next_retry_at,
+        "resume_point": scope.resume_point,
+        "resume_payload": dict(scope.resume_payload),
+        "last_error": scope.last_error,
+        "updated_at": scope.updated_at,
+    }
+
+
+def _recovery_scope_from_dict(payload: Mapping[str, Any]) -> RecoveryScope:
+    """从字典恢复单条恢复 scope 记录。"""
+    return RecoveryScope(
+        recovery_id=str(payload.get("recovery_id", "")),
+        scope_type=str(payload.get("scope_type", "")),
+        scope_id=str(payload.get("scope_id", "")),
+        status=str(payload.get("status", "")),
+        failure_kind=str(payload.get("failure_kind", "")),
+        interruption_reason=str(payload.get("interruption_reason", "")),
+        strategy=str(payload.get("strategy", "manual_review")),
+        attempt_count=int(payload.get("attempt_count", 0)),
+        max_attempts=int(payload.get("max_attempts", 0)),
+        next_retry_at=str(payload.get("next_retry_at", "")),
+        resume_point=str(payload.get("resume_point", "")),
+        resume_payload=dict(payload.get("resume_payload", {})),
+        last_error=str(payload.get("last_error", "")),
+        updated_at=str(payload.get("updated_at", _now())),
     )
 
 
@@ -411,8 +746,15 @@ def _self_test() -> None:
         state,
         (AgentContentBlock(type="tool_result", tool_use_id="tool_1", content="ok"),),
     )
+    state = record_recovery_attempt(
+        state,
+        "tool_timeout",
+        interruption_reason="wait_next_retry_window",
+        resume_point="before_tool_execute",
+    )
     assert state.turn_count == 2
     assert not state.pending_tool_use_ids
+    assert state.recovery.tool_error_attempts == 1
 
 
 if __name__ == "__main__":

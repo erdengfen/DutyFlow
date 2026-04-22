@@ -34,6 +34,40 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(result.tool_result_count, 0)
         self.assertEqual(result.turn_count, 1)
 
+    def test_max_tokens_response_continues_with_recovery_state(self) -> None:
+        """max_tokens 截断后应继续下一轮，并写入 recovery 聚合信息。"""
+        client = _FakeModelClient((_text_response("part", "max_tokens"), _text_response("done")))
+        result = _loop(client).run_until_stop("run")
+        self.assertEqual(result.final_text, "done")
+        self.assertEqual(result.state.recovery.continuation_attempts, 1)
+        self.assertEqual(result.state.recovery.latest_resume_point, "before_model_call")
+        self.assertEqual(result.state.task_control.attempt_count, 1)
+        self.assertEqual(result.state.task_control.retry_status, "none")
+
+    def test_model_transport_error_retries_and_records_recovery(self) -> None:
+        """模型传输异常恢复后应记录 transport recovery。"""
+        client = _FakeModelClient((RuntimeError("model request failed: timeout"), _text_response("done")))
+        result = _loop(client).run_until_stop("run")
+        self.assertEqual(result.final_text, "done")
+        self.assertEqual(result.state.recovery.transport_attempts, 1)
+        self.assertEqual(result.state.transition_reason, "finished")
+        self.assertEqual(result.state.task_control.attempt_count, 1)
+        self.assertEqual(result.state.task_control.retry_status, "none")
+
+    def test_context_overflow_fails_with_recovery_scope(self) -> None:
+        """上下文溢出时应返回失败，并留下恢复 scope。"""
+        client = _FakeModelClient((ValueError("prompt too long"),))
+        result = _loop(client).run_until_stop("run")
+        self.assertEqual(result.stop_reason, "context_overflow")
+        self.assertEqual(result.state.recovery.compact_attempts, 1)
+        self.assertEqual(result.state.recovery.recovery_scopes[0].failure_kind, "context_overflow")
+        self.assertEqual(result.state.recovery.recovery_scopes[0].status, "waiting")
+        self.assertEqual(result.state.task_control.retry_status, "retrying")
+        self.assertEqual(result.state.task_control.next_action, "compact_context_then_retry")
+        self.assertEqual(len(result.pending_restarts), 1)
+        self.assertEqual(result.pending_restarts[0].restart_action, "compact_then_retry")
+        self.assertFalse(result.pending_restarts[0].can_restart_now)
+
     def test_max_turns_stops_continuous_tool_calls(self) -> None:
         """连续 tool_use 超出 max_turns 时应返回失败结果。"""
         client = _FakeModelClient((_tool_response(), _tool_response()))
@@ -47,6 +81,7 @@ class TestAgentLoop(unittest.TestCase):
         text = _loop(client).run_until_stop("run").to_debug_text()
         self.assertIn('"agent_state"', text)
         self.assertIn('"tool_results"', text)
+        self.assertIn('"pending_restarts"', text)
         self.assertIn('"final_text": "done"', text)
         self.assertIn('"attempt_count": 1', text)
         self.assertIn('"context_modifiers"', text)
@@ -68,7 +103,7 @@ class TestAgentLoop(unittest.TestCase):
 class _FakeModelClient:
     """按顺序返回预设响应的测试模型。"""
 
-    def __init__(self, responses: tuple[ModelResponse, ...]) -> None:
+    def __init__(self, responses: tuple[object, ...]) -> None:
         """保存预设响应。"""
         self.responses = list(responses)
 
@@ -76,7 +111,10 @@ class _FakeModelClient:
         """返回下一条预设模型响应。"""
         if not self.responses:
             raise RuntimeError("fake responses exhausted")
-        return self.responses.pop(0)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 def _loop(client: _FakeModelClient, max_turns: int = 6) -> AgentLoop:
@@ -95,9 +133,9 @@ def _tool_response() -> ModelResponse:
     return ModelResponse((block,), "tool_use")
 
 
-def _text_response(text: str) -> ModelResponse:
+def _text_response(text: str, stop_reason: str = "stop") -> ModelResponse:
     """构造文本模型响应。"""
-    return ModelResponse((AgentContentBlock(type="text", text=text),), "stop")
+    return ModelResponse((AgentContentBlock(type="text", text=text),), stop_reason)
 
 
 def _user_texts(state) -> tuple[str, ...]:

@@ -17,9 +17,13 @@ from dutyflow.agent.state import (  # noqa: E402
     create_initial_agent_state,
     from_dict,
     load_agent_state,
+    record_recovery_attempt,
+    resolve_recovery_scope,
     save_agent_state,
     to_dict,
+    upsert_recovery_scope,
 )
+from dutyflow.agent.recovery import RecoveryScope  # noqa: E402
 
 
 class TestAgentState(unittest.TestCase):
@@ -83,6 +87,78 @@ class TestAgentState(unittest.TestCase):
         restored = load_agent_state(save_agent_state(state))
         self.assertEqual(restored.query_id, "query_001")
 
+    def test_record_recovery_attempt_updates_aggregate_fields(self) -> None:
+        """恢复尝试应更新聚合计数和最近恢复摘要。"""
+        state = create_initial_agent_state("query_001", "读取上下文")
+        state = record_recovery_attempt(
+            state,
+            "tool_timeout",
+            interruption_reason="wait_next_retry_window",
+            resume_point="before_tool_execute",
+        )
+        self.assertEqual(state.recovery.tool_error_attempts, 1)
+        self.assertEqual(state.recovery.latest_interruption_reason, "wait_next_retry_window")
+        self.assertEqual(state.recovery.latest_resume_point, "before_tool_execute")
+        self.assertEqual(state.task_control.attempt_count, 1)
+        self.assertEqual(state.task_control.retry_status, "retrying")
+        self.assertEqual(state.task_control.next_action, "retry_tool_call_later")
+
+    def test_approval_waiting_updates_task_control_summary(self) -> None:
+        """审批等待应同步写回任务控制中的审批摘要。"""
+        state = create_initial_agent_state("query_001", "读取上下文")
+        state = record_recovery_attempt(
+            state,
+            "approval_waiting",
+            interruption_reason="waiting_approval",
+            resume_point="after_approval",
+        )
+        self.assertEqual(state.task_control.attempt_count, 1)
+        self.assertEqual(state.task_control.approval_status, "waiting")
+        self.assertEqual(state.task_control.next_action, "wait_for_approval")
+
+    def test_upsert_recovery_scope_can_roundtrip(self) -> None:
+        """recovery scope 应可写入状态并随序列化稳定恢复。"""
+        state = create_initial_agent_state("query_001", "读取上下文")
+        scope = _recovery_scope()
+        state = upsert_recovery_scope(state, scope)
+        restored = from_dict(to_dict(state))
+        self.assertEqual(len(restored.recovery.recovery_scopes), 1)
+        self.assertEqual(restored.recovery.recovery_scopes[0].recovery_id, "rec_001")
+
+    def test_resolve_recovery_scope_updates_status(self) -> None:
+        """已存在的 recovery scope 应能被标记为 resolved。"""
+        state = create_initial_agent_state("query_001", "读取上下文")
+        state = upsert_recovery_scope(state, _recovery_scope())
+        state = resolve_recovery_scope(state, "rec_001")
+        self.assertEqual(state.recovery.recovery_scopes[0].status, "resolved")
+        self.assertEqual(state.task_control.retry_status, "none")
+        self.assertEqual(state.task_control.next_action, "")
+
+    def test_resolve_approval_scope_marks_task_control_approved(self) -> None:
+        """审批等待 scope 在 resolved 后应把审批摘要标记为 approved。"""
+        state = create_initial_agent_state("query_001", "读取上下文")
+        state = record_recovery_attempt(
+            state,
+            "approval_waiting",
+            interruption_reason="waiting_approval",
+            resume_point="after_approval",
+        )
+        scope = RecoveryScope(
+            recovery_id="rec_approval",
+            scope_type="tool_call",
+            scope_id="tool_001",
+            status="waiting",
+            failure_kind="approval_waiting",
+            interruption_reason="waiting_approval",
+            strategy="wait_approval",
+            resume_point="after_approval",
+        )
+        state = upsert_recovery_scope(state, scope)
+        state = resolve_recovery_scope(state, "rec_approval", status="resolved", last_error="approved in CLI")
+        self.assertEqual(state.task_control.approval_status, "approved")
+        self.assertEqual(state.task_control.retry_status, "none")
+        self.assertEqual(state.task_control.next_action, "resume_after_approval")
+
     def test_state_does_not_touch_control_snapshot_file(self) -> None:
         """Agent State 初始化和更新不得创建本地快照文件。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,6 +186,23 @@ def _tool_result(tool_use_id: str, content: str) -> AgentContentBlock:
         type="tool_result",
         tool_use_id=tool_use_id,
         content=content,
+    )
+
+
+def _recovery_scope() -> RecoveryScope:
+    """构造测试用 recovery scope。"""
+    return RecoveryScope(
+        recovery_id="rec_001",
+        scope_type="tool_call",
+        scope_id="tool_001",
+        status="waiting",
+        failure_kind="tool_retry_exhausted",
+        interruption_reason="wait_next_retry_window",
+        strategy="retry_later",
+        attempt_count=1,
+        max_attempts=3,
+        resume_point="before_tool_execute",
+        resume_payload={"tool_name": "demo_tool"},
     )
 
 

@@ -299,11 +299,11 @@ Demo 期最终必须实现以下完整链路：
 - [x] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
 - [x] 实现 PermissionGate。
 - [x] 接入 Step 2 的 CLI 人工审批入口。
-- [ ] 实现最小 RecoveryManager。
+- [x] 实现最小 RecoveryManager。
 - [ ] 接入 AuditLogger。
 - [ ] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写对应测试文件。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写对应测试文件。
 - [ ] 执行本阶段完整链路检查。
 
 ### 人工确认
@@ -508,7 +508,7 @@ src/dutyflow/agent/tools/
 - 工具接入仍依赖手动 import + 手动登记 `TOOL_REGISTRY`，还没有自动发现/自动装载。
 - 内部工具 / 外部工具的批次与来源语义还没有形成独立声明字段，目前只有 `source` 与执行约束组合，后续必须继续收紧。
 - `timeout_seconds`、`max_retries`、`retry_policy`、`idempotency`、`degradation_mode` 目前同时依赖 logic 声明和 `ToolSpec` 承接，长期形态还未最终定稿。
-- 超时后尝试次数和失败轨迹当前记录在 `ToolResultEnvelope`，尚未并入 `AgentRecoveryState`。
+- 超时后尝试次数和失败轨迹已第一版并入 `AgentRecoveryState.recovery_scopes`；但 `task_control` 侧的同步摘要仍待继续补齐。
 - 外部工具的 transient error 分类边界还未细化。
 - `approval_or_manual_review` 目前只是 hint，不会自动进入审批流。
 
@@ -525,7 +525,7 @@ src/dutyflow/agent/tools/
 
 ### Step 2.6: 权限闸门、CLI 审批入口与最小恢复
 
-状态：部分完成。当前已实现 PermissionGate、CLI 人工审批入口，以及权限决定/审批结果的最小审计接入；最小 RecoveryManager、系统化失败恢复和 Hook 预留仍待继续补齐。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
+状态：部分完成。当前已实现 PermissionGate、CLI 人工审批入口，以及权限决定/审批结果的最小审计接入；最小 RecoveryManager 与 ToolExecutor / AgentLoop 的第一版接入已完成，`task_control` 与 `recovery` 的联动回写、当前进程内 restart 描述都已落地，Hook 预留仍待继续补齐。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
 
 #### 当前目标
 
@@ -554,7 +554,7 @@ src/dutyflow/agent/tools/
 
 ### Step 2.7: RecoveryManager 设计收敛
 
-状态：设计确认，待实现。范围：把 RecoveryManager 收敛为“恢复决策层”，统一处理中断原因、重试策略、挂起恢复和后台任务 restart 所需的状态描述；不把 RecoveryManager 做成后台执行器本身。
+状态：已完成。当前已完成数据模型收敛、`RecoveryEvent` / `RecoveryDecision` / `RecoveryScope` 纯内存结构、`AgentRecoveryState` 的聚合计数 + scope 级结构扩展、`ToolExecutor` 中工具失败事件与权限等待事件的第一版接入、`AgentLoop` 中模型中断恢复的第一版接入、`task_control` 与 `recovery` 的联动回写，以及“当前进程存活期间”的挂起 / restart 描述输出。范围：把 RecoveryManager 收敛为“恢复决策层”，统一处理中断原因、重试策略、挂起恢复和后台任务 restart 所需的状态描述；不把 RecoveryManager 做成后台执行器本身。
 
 #### 当前设计结论
 
@@ -683,25 +683,37 @@ RecoveryScope
 
 #### 任务清单
 
-- [ ] 在 `docs/DATA_MODEL.md` 明确 `AgentRecoveryState` 和 `RecoveryScope` 数据结构。
-- [ ] 实现 `RecoveryEvent`、`RecoveryDecision`、`RecoveryScope` 的第一版纯内存结构。
-- [ ] 扩展 `AgentRecoveryState`，支持总计数 + scope 级恢复记录。
-- [ ] 在 `state.py` 中实现恢复状态的序列化、反序列化和回写入口。
-- [ ] 在 `ToolExecutor` 中接入恢复事件上报，覆盖：
+- [x] 在 `docs/DATA_MODEL.md` 明确 `AgentRecoveryState` 和 `RecoveryScope` 数据结构。
+- [x] 实现 `RecoveryEvent`、`RecoveryDecision`、`RecoveryScope` 的第一版纯内存结构。
+- [x] 扩展 `AgentRecoveryState`，支持总计数 + scope 级恢复记录。
+- [x] 在 `state.py` 中实现恢复状态的序列化、反序列化和回写入口。
+- [x] 在 `ToolExecutor` 中接入恢复事件上报，覆盖：
   - `tool_timeout`
   - `tool_transient_error`
   - `tool_retry_exhausted`
   - `approval_waiting`
   - `approval_rejected`
-- [ ] 在 `AgentLoop` 中接入恢复决策，覆盖：
+- [x] 在 `AgentLoop` 中接入恢复决策，覆盖：
   - `model_max_tokens`
   - `model_transport_error`
   - `context_overflow`
-- [ ] 将重试信息同步回写到 `AgentState.task_control` 和 `AgentState.recovery`。
-- [ ] 实现“当前进程存活期间”的挂起和 restart 描述，不实现跨进程恢复。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写 `test/test_agent_recovery.py`。
-- [ ] 执行本阶段完整链路检查。
+- [x] 将重试信息同步回写到 `AgentState.task_control` 和 `AgentState.recovery`。
+- [x] 实现“当前进程存活期间”的挂起和 restart 描述，不实现跨进程恢复。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写 `test/test_agent_recovery.py`。
+- [x] 执行本阶段完整链路检查。
+
+#### 当前验收记录
+
+- `PYTHONPATH=src python3 -m dutyflow.agent.recovery`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.state`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.cli.main`：通过。
+- `python3 -m unittest discover -s test -p 'test_agent_loop.py'`：通过，8 个测试。
+- `python3 -m unittest discover -s test -p 'test_cli_chat.py'`：通过，4 个测试。
+- `python3 -m unittest discover -s test`：通过，96 个测试。
+- `python3 src/dutyflow/app.py --health`：通过。
+- `git diff --check`：通过。
 
 #### 本次不做
 

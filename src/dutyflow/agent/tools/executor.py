@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import time
 from random import uniform
+from threading import Lock
+from uuid import uuid4
 
 _THIS_DIR = __file__.rsplit("/", 1)[0]
 if sys.path and sys.path[0] == _THIS_DIR:
@@ -16,7 +18,13 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from dutyflow.agent.permissions import PermissionDecision, PermissionGate
-from dutyflow.agent.state import create_initial_agent_state
+from dutyflow.agent.recovery import RecoveryEvent, RecoveryManager
+from dutyflow.agent.state import (
+    create_initial_agent_state,
+    record_recovery_attempt,
+    resolve_recovery_scope,
+    upsert_recovery_scope,
+)
 from dutyflow.agent.tools.context import ToolUseContext
 from dutyflow.agent.tools.registry import ToolRegistry
 from dutyflow.agent.tools.router import ToolRoute
@@ -52,10 +60,13 @@ class ToolExecutor:
         registry: ToolRegistry,
         max_workers: int = 4,
         permission_gate: PermissionGate | None = None,
+        recovery_manager: RecoveryManager | None = None,
     ) -> None:
         """绑定注册表并设置并发执行上限。"""
         self.registry = registry
         self.permission_gate = permission_gate or PermissionGate()
+        self.recovery_manager = recovery_manager or RecoveryManager()
+        self._state_lock = Lock()
         # 关键开关：concurrency-safe 工具批次的最大并发数量；当前默认最多并发 4 个工具调用。
         self.max_workers = max(1, max_workers)
         # 关键开关：可重试错误的最大重试次数；当前默认失败后最多追加 3 次重试。
@@ -127,7 +138,9 @@ class ToolExecutor:
         if permission is not None:
             return permission
         result = self._execute_with_retry(route, context)
-        return self._normalize_handler_result(route, result)
+        normalized = self._normalize_handler_result(route, result)
+        self._register_tool_failure(route, context, normalized)
+        return normalized
 
     def _execute_with_retry(
         self,
@@ -374,16 +387,33 @@ class ToolExecutor:
         self._record_permission_decision(route, context, decision)
         if decision.behavior == "allow":
             return None
+        if decision.behavior == "ask":
+            recovery_id = self._register_permission_waiting(route, context)
+            return self._complete_permission_request(route, context, decision, recovery_id)
         if decision.behavior == "deny":
+            self._register_permission_denied(route, context)
             return self._permission_denied_envelope(route, decision, "permission_denied")
+        raise ValueError(f"Unknown permission behavior: {decision.behavior}")
+
+    def _complete_permission_request(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+        decision: PermissionDecision,
+        recovery_id: str,
+    ) -> ToolResultEnvelope | None:
+        """处理 ask 路径下的即时 CLI 审批，并更新恢复状态。"""
         approved = self._request_user_approval(route, context, decision)
         if approved:
+            self._resolve_recovery_scope(context, recovery_id, "resolved", "approved in CLI")
             self._record_audit(
                 context,
                 "permission_approved",
                 f"tool={route.tool_call.tool_name}; mode={decision.mode}; reason={decision.reason}",
             )
             return None
+        self._register_approval_rejected(route, context)
+        self._resolve_recovery_scope(context, recovery_id, "exhausted", "manual approval rejected")
         self._record_audit(
             context,
             "permission_rejected",
@@ -471,6 +501,151 @@ class ToolExecutor:
             event_type=event_type,
             note=note,
             task_id=context.agent_state.task_control.task_id,
+        )
+
+    def _register_tool_failure(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+        result: ToolResultEnvelope,
+    ) -> None:
+        """把支持的工具失败结果转换为恢复事件并写回 AgentState。"""
+        event = self._tool_failure_event(route, result)
+        if event is None:
+            return
+        self._register_recovery_event(context, event)
+
+    def _tool_failure_event(
+        self,
+        route: ToolRoute,
+        result: ToolResultEnvelope,
+    ) -> RecoveryEvent | None:
+        """把工具错误结果映射为恢复事件。"""
+        if result.ok:
+            return None
+        failure_kind = self._failure_kind_from_result(result)
+        if failure_kind is None:
+            return None
+        if failure_kind in {"tool_timeout", "tool_transient_error"} and not result.retry_exhausted:
+            return None
+        return RecoveryEvent(
+            scope_type="tool_call",
+            scope_id=route.tool_call.tool_use_id,
+            failure_kind=failure_kind,
+            attempt_count=result.attempt_count,
+            max_attempts=self._retry_budget(route) + 1,
+            error_message=result.content,
+            tool_name=route.tool_call.tool_name,
+            retryable=result.retryable,
+            metadata={"tool_name": route.tool_call.tool_name, "tool_use_id": route.tool_call.tool_use_id},
+        )
+
+    def _failure_kind_from_result(self, result: ToolResultEnvelope) -> str | None:
+        """把执行层 error_kind 映射为恢复层 failure_kind。"""
+        mapping = {
+            "tool_timeout": "tool_timeout",
+            "temporary_transport_error": "tool_transient_error",
+        }
+        return mapping.get(result.error_kind)
+
+    def _register_permission_waiting(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> str:
+        """把 ask 路径记录为 approval_waiting 恢复事件。"""
+        event = RecoveryEvent(
+            scope_type="tool_call",
+            scope_id=route.tool_call.tool_use_id,
+            failure_kind="approval_waiting",
+            error_message="permission gate requested manual approval",
+            tool_name=route.tool_call.tool_name,
+            metadata={"tool_name": route.tool_call.tool_name, "tool_use_id": route.tool_call.tool_use_id},
+        )
+        return self._register_recovery_event(context, event)
+
+    def _register_permission_denied(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> str:
+        """把直接拒绝的权限结果记录为恢复事件。"""
+        event = RecoveryEvent(
+            scope_type="tool_call",
+            scope_id=route.tool_call.tool_use_id,
+            failure_kind="permission_denied",
+            error_message="permission gate denied execution",
+            tool_name=route.tool_call.tool_name,
+            metadata={"tool_name": route.tool_call.tool_name, "tool_use_id": route.tool_call.tool_use_id},
+        )
+        return self._register_recovery_event(context, event)
+
+    def _register_approval_rejected(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> str:
+        """把审批拒绝记录为恢复事件。"""
+        event = RecoveryEvent(
+            scope_type="tool_call",
+            scope_id=route.tool_call.tool_use_id,
+            failure_kind="approval_rejected",
+            error_message="manual approval rejected execution",
+            tool_name=route.tool_call.tool_name,
+            metadata={"tool_name": route.tool_call.tool_name, "tool_use_id": route.tool_call.tool_use_id},
+        )
+        return self._register_recovery_event(context, event)
+
+    def _register_recovery_event(
+        self,
+        context: ToolUseContext,
+        event: RecoveryEvent,
+    ) -> str:
+        """根据恢复事件更新 AgentState 中的恢复聚合信息和 scope 记录。"""
+        decision = self.recovery_manager.decide(event)
+        recovery_id = self._recovery_id(event)
+        scope = self.recovery_manager.create_scope(recovery_id, event, decision)
+        self._update_context_state(
+            context,
+            lambda state: record_recovery_attempt(
+                state,
+                event.failure_kind,
+                interruption_reason=decision.interruption_reason,
+                resume_point=decision.resume_point,
+            ),
+        )
+        self._update_context_state(context, lambda state: upsert_recovery_scope(state, scope))
+        return recovery_id
+
+    def _resolve_recovery_scope(
+        self,
+        context: ToolUseContext,
+        recovery_id: str,
+        status: str,
+        last_error: str,
+    ) -> None:
+        """把指定恢复 scope 标记为 resolved 或 exhausted。"""
+        self._update_context_state(
+            context,
+            lambda state: resolve_recovery_scope(state, recovery_id, status=status, last_error=last_error),
+        )
+
+    def _update_context_state(self, context: ToolUseContext, update_fn) -> None:
+        """线程安全地替换上下文中的最新 AgentState。"""
+        with self._state_lock:
+            updated = update_fn(context.agent_state)
+            object.__setattr__(context, "agent_state", updated)
+
+    def _recovery_id(self, event: RecoveryEvent) -> str:
+        """生成当前恢复事件的稳定恢复记录 ID。"""
+        return "_".join(
+            (
+                "rec",
+                event.scope_type,
+                event.scope_id,
+                event.failure_kind,
+                uuid4().hex[:8],
+            )
         )
 
 

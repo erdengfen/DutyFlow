@@ -9,6 +9,12 @@ from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from dutyflow.agent.model_client import ModelClient
+from dutyflow.agent.recovery import (
+    RecoveryDecision,
+    RecoveryEvent,
+    RecoveryManager,
+    RecoveryRestartDescriptor,
+)
 from dutyflow.agent.state import (
     AgentContentBlock,
     AgentState,
@@ -16,8 +22,12 @@ from dutyflow.agent.state import (
     append_assistant_message,
     append_tool_results,
     create_initial_agent_state,
+    increment_turn,
     mark_transition,
+    record_recovery_attempt,
+    resolve_recovery_scope,
     to_dict,
+    upsert_recovery_scope,
 )
 from dutyflow.agent.tools.context import ToolUseContext
 from dutyflow.agent.tools.executor import ToolExecutor
@@ -35,6 +45,7 @@ class AgentLoopResult:
     stop_reason: str
     turn_count: int
     tool_results: tuple[ToolResultEnvelope, ...]
+    pending_restarts: tuple[RecoveryRestartDescriptor, ...] = ()
 
     @property
     def tool_result_count(self) -> int:
@@ -49,6 +60,7 @@ class AgentLoopResult:
             "turn_count": self.turn_count,
             "tool_result_count": self.tool_result_count,
             "tool_results": [_tool_result_to_dict(item) for item in self.tool_results],
+            "pending_restarts": [_restart_descriptor_to_dict(item) for item in self.pending_restarts],
             "agent_state": to_dict(self.state),
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -80,18 +92,23 @@ class AgentLoop:
         permission_mode: str = "default",
         approval_requester=None,
         audit_logger=None,
+        recovery_manager: RecoveryManager | None = None,
+        max_model_recovery_attempts: int = 3,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
         self.registry = registry
         self.router = ToolRouter(registry)
-        self.executor = ToolExecutor(registry)
+        self.recovery_manager = recovery_manager or RecoveryManager()
+        self.executor = ToolExecutor(registry, recovery_manager=self.recovery_manager)
         self.cwd = cwd
         self.permission_mode = permission_mode
         self.approval_requester = approval_requester
         self.audit_logger = audit_logger
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
+        # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
+        self.max_model_recovery_attempts = max_model_recovery_attempts
 
     def run_until_stop(
         self,
@@ -104,16 +121,78 @@ class AgentLoop:
         state = self._prepare_state(user_text, query_id, state)
         tool_results: list[ToolResultEnvelope] = []
         local_turns = 0
+        model_transport_attempts = 0
+        active_recovery_ids: list[str] = []
         while True:
-            response = self.model_client.call_model(state, self.registry.list_specs())
+            try:
+                response = self.model_client.call_model(state, self.registry.list_specs())
+            except Exception as exc:  # noqa: BLE001
+                failure_kind = self._classify_model_failure(exc)
+                state, decision, recovery_id = self._register_model_recovery(
+                    state=state,
+                    failure_kind=failure_kind,
+                    scope_id=f"turn_{state.turn_count}",
+                    attempt_count=model_transport_attempts + 1,
+                    max_attempts=self.max_model_recovery_attempts,
+                    error_message=str(exc),
+                    retryable=True,
+                )
+                active_recovery_ids.append(recovery_id)
+                if decision.strategy == "retry_now":
+                    model_transport_attempts += 1
+                    if model_transport_attempts > self.max_model_recovery_attempts:
+                        state = self._finalize_recovery_ids(state, active_recovery_ids, "exhausted", str(exc))
+                        return _failed_result(
+                            state,
+                            failure_kind,
+                            tool_results,
+                            self._pending_restart_descriptions(state),
+                        )
+                    state = mark_transition(state, "transport_retry")
+                    continue
+                return _failed_result(
+                    state,
+                    failure_kind,
+                    tool_results,
+                    self._pending_restart_descriptions(state),
+                )
+            if active_recovery_ids:
+                state = self._finalize_recovery_ids(state, active_recovery_ids, "resolved", "model call recovered")
+                active_recovery_ids.clear()
+                model_transport_attempts = 0
             state = append_assistant_message(state, response.assistant_blocks)
+            if response.stop_reason == "max_tokens":
+                state, _, recovery_id = self._register_model_recovery(
+                    state=state,
+                    failure_kind="model_max_tokens",
+                    scope_id=f"turn_{state.turn_count}",
+                    attempt_count=state.recovery.continuation_attempts + 1,
+                    max_attempts=self.max_model_recovery_attempts,
+                    error_message="model output truncated at max_tokens",
+                    retryable=True,
+                )
+                active_recovery_ids.append(recovery_id)
+                state = append_user_message(state, _continuation_message())
+                state = increment_turn(mark_transition(state, "max_tokens_recovery"))
+                continue
             tool_calls = extract_tool_calls(state)
             if not tool_calls:
-                return _finish_result(state, _final_text(response.assistant_blocks), response.stop_reason, tool_results)
+                return _finish_result(
+                    state,
+                    _final_text(response.assistant_blocks),
+                    response.stop_reason,
+                    tool_results,
+                    self._pending_restart_descriptions(state),
+                )
             local_turns += 1
             if local_turns >= self.max_turns:
-                return _failed_result(state, "max_turns_reached", tool_results)
-            envelopes = self._execute_tool_calls(state, tool_calls, tool_content or {})
+                return _failed_result(
+                    state,
+                    "max_turns_reached",
+                    tool_results,
+                    self._pending_restart_descriptions(state),
+                )
+            state, envelopes = self._execute_tool_calls(state, tool_calls, tool_content or {})
             tool_results.extend(envelopes)
             state = append_tool_results(state, tuple(item.to_agent_block() for item in envelopes))
 
@@ -138,7 +217,7 @@ class AgentLoop:
         state: AgentState,
         tool_calls: Sequence[ToolCall],
         tool_content: Mapping[str, Any],
-    ) -> tuple[ToolResultEnvelope, ...]:
+    ) -> tuple[AgentState, tuple[ToolResultEnvelope, ...]]:
         """通过 Router 和 Executor 执行工具调用。"""
         routes = self.router.route_many(tuple(tool_calls))
         context = ToolUseContext(
@@ -151,7 +230,72 @@ class AgentLoop:
             audit_logger=self.audit_logger,
             tool_content=tool_content,
         )
-        return self.executor.execute_routes(routes, context)
+        envelopes = self.executor.execute_routes(routes, context)
+        return context.agent_state, envelopes
+
+    def _register_model_recovery(
+        self,
+        state: AgentState,
+        failure_kind: str,
+        scope_id: str,
+        attempt_count: int,
+        max_attempts: int,
+        error_message: str,
+        retryable: bool,
+    ) -> tuple[AgentState, RecoveryDecision, str]:
+        """把模型中断注册为恢复事件，并回写到 AgentState。"""
+        event = RecoveryEvent(
+            scope_type="turn",
+            scope_id=scope_id,
+            failure_kind=failure_kind,
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            error_message=error_message,
+            retryable=retryable,
+            metadata={"query_id": state.query_id, "turn_count": state.turn_count},
+        )
+        decision = self.recovery_manager.decide(event)
+        state = record_recovery_attempt(
+            state,
+            failure_kind,
+            interruption_reason=decision.interruption_reason,
+            resume_point=decision.resume_point,
+        )
+        recovery_id = self._new_recovery_id(event)
+        scope = self.recovery_manager.create_scope(recovery_id, event, decision)
+        state = upsert_recovery_scope(state, scope)
+        return state, decision, recovery_id
+
+    def _finalize_recovery_ids(
+        self,
+        state: AgentState,
+        recovery_ids: Sequence[str],
+        status: str,
+        last_error: str,
+    ) -> AgentState:
+        """把一组活动中的恢复 scope 批量标记为最终状态。"""
+        updated = state
+        for recovery_id in recovery_ids:
+            updated = resolve_recovery_scope(updated, recovery_id, status=status, last_error=last_error)
+        return updated
+
+    def _classify_model_failure(self, exc: Exception) -> str:
+        """把模型异常映射为恢复层 failure_kind。"""
+        message = str(exc).lower()
+        if "context" in message or "prompt" in message:
+            return "context_overflow"
+        return "model_transport_error"
+
+    def _new_recovery_id(self, event: RecoveryEvent) -> str:
+        """生成模型恢复 scope 的本地 ID。"""
+        return "_".join(("rec", event.scope_type, event.scope_id, event.failure_kind, uuid4().hex[:8]))
+
+    def _pending_restart_descriptions(
+        self,
+        state: AgentState,
+    ) -> tuple[RecoveryRestartDescriptor, ...]:
+        """返回当前 AgentState 中仍处于挂起中的 restart 描述。"""
+        return self.recovery_manager.collect_restart_descriptions(state.recovery.recovery_scopes)
 
 
 def extract_tool_calls(state: AgentState) -> tuple[ToolCall, ...]:
@@ -170,20 +314,36 @@ def _finish_result(
     final_text: str,
     stop_reason: str,
     tool_results: Sequence[ToolResultEnvelope],
+    pending_restarts: Sequence[RecoveryRestartDescriptor],
 ) -> AgentLoopResult:
     """生成成功结束结果。"""
     finished = mark_transition(state, "finished")
-    return AgentLoopResult(finished, final_text, stop_reason or "stop", finished.turn_count, tuple(tool_results))
+    return AgentLoopResult(
+        finished,
+        final_text,
+        stop_reason or "stop",
+        finished.turn_count,
+        tuple(tool_results),
+        tuple(pending_restarts),
+    )
 
 
 def _failed_result(
     state: AgentState,
     reason: str,
     tool_results: Sequence[ToolResultEnvelope],
+    pending_restarts: Sequence[RecoveryRestartDescriptor],
 ) -> AgentLoopResult:
     """生成失败结束结果。"""
     failed = mark_transition(state, "failed")
-    return AgentLoopResult(failed, reason, reason, failed.turn_count, tuple(tool_results))
+    return AgentLoopResult(
+        failed,
+        reason,
+        reason,
+        failed.turn_count,
+        tuple(tool_results),
+        tuple(pending_restarts),
+    )
 
 
 def _final_text(blocks: Sequence[AgentContentBlock]) -> str:
@@ -209,9 +369,30 @@ def _tool_result_to_dict(result: ToolResultEnvelope) -> dict[str, Any]:
     }
 
 
+def _restart_descriptor_to_dict(descriptor: RecoveryRestartDescriptor) -> dict[str, Any]:
+    """把 restart 描述转换为 CLI 调试可读字典。"""
+    return {
+        "recovery_id": descriptor.recovery_id,
+        "resume_token": descriptor.resume_token,
+        "scope_type": descriptor.scope_type,
+        "scope_id": descriptor.scope_id,
+        "status": descriptor.status,
+        "interruption_reason": descriptor.interruption_reason,
+        "resume_point": descriptor.resume_point,
+        "restart_action": descriptor.restart_action,
+        "can_restart_now": descriptor.can_restart_now,
+        "next_retry_at": descriptor.next_retry_at,
+    }
+
+
 def _new_query_id() -> str:
     """生成本地调试 query id。"""
     return "chat_" + uuid4().hex
+
+
+def _continuation_message() -> str:
+    """返回模型输出截断后的继续提示。"""
+    return "Output limit hit. Continue directly from where you stopped."
 
 
 def _self_test() -> None:
