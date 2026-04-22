@@ -40,7 +40,11 @@ class TestAgentExecutor(unittest.TestCase):
         """handler 异常必须封装为 error envelope。"""
         registry = _registry()
         call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
-        result = _execute(registry, (call,))[0]
+        result = _execute(
+            registry,
+            (call,),
+            approval_requester=lambda tool_name, reason, tool_input: True,
+        )[0]
         self.assertFalse(result.ok)
         self.assertEqual(result.error_kind, "handler_exception")
 
@@ -149,7 +153,12 @@ class TestAgentExecutor(unittest.TestCase):
         )
         call = ToolCall("tool_1", "unsafe_tool", {"text": "x"}, 0, 0)
         executor = _TestExecutor(registry, max_workers=4)
-        result = _execute(registry, (call,), executor=executor)[0]
+        result = _execute(
+            registry,
+            (call,),
+            executor=executor,
+            approval_requester=lambda tool_name, reason, tool_input: True,
+        )[0]
         self.assertFalse(result.ok)
         self.assertEqual(result.error_kind, "temporary_transport_error")
         self.assertEqual(result.attempt_count, 1)
@@ -215,7 +224,11 @@ class TestAgentExecutor(unittest.TestCase):
         """非幂等副作用工具失败时应附加人工确认升级建议。"""
         registry = _registry()
         call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
-        result = _execute(registry, (call,))[0]
+        result = _execute(
+            registry,
+            (call,),
+            approval_requester=lambda tool_name, reason, tool_input: True,
+        )[0]
         self.assertFalse(result.ok)
         self.assertTrue(
             any(item.get("reason") == "unsafe_side_effect_or_declared_escalation" for item in result.context_modifiers)
@@ -234,7 +247,14 @@ class TestAgentExecutor(unittest.TestCase):
         call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
         executor = _TestExecutor(registry, max_workers=4)
         routes = ToolRouter(registry).route_many((call,))
-        result = executor.execute_routes(routes, _context(registry, state=state))[0]
+        result = executor.execute_routes(
+            routes,
+            _context(
+                registry,
+                state=state,
+                approval_requester=lambda tool_name, reason, tool_input: True,
+            ),
+        )[0]
         self.assertTrue(
             any(item.get("reason") == "high_weight_failure" for item in result.context_modifiers)
         )
@@ -252,10 +272,92 @@ class TestAgentExecutor(unittest.TestCase):
         call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
         executor = _TestExecutor(registry, max_workers=4)
         routes = ToolRouter(registry).route_many((call,))
-        result = executor.execute_routes(routes, _context(registry, state=state))[0]
+        result = executor.execute_routes(
+            routes,
+            _context(
+                registry,
+                state=state,
+                approval_requester=lambda tool_name, reason, tool_input: True,
+            ),
+        )[0]
         self.assertTrue(
             any(item.get("reason") == "task_attempt_threshold_reached" for item in result.context_modifiers)
         )
+
+    def test_sensitive_tool_asks_and_runs_after_cli_approval(self) -> None:
+        """敏感工具在审批通过后应继续执行。"""
+        approvals: list[tuple[str, str]] = []
+        registry = ToolRegistry()
+        registry.register(
+            _spec("approval_tool", True, requires_approval=True),
+            _echo_handler,
+        )
+        call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
+        result = _execute(
+            registry,
+            (call,),
+            approval_requester=lambda tool_name, reason, tool_input: approvals.append((tool_name, reason)) or True,
+        )[0]
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content, "hello")
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0][0], "approval_tool")
+
+    def test_sensitive_tool_returns_rejected_when_cli_denies(self) -> None:
+        """敏感工具被用户拒绝时不应继续执行。"""
+        registry = ToolRegistry()
+        registry.register(
+            _spec("approval_tool", True, requires_approval=True),
+            _echo_handler,
+        )
+        call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
+        result = _execute(
+            registry,
+            (call,),
+            approval_requester=lambda tool_name, reason, tool_input: False,
+        )[0]
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "approval_rejected")
+        self.assertTrue(
+            any(item.get("type") == "permission_decision" for item in result.context_modifiers)
+        )
+
+    def test_auto_mode_denies_sensitive_tool_without_prompt(self) -> None:
+        """auto 模式下敏感工具应直接拒绝且不走人工审批。"""
+        approvals: list[str] = []
+        registry = ToolRegistry()
+        registry.register(
+            _spec("approval_tool", True, requires_approval=True),
+            _echo_handler,
+        )
+        call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
+        result = _execute(
+            registry,
+            (call,),
+            permission_mode="auto",
+            approval_requester=lambda tool_name, reason, tool_input: approvals.append(tool_name) or True,
+        )[0]
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "permission_denied")
+        self.assertEqual(approvals, [])
+
+    def test_permission_decision_is_logged(self) -> None:
+        """权限层决定应写入审计日志接口。"""
+        registry = ToolRegistry()
+        logger = _FakeAuditLogger()
+        registry.register(
+            _spec("approval_tool", True, requires_approval=True),
+            _echo_handler,
+        )
+        call = ToolCall("tool_1", "approval_tool", {"text": "hello"}, 0, 0)
+        _execute(
+            registry,
+            (call,),
+            approval_requester=lambda tool_name, reason, tool_input: False,
+            audit_logger=logger,
+        )
+        self.assertTrue(any(item["event_type"] == "permission_decision" for item in logger.records))
+        self.assertTrue(any(item["event_type"] == "permission_rejected" for item in logger.records))
 
     def test_invalid_input_is_wrapped(self) -> None:
         """缺少必填参数应由 executor 封装为 invalid_input。"""
@@ -369,6 +471,7 @@ def _spec(
     idempotency: str = "read_only",
     degradation_mode: str = "none",
     fallback_tool_names: tuple[str, ...] = (),
+    requires_approval: bool = False,
 ) -> ToolSpec:
     """构造带 text 必填字段的测试工具定义。"""
     return ToolSpec(
@@ -376,6 +479,7 @@ def _spec(
         "Echo text.",
         {"required": ["text"]},
         is_concurrency_safe=safe,
+        requires_approval=requires_approval,
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         retry_policy=retry_policy,
@@ -389,6 +493,9 @@ def _context(
     registry: ToolRegistry,
     state=None,
     tool_content=None,
+    permission_mode: str = "default",
+    approval_requester=None,
+    audit_logger=None,
 ) -> ToolUseContext:
     """构造测试用 ToolUseContext。"""
     state = state or create_initial_agent_state("query_001", "run")
@@ -397,6 +504,9 @@ def _context(
         cwd=PROJECT_ROOT,
         agent_state=state,
         registry=registry,
+        permission_mode=permission_mode,
+        approval_requester=approval_requester,
+        audit_logger=audit_logger,
         tool_content=tool_content or {},
     )
 
@@ -406,11 +516,23 @@ def _execute(
     calls,
     tool_content=None,
     executor: ToolExecutor | None = None,
+    permission_mode: str = "default",
+    approval_requester=None,
+    audit_logger=None,
 ) -> tuple[ToolResultEnvelope, ...]:
     """执行一组测试工具调用。"""
     routes = ToolRouter(registry).route_many(tuple(calls))
     actual_executor = executor or ToolExecutor(registry, max_workers=4)
-    return actual_executor.execute_routes(routes, _context(registry, tool_content=tool_content))
+    return actual_executor.execute_routes(
+        routes,
+        _context(
+            registry,
+            tool_content=tool_content,
+            permission_mode=permission_mode,
+            approval_requester=approval_requester,
+            audit_logger=audit_logger,
+        ),
+    )
 
 
 def _echo_handler(tool_call, tool_use_context) -> ToolResultEnvelope:
@@ -458,6 +580,25 @@ class _TestExecutor(ToolExecutor):
     def _sleep_before_retry(self, delay_seconds: float) -> None:
         """记录退避等待，不阻塞测试。"""
         self.retry_delays.append(delay_seconds)
+
+
+class _FakeAuditLogger:
+    """为执行层测试提供最小审计日志对象。"""
+
+    def __init__(self) -> None:
+        """保存写入的审计记录。"""
+        self.records: list[dict[str, str]] = []
+
+    def record(self, event_type: str, note: str, task_id: str = "", trace_id: str = "") -> dict[str, str]:
+        """记录一条测试审计事件。"""
+        item = {
+            "event_type": event_type,
+            "note": note,
+            "task_id": task_id,
+            "trace_id": trace_id,
+        }
+        self.records.append(item)
+        return item
 
 
 def _self_test() -> None:

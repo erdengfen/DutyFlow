@@ -70,6 +70,7 @@ def _empty_config() -> EnvConfig:
         log_dir=Path("data/logs"),
         runtime_env="test",
         log_level="INFO",
+        permission_mode="default",
     )
 
 
@@ -88,6 +89,7 @@ def _filled_config(base_url: str) -> EnvConfig:
         log_dir=Path("data/logs"),
         runtime_env="test",
         log_level="INFO",
+        permission_mode="default",
     )
 
 

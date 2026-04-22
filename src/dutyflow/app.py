@@ -16,7 +16,7 @@ if __package__ in {None, ""}:
 import argparse
 import json
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
@@ -155,10 +155,21 @@ class DutyFlowApp:
 
     def create_chat_debug_session(self) -> ChatDebugSession:
         """创建可持续复用 Agent State 的 /chat 调试会话。"""
+        self._ensure_runtime_layout()
         config = load_env_config(self.project_root)
         client = OpenAICompatibleModelClient(config)
         registry = create_runtime_tool_registry()
-        return ChatDebugSession(AgentLoop(client, registry, self.project_root))
+        audit_logger = self._create_audit_logger(config)
+        return ChatDebugSession(
+            AgentLoop(
+                client,
+                registry,
+                self.project_root,
+                permission_mode=config.permission_mode,
+                approval_requester=self._prompt_cli_permission,
+                audit_logger=audit_logger,
+            )
+        )
 
     def run(self, args: Sequence[str] | None = None) -> int:
         """根据命令参数启动健康检查或 CLI 控制台。"""
@@ -184,6 +195,30 @@ class DutyFlowApp:
             help="只输出启动提示，不进入持续 CLI 控制台",
         )
         return parser
+
+    def _create_audit_logger(self, config) -> AuditLogger:
+        """构造当前运行链路可复用的审计日志对象。"""
+        markdown_store = MarkdownStore(FileStore(self.project_root))
+        return AuditLogger(markdown_store, config.log_dir)
+
+    def _prompt_cli_permission(
+        self,
+        tool_name: str,
+        reason: str,
+        tool_input: Mapping[str, Any],
+    ) -> bool:
+        """在 CLI 中询问用户是否允许敏感工具继续执行。"""
+        preview = json.dumps(dict(tool_input), ensure_ascii=False)[:200]
+        print("\n[Permission Required]")
+        print(f"tool={tool_name}")
+        print(f"reason={reason}")
+        print(f"input={preview}")
+        try:
+            answer = input("Press Enter to approve, type 'no' to reject: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in {"", "y", "yes"}
 
 
 def main(args: Sequence[str] | None = None) -> int:

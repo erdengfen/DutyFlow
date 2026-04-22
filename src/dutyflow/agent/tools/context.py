@@ -10,10 +10,24 @@ if sys.path and sys.path[0] == _THIS_DIR:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Protocol
 
 from dutyflow.agent.state import AgentState, create_initial_agent_state
 from dutyflow.agent.tools.registry import ToolRegistry
+
+
+class ApprovalRequester(Protocol):
+    """定义工具执行前人工审批回调的最小协议。"""
+
+    def __call__(self, tool_name: str, reason: str, tool_input: Mapping[str, Any]) -> bool:
+        """返回用户是否允许继续执行该工具。"""
+
+
+class AuditLoggerLike(Protocol):
+    """定义执行层记录审计日志所需的最小接口。"""
+
+    def record(self, event_type: str, note: str, task_id: str = "", trace_id: str = "") -> object:
+        """写入一条审计记录。"""
 
 
 @dataclass(frozen=True)
@@ -29,6 +43,9 @@ class ToolUseContext:
     cwd: Path
     agent_state: AgentState
     registry: ToolRegistry
+    permission_mode: str = "default"
+    approval_requester: ApprovalRequester | None = None
+    audit_logger: AuditLoggerLike | None = None
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     notifications: tuple[str, ...] = ()
     tool_content: Mapping[str, Any] = field(default_factory=dict)
@@ -39,6 +56,7 @@ def _self_test() -> None:
     state = create_initial_agent_state("query_ctx", "hello")
     context = ToolUseContext("query_ctx", Path.cwd(), state, ToolRegistry())
     assert context.tool_content == {}
+    assert context.permission_mode == "default"
 
 
 if __name__ == "__main__":

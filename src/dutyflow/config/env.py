@@ -37,6 +37,7 @@ class EnvConfig:
     log_dir: Path
     runtime_env: str
     log_level: str
+    permission_mode: str
 
     def validate(self) -> EnvValidationResult:
         """校验模型配置是否已具备真实链路运行条件。"""
@@ -69,6 +70,7 @@ def load_env_config(project_root: Path | None = None) -> EnvConfig:
         log_dir=log_dir,
         runtime_env=merged.get("DUTYFLOW_RUNTIME_ENV", "local-demo"),
         log_level=merged.get("DUTYFLOW_LOG_LEVEL", "INFO"),
+        permission_mode=merged.get("DUTYFLOW_PERMISSION_MODE", "default"),
     )
 
 

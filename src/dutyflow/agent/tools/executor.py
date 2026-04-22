@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from dutyflow.agent.permissions import PermissionDecision, PermissionGate
 from dutyflow.agent.state import create_initial_agent_state
 from dutyflow.agent.tools.context import ToolUseContext
 from dutyflow.agent.tools.registry import ToolRegistry
@@ -46,9 +47,15 @@ MANUAL_REVIEW_ATTEMPT_THRESHOLD = 3
 class ToolExecutor:
     """执行已路由工具并把所有结果封装为 ToolResultEnvelope。"""
 
-    def __init__(self, registry: ToolRegistry, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        max_workers: int = 4,
+        permission_gate: PermissionGate | None = None,
+    ) -> None:
         """绑定注册表并设置并发执行上限。"""
         self.registry = registry
+        self.permission_gate = permission_gate or PermissionGate()
         # 关键开关：concurrency-safe 工具批次的最大并发数量；当前默认最多并发 4 个工具调用。
         self.max_workers = max(1, max_workers)
         # 关键开关：可重试错误的最大重试次数；当前默认失败后最多追加 3 次重试。
@@ -116,6 +123,9 @@ class ToolExecutor:
         validation = self._validate_route(route, context)
         if validation is not None:
             return validation
+        permission = self._enforce_permission(route, context)
+        if permission is not None:
+            return permission
         result = self._execute_with_retry(route, context)
         return self._normalize_handler_result(route, result)
 
@@ -329,8 +339,6 @@ class ToolExecutor:
             return error_envelope(call, "route_mismatch", "route spec mismatch")
         if spec.source != "native":
             return error_envelope(call, "source_unavailable", "tool source unavailable")
-        if spec.requires_approval:
-            return error_envelope(call, "approval_required", "permission gate is not implemented")
         if self.registry.get_handler(call.tool_name) is None:
             return error_envelope(call, "missing_handler", "native tool handler is missing")
         return self._validate_input(call, route)
@@ -355,6 +363,115 @@ class ToolExecutor:
         if result.tool_use_id != call.tool_use_id or result.tool_name != call.tool_name:
             return error_envelope(call, "invalid_result", "handler result does not match call")
         return replace(result, call_index=call.call_index)
+
+    def _enforce_permission(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> ToolResultEnvelope | None:
+        """在真实工具执行前经过权限层，必要时进入人工审批。"""
+        decision = self.permission_gate.decide(route, context)
+        self._record_permission_decision(route, context, decision)
+        if decision.behavior == "allow":
+            return None
+        if decision.behavior == "deny":
+            return self._permission_denied_envelope(route, decision, "permission_denied")
+        approved = self._request_user_approval(route, context, decision)
+        if approved:
+            self._record_audit(
+                context,
+                "permission_approved",
+                f"tool={route.tool_call.tool_name}; mode={decision.mode}; reason={decision.reason}",
+            )
+            return None
+        self._record_audit(
+            context,
+            "permission_rejected",
+            f"tool={route.tool_call.tool_name}; mode={decision.mode}; reason={decision.reason}",
+        )
+        return self._permission_denied_envelope(route, decision, "approval_rejected")
+
+    def _request_user_approval(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+        decision: PermissionDecision,
+    ) -> bool:
+        """通过上下文中的审批回调询问用户是否继续执行。"""
+        requester = context.approval_requester
+        if requester is None:
+            return False
+        try:
+            return bool(
+                requester(
+                    route.tool_call.tool_name,
+                    decision.reason,
+                    route.tool_call.tool_input,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._record_audit(
+                context,
+                "permission_prompt_failed",
+                f"tool={route.tool_call.tool_name}; error={exc}",
+            )
+            return False
+
+    def _permission_denied_envelope(
+        self,
+        route: ToolRoute,
+        decision: PermissionDecision,
+        error_kind: str,
+    ) -> ToolResultEnvelope:
+        """把权限拒绝或审批拒绝封装为统一错误结果。"""
+        call = route.tool_call
+        if error_kind == "approval_rejected":
+            content = "manual approval rejected: " + decision.reason
+        else:
+            content = "permission denied: " + decision.reason
+        result = error_envelope(call, error_kind, content)
+        modifier = {
+            "type": "permission_decision",
+            "mode": decision.mode,
+            "behavior": decision.behavior,
+            "reason": decision.reason,
+            "tool_name": call.tool_name,
+        }
+        return replace(result, context_modifiers=(modifier,))
+
+    def _record_permission_decision(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+        decision: PermissionDecision,
+    ) -> None:
+        """把权限层决定写入审计日志，便于后续追踪。"""
+        self._record_audit(
+            context,
+            "permission_decision",
+            (
+                f"tool={route.tool_call.tool_name}; "
+                f"mode={decision.mode}; "
+                f"behavior={decision.behavior}; "
+                f"reason={decision.reason}"
+            ),
+        )
+
+    def _record_audit(
+        self,
+        context: ToolUseContext,
+        event_type: str,
+        note: str,
+    ) -> None:
+        """通过上下文中提供的审计接口记录执行层事件。"""
+        logger = context.audit_logger
+        if logger is None:
+            return
+        logger.record(
+            event_type=event_type,
+            note=note,
+            task_id=context.agent_state.task_control.task_id,
+        )
 
 
 def _self_test() -> None:

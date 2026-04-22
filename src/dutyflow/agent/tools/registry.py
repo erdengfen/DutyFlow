@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
 from dutyflow.agent.tools.logic.echo_text import EchoTextTool
 from dutyflow.agent.tools.logic.fail_tool import FailTool
+from dutyflow.agent.tools.logic.sensitive_echo_text import SensitiveEchoTextTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext
@@ -24,6 +25,7 @@ ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 TOOL_REGISTRY = {
     EchoTextTool.name: EchoTextTool(),
     FailTool.name: FailTool(),
+    SensitiveEchoTextTool.name: SensitiveEchoTextTool(),
 }
 
 

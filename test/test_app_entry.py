@@ -41,6 +41,21 @@ class TestAppEntry(unittest.TestCase):
         with patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(app.run(("--no-interactive",)), 0)
 
+    def test_cli_permission_prompt_uses_enter_as_approve(self) -> None:
+        """CLI 审批提示应允许用户直接按 Enter 放行。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch("builtins.input", return_value=""):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                approved = app._prompt_cli_permission("send_message", "sensitive tool", {"text": "hello"})
+        self.assertTrue(approved)
+        self.assertIn("Permission Required", stdout.getvalue())
+
+    def test_cli_permission_prompt_allows_explicit_reject(self) -> None:
+        """CLI 审批提示输入 no 时应拒绝执行。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch("builtins.input", return_value="no"):
+            self.assertFalse(app._prompt_cli_permission("send_message", "sensitive tool", {"text": "hello"}))
+
 
 def _self_test() -> None:
     """运行本文件的单元测试。"""

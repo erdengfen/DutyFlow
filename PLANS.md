@@ -297,8 +297,8 @@ Demo 期最终必须实现以下完整链路：
 - [x] Step 2.2：实现 ToolSpec、ToolCall、ToolResultEnvelope、ToolRegistry、ToolRouter、ToolExecutor。
 - [x] Step 2.3：将工具控制层收缩到 `src/dutyflow/agent/tools/`，并完成 import 与测试更新。
 - [x] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
-- [ ] 实现 PermissionGate。
-- [ ] 接入 Step 2 的 CLI 人工审批入口。
+- [x] 实现 PermissionGate。
+- [x] 接入 Step 2 的 CLI 人工审批入口。
 - [ ] 实现最小 RecoveryManager。
 - [ ] 接入 AuditLogger。
 - [ ] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
@@ -525,7 +525,7 @@ src/dutyflow/agent/tools/
 
 ### Step 2.6: 权限闸门、CLI 审批入口与最小恢复
 
-状态：待实现。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
+状态：部分完成。当前已实现 PermissionGate、CLI 人工审批入口，以及权限决定/审批结果的最小审计接入；最小 RecoveryManager、系统化失败恢复和 Hook 预留仍待继续补齐。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
 
 #### 当前目标
 

@@ -77,6 +77,9 @@ class AgentLoop:
         registry: ToolRegistry,
         cwd: Path,
         max_turns: int = 6,
+        permission_mode: str = "default",
+        approval_requester=None,
+        audit_logger=None,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -84,6 +87,9 @@ class AgentLoop:
         self.router = ToolRouter(registry)
         self.executor = ToolExecutor(registry)
         self.cwd = cwd
+        self.permission_mode = permission_mode
+        self.approval_requester = approval_requester
+        self.audit_logger = audit_logger
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
 
@@ -135,7 +141,16 @@ class AgentLoop:
     ) -> tuple[ToolResultEnvelope, ...]:
         """通过 Router 和 Executor 执行工具调用。"""
         routes = self.router.route_many(tuple(tool_calls))
-        context = ToolUseContext(state.query_id, self.cwd, state, self.registry, tool_content=tool_content)
+        context = ToolUseContext(
+            query_id=state.query_id,
+            cwd=self.cwd,
+            agent_state=state,
+            registry=self.registry,
+            permission_mode=self.permission_mode,
+            approval_requester=self.approval_requester,
+            audit_logger=self.audit_logger,
+            tool_content=tool_content,
+        )
         return self.executor.execute_routes(routes, context)
 
 

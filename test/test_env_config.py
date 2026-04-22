@@ -28,9 +28,13 @@ class TestEnvConfig(unittest.TestCase):
         """本地 .env 中的简单 KEY=VALUE 应被读取。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            (root / ".env").write_text("DUTYFLOW_MODEL_NAME=demo\n", encoding="utf-8")
+            (root / ".env").write_text(
+                "DUTYFLOW_MODEL_NAME=demo\nDUTYFLOW_PERMISSION_MODE=plan\n",
+                encoding="utf-8",
+            )
             config = load_env_config(root)
         self.assertEqual(config.model_name, "demo")
+        self.assertEqual(config.permission_mode, "plan")
 
 
 def _self_test() -> None:

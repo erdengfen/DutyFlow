@@ -15,11 +15,12 @@ from dutyflow.agent.tools.registry import TOOL_REGISTRY, create_runtime_tool_reg
 class TestRuntimeToolRegistry(unittest.TestCase):
     """验证 agent tools 包内的运行时工具注册入口。"""
 
-    def test_runtime_registry_loads_echo_and_fail_tools(self) -> None:
-        """运行时注册表应包含迁移后的占位工具。"""
+    def test_runtime_registry_loads_builtin_demo_tools(self) -> None:
+        """运行时注册表应包含当前内置 demo 工具。"""
         registry = create_runtime_tool_registry()
         self.assertTrue(registry.has("echo_text"))
         self.assertTrue(registry.has("fail_tool"))
+        self.assertTrue(registry.has("sensitive_echo_text"))
 
     def test_tool_registry_objects_bind_contract_and_logic(self) -> None:
         """统一注册表中的工具对象应同时具备 contract 和 handle。"""
@@ -37,6 +38,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         registry = create_runtime_tool_registry()
         echo_spec = registry.get("echo_text")
         fail_spec = registry.get("fail_tool")
+        sensitive_spec = registry.get("sensitive_echo_text")
         self.assertEqual(echo_spec.max_retries, 3)
         self.assertEqual(echo_spec.retry_policy, "transient_only")
         self.assertEqual(echo_spec.idempotency, "read_only")
@@ -45,6 +47,11 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         self.assertEqual(fail_spec.retry_policy, "none")
         self.assertEqual(fail_spec.idempotency, "unsafe")
         self.assertEqual(fail_spec.degradation_mode, "escalate")
+        self.assertTrue(sensitive_spec.requires_approval)
+        self.assertEqual(sensitive_spec.max_retries, 0)
+        self.assertEqual(sensitive_spec.retry_policy, "none")
+        self.assertEqual(sensitive_spec.idempotency, "idempotent")
+        self.assertEqual(sensitive_spec.degradation_mode, "escalate")
 
 
 def _self_test() -> None:
