@@ -300,7 +300,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 实现 PermissionGate。
 - [x] 接入 Step 2 的 CLI 人工审批入口。
 - [x] 实现最小 RecoveryManager。
-- [ ] 接入 AuditLogger。
+- [x] 接入 AuditLogger。
 - [ ] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
 - [x] 为新增 `.py` 文件添加自测入口。
 - [x] 编写对应测试文件。
@@ -525,7 +525,7 @@ src/dutyflow/agent/tools/
 
 ### Step 2.6: 权限闸门、CLI 审批入口与最小恢复
 
-状态：部分完成。当前已实现 PermissionGate、CLI 人工审批入口，以及权限决定/审批结果的最小审计接入；最小 RecoveryManager 与 ToolExecutor / AgentLoop 的第一版接入已完成，`task_control` 与 `recovery` 的联动回写、当前进程内 restart 描述都已落地，Hook 预留仍待继续补齐。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
+状态：部分完成。当前已实现 PermissionGate、CLI 人工审批入口、结构化 AuditLogger 接入，以及最小 RecoveryManager；`ToolExecutor` / `AgentLoop` / `task_control` / `recovery` 的第一版闭环都已落地，Hook 预留仍待继续补齐。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
 
 #### 当前目标
 
@@ -721,6 +721,159 @@ RecoveryScope
 - [ ] 不实现进程退出后重启自动恢复。
 - [ ] 不实现 runtime 启动扫描历史恢复任务。
 - [ ] 不实现真实后台调度器或定时任务执行器。
+
+### Step 2.8: AuditLogger 结构化审计接入
+
+状态：已完成。当前已把 Step 1 的按天 Markdown 审计日志升级为结构化审计流水，覆盖 `ToolExecutor`、权限决定与审批结果、Recovery scope 创建与终态、`AgentLoop` 启停和 pending restart 描述；不在本阶段实现审计索引、复杂查询器或跨文件聚合报表。
+
+#### 当前设计结论
+
+- `AuditLogger` 的职责不是普通 debug 日志，而是记录 Agent 控制链路中的关键判断、关键动作、关键中断和关键恢复。
+- 审计记录必须同时满足：
+  - 人工可读；
+  - 代码可稳定解析；
+  - 不泄露密钥、token、secret、完整敏感输入；
+  - 写日志失败时不打崩主执行链路。
+- 审计层记录的是“发生过什么”，不替代：
+  - `task_*.md` 任务状态对象；
+  - `approval_*.md` 审批对象；
+  - `trace_*.md` 决策解释对象；
+  - `AgentState` 运行态本身。
+
+#### 事件分类
+
+- `agent_turn`
+  - `loop_started`
+  - `loop_finished`
+  - `model_recovery_registered`
+- `tool_execution`
+  - `tool_execution_started`
+  - `tool_execution_succeeded`
+  - `tool_execution_failed`
+- `permission`
+  - `permission_decision`
+  - `permission_approved`
+  - `permission_rejected`
+- `recovery`
+  - `recovery_scope_created`
+  - `recovery_scope_resolved`
+  - `recovery_scope_exhausted`
+  - `pending_restart_described`
+- `task_control`
+  - `task_control_updated`
+- `feedback`
+  - 预留，Step 2 不强制接入真实发送链路
+
+#### 结构化字段
+
+- `AuditRecord` 第一版最少字段：
+  - `record_id`
+  - `created_at`
+  - `category`
+  - `event_type`
+  - `outcome`
+  - `query_id`
+  - `task_id`
+  - `trace_id`
+  - `recovery_id`
+  - `tool_use_id`
+  - `tool_name`
+  - `permission_mode`
+  - `turn_count`
+  - `note`
+  - `payload`
+- 审计记录正文继续写入按天 Markdown 文件，但单条记录必须升级为：
+  - 稳定字段摘要；
+  - JSON `payload`；
+  - 人工可读 `note`
+
+#### 脱敏与裁剪约束
+
+- `note` 和 `payload` 都必须经过脱敏。
+- 至少遮蔽以下敏感键或字段名：
+  - `api_key`
+  - `token`
+  - `secret`
+  - `encrypt_key`
+  - `authorization`
+  - `app_secret`
+- 工具输入只允许写 preview，不记录无限长文本。
+- CLI 审批时展示给用户的输入预览和审计日志中的输入预览必须一致遵循裁剪策略。
+
+#### 接入边界
+
+- `RecoveryManager` 和 `state.py` 不直接依赖 `AuditLogger`，保持状态层和决策层纯度。
+- 审计接入点放在编排边界：
+  - `ToolExecutor`
+  - `AgentLoop`
+  - `DutyFlowApp` 的基础运行入口
+- Step 2 最小验收必须覆盖：
+  - 权限判定；
+  - 审批结果；
+  - 工具失败；
+  - recovery scope 创建与终态；
+  - loop 结束态。
+
+#### 涉及文件、类、方法、模块
+
+- `src/dutyflow/logging/audit_log.py`
+  - `AuditRecord`
+  - `AuditLogger`
+  - 结构化记录与脱敏逻辑
+- `src/dutyflow/agent/tools/context.py`
+  - `AuditLoggerLike`
+- `src/dutyflow/agent/tools/executor.py`
+  - 工具执行、权限和 recovery 审计接入
+- `src/dutyflow/agent/loop.py`
+  - loop 启停、模型恢复和 pending restart 审计接入
+- `src/dutyflow/app.py`
+  - 基础运行入口审计保持兼容
+- `test/test_audit_log.py`
+- `test/test_agent_executor.py`
+- `test/test_agent_loop.py`
+
+#### 任务清单
+
+- [x] 扩展 `AuditRecord` 为结构化字段模型。
+- [x] 升级 `AuditLogger`，支持结构化记录写入和兼容的 `record_event` 调用。
+- [x] 实现 `note` / `payload` 双层脱敏和输入 preview 裁剪。
+- [x] 在 `ToolExecutor` 中记录：
+  - 工具开始执行
+  - 工具成功 / 失败
+  - 权限决定
+  - CLI 审批结果
+  - recovery scope 创建 / resolve / exhaust
+- [x] 在 `AgentLoop` 中记录：
+  - loop_started
+  - model_recovery_registered
+  - pending_restart_described
+  - loop_finished
+- [x] 保持 `DutyFlowApp.health_check` 的基础审计兼容。
+- [x] 为修改后的 `.py` 文件补充或更新自测入口。
+- [x] 更新 `test/test_audit_log.py`、`test/test_agent_executor.py`、`test/test_agent_loop.py`。
+- [x] 执行本阶段完整链路检查。
+
+#### 当前验收记录
+
+- `PYTHONPATH=src python3 -m dutyflow.logging.audit_log`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.context`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.executor`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.cli.main`：通过。
+- `python3 -m unittest discover -s test -p 'test_audit_log.py'`：通过，3 个测试。
+- `python3 -m unittest discover -s test -p 'test_agent_executor.py'`：通过，26 个测试。
+- `python3 -m unittest discover -s test -p 'test_agent_loop.py'`：通过，9 个测试。
+- `python3 -m unittest discover -s test -p 'test_cli_chat.py'`：通过，4 个测试。
+- `python3 -m unittest discover -s test`：通过，99 个测试。
+- `python3 src/dutyflow/app.py --health`：通过。
+- `git diff --check`：通过。
+
+#### 本次不做
+
+- [ ] 不实现审计日志索引器。
+- [ ] 不实现 `/logs` 的复杂过滤查询。
+- [ ] 不实现跨文件聚合报表。
+- [ ] 不实现飞书回馈链路的完整审计闭环。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 

@@ -137,9 +137,11 @@ class ToolExecutor:
         permission = self._enforce_permission(route, context)
         if permission is not None:
             return permission
+        self._record_tool_execution_started(route, context)
         result = self._execute_with_retry(route, context)
         normalized = self._normalize_handler_result(route, result)
         self._register_tool_failure(route, context, normalized)
+        self._record_tool_execution_result(context, normalized)
         return normalized
 
     def _execute_with_retry(
@@ -406,18 +408,32 @@ class ToolExecutor:
         approved = self._request_user_approval(route, context, decision)
         if approved:
             self._resolve_recovery_scope(context, recovery_id, "resolved", "approved in CLI")
-            self._record_audit(
+            self._record_audit_event(
                 context,
-                "permission_approved",
-                f"tool={route.tool_call.tool_name}; mode={decision.mode}; reason={decision.reason}",
+                category="permission",
+                event_type="permission_approved",
+                outcome="approved",
+                note="manual approval allowed sensitive tool execution",
+                recovery_id=recovery_id,
+                tool_use_id=route.tool_call.tool_use_id,
+                tool_name=route.tool_call.tool_name,
+                permission_mode=decision.mode,
+                payload={"reason": decision.reason},
             )
             return None
         self._register_approval_rejected(route, context)
         self._resolve_recovery_scope(context, recovery_id, "exhausted", "manual approval rejected")
-        self._record_audit(
+        self._record_audit_event(
             context,
-            "permission_rejected",
-            f"tool={route.tool_call.tool_name}; mode={decision.mode}; reason={decision.reason}",
+            category="permission",
+            event_type="permission_rejected",
+            outcome="rejected",
+            note="manual approval rejected sensitive tool execution",
+            recovery_id=recovery_id,
+            tool_use_id=route.tool_call.tool_use_id,
+            tool_name=route.tool_call.tool_name,
+            permission_mode=decision.mode,
+            payload={"reason": decision.reason},
         )
         return self._permission_denied_envelope(route, decision, "approval_rejected")
 
@@ -440,10 +456,16 @@ class ToolExecutor:
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            self._record_audit(
+            self._record_audit_event(
                 context,
-                "permission_prompt_failed",
-                f"tool={route.tool_call.tool_name}; error={exc}",
+                category="permission",
+                event_type="permission_prompt_failed",
+                outcome="failed",
+                note="cli approval requester raised an exception",
+                tool_use_id=route.tool_call.tool_use_id,
+                tool_name=route.tool_call.tool_name,
+                permission_mode=decision.mode,
+                payload={"error": str(exc)},
             )
             return False
 
@@ -476,31 +498,54 @@ class ToolExecutor:
         decision: PermissionDecision,
     ) -> None:
         """把权限层决定写入审计日志，便于后续追踪。"""
-        self._record_audit(
+        outcome_map = {"allow": "success", "ask": "waiting", "deny": "denied"}
+        self._record_audit_event(
             context,
-            "permission_decision",
-            (
-                f"tool={route.tool_call.tool_name}; "
-                f"mode={decision.mode}; "
-                f"behavior={decision.behavior}; "
-                f"reason={decision.reason}"
-            ),
+            category="permission",
+            event_type="permission_decision",
+            outcome=outcome_map[decision.behavior],
+            note="permission gate produced a stable decision before tool execution",
+            tool_use_id=route.tool_call.tool_use_id,
+            tool_name=route.tool_call.tool_name,
+            permission_mode=decision.mode,
+            payload={
+                "behavior": decision.behavior,
+                "reason": decision.reason,
+                "tool_input_preview": self._tool_input_preview(context, route.tool_call.tool_input),
+            },
         )
 
-    def _record_audit(
+    def _record_audit_event(
         self,
         context: ToolUseContext,
+        *,
+        category: str,
         event_type: str,
+        outcome: str,
         note: str,
+        recovery_id: str = "",
+        tool_use_id: str = "",
+        tool_name: str = "",
+        permission_mode: str = "",
+        payload: Mapping[str, object] | None = None,
     ) -> None:
         """通过上下文中提供的审计接口记录执行层事件。"""
         logger = context.audit_logger
         if logger is None:
             return
-        logger.record(
+        logger.record_event(
+            category=category,
             event_type=event_type,
+            outcome=outcome,
             note=note,
+            query_id=context.query_id,
             task_id=context.agent_state.task_control.task_id,
+            recovery_id=recovery_id,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            permission_mode=permission_mode or context.permission_mode,
+            turn_count=context.agent_state.turn_count,
+            payload=payload or {},
         )
 
     def _register_tool_failure(
@@ -605,6 +650,7 @@ class ToolExecutor:
         decision = self.recovery_manager.decide(event)
         recovery_id = self._recovery_id(event)
         scope = self.recovery_manager.create_scope(recovery_id, event, decision)
+        previous_state = context.agent_state
         self._update_context_state(
             context,
             lambda state: record_recovery_attempt(
@@ -614,7 +660,25 @@ class ToolExecutor:
                 resume_point=decision.resume_point,
             ),
         )
-        self._update_context_state(context, lambda state: upsert_recovery_scope(state, scope))
+        updated_state = self._update_context_state(context, lambda state: upsert_recovery_scope(state, scope))
+        self._record_audit_event(
+            context,
+            category="recovery",
+            event_type="recovery_scope_created",
+            outcome="waiting" if scope.status in {"waiting", "scheduled"} else "info",
+            note="recovery scope was created from tool execution flow",
+            recovery_id=recovery_id,
+            tool_use_id=event.scope_id,
+            tool_name=event.tool_name,
+            payload={
+                "failure_kind": event.failure_kind,
+                "strategy": decision.strategy,
+                "interruption_reason": decision.interruption_reason,
+                "resume_point": decision.resume_point,
+                "next_retry_at": scope.next_retry_at,
+            },
+        )
+        self._record_task_control_update(context, previous_state, updated_state, recovery_id)
         return recovery_id
 
     def _resolve_recovery_scope(
@@ -625,16 +689,28 @@ class ToolExecutor:
         last_error: str,
     ) -> None:
         """把指定恢复 scope 标记为 resolved 或 exhausted。"""
-        self._update_context_state(
+        previous_state = context.agent_state
+        updated_state = self._update_context_state(
             context,
             lambda state: resolve_recovery_scope(state, recovery_id, status=status, last_error=last_error),
         )
+        self._record_audit_event(
+            context,
+            category="recovery",
+            event_type="recovery_scope_" + status,
+            outcome="success" if status == "resolved" else "exhausted",
+            note="recovery scope status changed inside tool executor",
+            recovery_id=recovery_id,
+            payload={"status": status, "last_error": last_error},
+        )
+        self._record_task_control_update(context, previous_state, updated_state, recovery_id)
 
-    def _update_context_state(self, context: ToolUseContext, update_fn) -> None:
+    def _update_context_state(self, context: ToolUseContext, update_fn):
         """线程安全地替换上下文中的最新 AgentState。"""
         with self._state_lock:
             updated = update_fn(context.agent_state)
             object.__setattr__(context, "agent_state", updated)
+            return updated
 
     def _recovery_id(self, event: RecoveryEvent) -> str:
         """生成当前恢复事件的稳定恢复记录 ID。"""
@@ -647,6 +723,99 @@ class ToolExecutor:
                 uuid4().hex[:8],
             )
         )
+
+    def _record_tool_execution_started(
+        self,
+        route: ToolRoute,
+        context: ToolUseContext,
+    ) -> None:
+        """记录工具已通过权限校验并进入执行。"""
+        self._record_audit_event(
+            context,
+            category="tool_execution",
+            event_type="tool_execution_started",
+            outcome="info",
+            note="tool execution started after validation and permission checks",
+            tool_use_id=route.tool_call.tool_use_id,
+            tool_name=route.tool_call.tool_name,
+            payload={
+                "tool_input_preview": self._tool_input_preview(context, route.tool_call.tool_input),
+                "retry_policy": route.tool_spec.retry_policy,
+                "max_retries": route.tool_spec.max_retries,
+            },
+        )
+
+    def _record_tool_execution_result(
+        self,
+        context: ToolUseContext,
+        result: ToolResultEnvelope,
+    ) -> None:
+        """记录工具执行后的最终 envelope。"""
+        event_type = "tool_execution_succeeded" if result.ok else "tool_execution_failed"
+        outcome = "success" if result.ok else "failed"
+        self._record_audit_event(
+            context,
+            category="tool_execution",
+            event_type=event_type,
+            outcome=outcome,
+            note="tool execution returned a normalized result envelope",
+            tool_use_id=result.tool_use_id,
+            tool_name=result.tool_name,
+            payload={
+                "attempt_count": result.attempt_count,
+                "retryable": result.retryable,
+                "retry_exhausted": result.retry_exhausted,
+                "error_kind": result.error_kind,
+                "content_preview": self._tool_content_preview(context, result.content),
+            },
+        )
+
+    def _record_task_control_update(
+        self,
+        context: ToolUseContext,
+        previous_state,
+        current_state,
+        recovery_id: str,
+    ) -> None:
+        """当 task_control 摘要发生变化时追加结构化审计。"""
+        if previous_state.task_control == current_state.task_control:
+            return
+        self._record_audit_event(
+            context,
+            category="task_control",
+            event_type="task_control_updated",
+            outcome="info",
+            note="task control summary changed after permission or recovery handling",
+            recovery_id=recovery_id,
+            payload={
+                "before": {
+                    "attempt_count": previous_state.task_control.attempt_count,
+                    "approval_status": previous_state.task_control.approval_status,
+                    "retry_status": previous_state.task_control.retry_status,
+                    "next_action": previous_state.task_control.next_action,
+                },
+                "after": {
+                    "attempt_count": current_state.task_control.attempt_count,
+                    "approval_status": current_state.task_control.approval_status,
+                    "retry_status": current_state.task_control.retry_status,
+                    "next_action": current_state.task_control.next_action,
+                },
+            },
+        )
+
+    def _tool_input_preview(self, context: ToolUseContext, tool_input: Mapping[str, object]) -> str:
+        """生成工具输入的统一预览。"""
+        logger = context.audit_logger
+        if logger is None:
+            return str(dict(tool_input))
+        return logger.preview(dict(tool_input))
+
+    def _tool_content_preview(self, context: ToolUseContext, content: str) -> str:
+        """生成工具结果内容的统一预览。"""
+        logger = context.audit_logger
+        if logger is None:
+            return str(content)
+        return logger.preview(content)
 
 
 def _self_test() -> None:

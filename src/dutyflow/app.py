@@ -22,7 +22,7 @@ from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
-from dutyflow.logging.audit_log import AuditLogger
+from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
 from dutyflow.agent.tools.registry import create_runtime_tool_registry
@@ -208,7 +208,7 @@ class DutyFlowApp:
         tool_input: Mapping[str, Any],
     ) -> bool:
         """在 CLI 中询问用户是否允许敏感工具继续执行。"""
-        preview = json.dumps(dict(tool_input), ensure_ascii=False)[:200]
+        preview = build_audit_preview(dict(tool_input), max_chars=200)
         print("\n[Permission Required]")
         print(f"tool={tool_name}")
         print(f"reason={reason}")

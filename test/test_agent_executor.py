@@ -404,6 +404,8 @@ class TestAgentExecutor(unittest.TestCase):
         )
         self.assertTrue(any(item["event_type"] == "permission_decision" for item in logger.records))
         self.assertTrue(any(item["event_type"] == "permission_rejected" for item in logger.records))
+        self.assertTrue(any(item["event_type"] == "recovery_scope_created" for item in logger.records))
+        self.assertTrue(any(item["event_type"] == "task_control_updated" for item in logger.records))
 
     def test_invalid_input_is_wrapped(self) -> None:
         """缺少必填参数应由 executor 封装为 invalid_input。"""
@@ -633,15 +635,44 @@ class _FakeAuditLogger:
 
     def __init__(self) -> None:
         """保存写入的审计记录。"""
-        self.records: list[dict[str, str]] = []
+        self.records: list[dict[str, object]] = []
 
-    def record(self, event_type: str, note: str, task_id: str = "", trace_id: str = "") -> dict[str, str]:
-        """记录一条测试审计事件。"""
+    def preview(self, value) -> str:
+        """返回测试环境下的统一预览。"""
+        return str(value)
+
+    def record_event(
+        self,
+        *,
+        category: str,
+        event_type: str,
+        outcome: str,
+        note: str,
+        query_id: str = "",
+        task_id: str = "",
+        trace_id: str = "",
+        recovery_id: str = "",
+        tool_use_id: str = "",
+        tool_name: str = "",
+        permission_mode: str = "",
+        turn_count: int = 0,
+        payload=None,
+    ) -> dict[str, object]:
+        """记录一条结构化测试审计事件。"""
         item = {
+            "category": category,
             "event_type": event_type,
+            "outcome": outcome,
+            "query_id": query_id,
             "note": note,
             "task_id": task_id,
             "trace_id": trace_id,
+            "recovery_id": recovery_id,
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "permission_mode": permission_mode,
+            "turn_count": turn_count,
+            "payload": payload or {},
         }
         self.records.append(item)
         return item

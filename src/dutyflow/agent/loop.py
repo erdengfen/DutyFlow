@@ -119,6 +119,7 @@ class AgentLoop:
     ) -> AgentLoopResult:
         """运行一轮 /chat 调试输入，直到模型停止或达到轮数限制。"""
         state = self._prepare_state(user_text, query_id, state)
+        self._record_loop_started(state, user_text)
         tool_results: list[ToolResultEnvelope] = []
         local_turns = 0
         model_transport_attempts = 0
@@ -142,19 +143,25 @@ class AgentLoop:
                     model_transport_attempts += 1
                     if model_transport_attempts > self.max_model_recovery_attempts:
                         state = self._finalize_recovery_ids(state, active_recovery_ids, "exhausted", str(exc))
+                        pending_restarts = self._pending_restart_descriptions(state)
+                        self._record_pending_restarts(state, pending_restarts)
+                        self._record_loop_finished(state, failure_kind, failure_kind, pending_restarts)
                         return _failed_result(
                             state,
                             failure_kind,
                             tool_results,
-                            self._pending_restart_descriptions(state),
+                            pending_restarts,
                         )
                     state = mark_transition(state, "transport_retry")
                     continue
+                pending_restarts = self._pending_restart_descriptions(state)
+                self._record_pending_restarts(state, pending_restarts)
+                self._record_loop_finished(state, failure_kind, failure_kind, pending_restarts)
                 return _failed_result(
                     state,
                     failure_kind,
                     tool_results,
-                    self._pending_restart_descriptions(state),
+                    pending_restarts,
                 )
             if active_recovery_ids:
                 state = self._finalize_recovery_ids(state, active_recovery_ids, "resolved", "model call recovered")
@@ -177,21 +184,17 @@ class AgentLoop:
                 continue
             tool_calls = extract_tool_calls(state)
             if not tool_calls:
-                return _finish_result(
-                    state,
-                    _final_text(response.assistant_blocks),
-                    response.stop_reason,
-                    tool_results,
-                    self._pending_restart_descriptions(state),
-                )
+                final_text = _final_text(response.assistant_blocks)
+                pending_restarts = self._pending_restart_descriptions(state)
+                self._record_pending_restarts(state, pending_restarts)
+                self._record_loop_finished(state, final_text, response.stop_reason, pending_restarts)
+                return _finish_result(state, final_text, response.stop_reason, tool_results, pending_restarts)
             local_turns += 1
             if local_turns >= self.max_turns:
-                return _failed_result(
-                    state,
-                    "max_turns_reached",
-                    tool_results,
-                    self._pending_restart_descriptions(state),
-                )
+                pending_restarts = self._pending_restart_descriptions(state)
+                self._record_pending_restarts(state, pending_restarts)
+                self._record_loop_finished(state, "max_turns_reached", "max_turns_reached", pending_restarts)
+                return _failed_result(state, "max_turns_reached", tool_results, pending_restarts)
             state, envelopes = self._execute_tool_calls(state, tool_calls, tool_content or {})
             tool_results.extend(envelopes)
             state = append_tool_results(state, tuple(item.to_agent_block() for item in envelopes))
@@ -264,6 +267,7 @@ class AgentLoop:
         recovery_id = self._new_recovery_id(event)
         scope = self.recovery_manager.create_scope(recovery_id, event, decision)
         state = upsert_recovery_scope(state, scope)
+        self._record_model_recovery(state, event, decision, recovery_id, scope.next_retry_at)
         return state, decision, recovery_id
 
     def _finalize_recovery_ids(
@@ -296,6 +300,108 @@ class AgentLoop:
     ) -> tuple[RecoveryRestartDescriptor, ...]:
         """返回当前 AgentState 中仍处于挂起中的 restart 描述。"""
         return self.recovery_manager.collect_restart_descriptions(state.recovery.recovery_scopes)
+
+    def _record_loop_started(self, state: AgentState, user_text: str) -> None:
+        """记录一轮 loop 的开始。"""
+        logger = self.audit_logger
+        if logger is None:
+            return
+        logger.record_event(
+            category="agent_turn",
+            event_type="loop_started",
+            outcome="info",
+            note="agent loop started processing a chat debug turn",
+            query_id=state.query_id,
+            task_id=state.task_control.task_id,
+            turn_count=state.turn_count,
+            payload={"user_text_preview": logger.preview(user_text)},
+        )
+
+    def _record_model_recovery(
+        self,
+        state: AgentState,
+        event: RecoveryEvent,
+        decision: RecoveryDecision,
+        recovery_id: str,
+        next_retry_at: str,
+    ) -> None:
+        """记录模型调用链路中的恢复事件。"""
+        logger = self.audit_logger
+        if logger is None:
+            return
+        logger.record_event(
+            category="recovery",
+            event_type="model_recovery_registered",
+            outcome="waiting" if decision.should_pause else "info",
+            note="agent loop registered a model-side recovery event",
+            query_id=state.query_id,
+            task_id=state.task_control.task_id,
+            recovery_id=recovery_id,
+            turn_count=state.turn_count,
+            payload={
+                "failure_kind": event.failure_kind,
+                "strategy": decision.strategy,
+                "resume_point": decision.resume_point,
+                "interruption_reason": decision.interruption_reason,
+                "next_retry_at": next_retry_at,
+            },
+        )
+
+    def _record_pending_restarts(
+        self,
+        state: AgentState,
+        pending_restarts: Sequence[RecoveryRestartDescriptor],
+    ) -> None:
+        """记录当前进程内仍可见的挂起 / restart 描述。"""
+        logger = self.audit_logger
+        if logger is None or not pending_restarts:
+            return
+        for descriptor in pending_restarts:
+            logger.record_event(
+                category="recovery",
+                event_type="pending_restart_described",
+                outcome="waiting" if not descriptor.can_restart_now else "info",
+                note="agent loop exposed a pending restart descriptor for current-process recovery",
+                query_id=state.query_id,
+                task_id=state.task_control.task_id,
+                recovery_id=descriptor.recovery_id,
+                turn_count=state.turn_count,
+                payload={
+                    "resume_token": descriptor.resume_token,
+                    "restart_action": descriptor.restart_action,
+                    "can_restart_now": descriptor.can_restart_now,
+                    "resume_point": descriptor.resume_point,
+                    "next_retry_at": descriptor.next_retry_at,
+                },
+            )
+
+    def _record_loop_finished(
+        self,
+        state: AgentState,
+        final_text: str,
+        stop_reason: str,
+        pending_restarts: Sequence[RecoveryRestartDescriptor],
+    ) -> None:
+        """记录 loop 的最终结束态。"""
+        logger = self.audit_logger
+        if logger is None:
+            return
+        outcome = "success" if stop_reason in {"stop", "tool_use"} else "failed"
+        logger.record_event(
+            category="agent_turn",
+            event_type="loop_finished",
+            outcome=outcome,
+            note="agent loop finished and returned a visible debug result",
+            query_id=state.query_id,
+            task_id=state.task_control.task_id,
+            turn_count=state.turn_count,
+            payload={
+                "stop_reason": stop_reason,
+                "final_text_preview": logger.preview(final_text),
+                "pending_restart_count": len(tuple(pending_restarts)),
+                "transition_reason": state.transition_reason,
+            },
+        )
 
 
 def extract_tool_calls(state: AgentState) -> tuple[ToolCall, ...]:

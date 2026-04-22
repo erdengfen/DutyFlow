@@ -26,8 +26,27 @@ class ApprovalRequester(Protocol):
 class AuditLoggerLike(Protocol):
     """定义执行层记录审计日志所需的最小接口。"""
 
-    def record(self, event_type: str, note: str, task_id: str = "", trace_id: str = "") -> object:
-        """写入一条审计记录。"""
+    def preview(self, value: Any) -> str:
+        """返回与审计日志一致的统一预览字符串。"""
+
+    def record_event(
+        self,
+        *,
+        category: str,
+        event_type: str,
+        outcome: str,
+        note: str,
+        query_id: str = "",
+        task_id: str = "",
+        trace_id: str = "",
+        recovery_id: str = "",
+        tool_use_id: str = "",
+        tool_name: str = "",
+        permission_mode: str = "",
+        turn_count: int = 0,
+        payload: Mapping[str, Any] | None = None,
+    ) -> object:
+        """写入一条结构化审计记录。"""
 
 
 @dataclass(frozen=True)

@@ -99,6 +99,17 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("first", user_texts)
         self.assertIn("second", user_texts)
 
+    def test_loop_writes_structured_audit_events(self) -> None:
+        """loop 应记录 started、recovery 和 finished 审计事件。"""
+        logger = _FakeAuditLogger()
+        client = _FakeModelClient((ValueError("prompt too long"),))
+        _loop(client, audit_logger=logger).run_until_stop("run")
+        event_types = {item["event_type"] for item in logger.records}
+        self.assertIn("loop_started", event_types)
+        self.assertIn("model_recovery_registered", event_types)
+        self.assertIn("pending_restart_described", event_types)
+        self.assertIn("loop_finished", event_types)
+
 
 class _FakeModelClient:
     """按顺序返回预设响应的测试模型。"""
@@ -117,9 +128,15 @@ class _FakeModelClient:
         return item
 
 
-def _loop(client: _FakeModelClient, max_turns: int = 6) -> AgentLoop:
+def _loop(client: _FakeModelClient, max_turns: int = 6, audit_logger=None) -> AgentLoop:
     """构造测试用 AgentLoop。"""
-    return AgentLoop(client, create_runtime_tool_registry(), PROJECT_ROOT, max_turns=max_turns)
+    return AgentLoop(
+        client,
+        create_runtime_tool_registry(),
+        PROJECT_ROOT,
+        max_turns=max_turns,
+        audit_logger=audit_logger,
+    )
 
 
 def _tool_response() -> ModelResponse:
@@ -145,6 +162,23 @@ def _user_texts(state) -> tuple[str, ...]:
         if message.role == "user":
             texts.extend(block.text for block in message.content if block.type == "text")
     return tuple(texts)
+
+
+class _FakeAuditLogger:
+    """为 loop 审计测试提供最小结构化日志对象。"""
+
+    def __init__(self) -> None:
+        """保存审计记录。"""
+        self.records: list[dict[str, object]] = []
+
+    def preview(self, value) -> str:
+        """返回测试预览。"""
+        return str(value)
+
+    def record_event(self, **payload) -> dict[str, object]:
+        """记录一条结构化审计事件。"""
+        self.records.append(dict(payload))
+        return dict(payload)
 
 
 def _self_test() -> None:
