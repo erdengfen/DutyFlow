@@ -279,6 +279,7 @@ Demo 期最终必须实现以下完整链路：
 - `test/test_agent_tools.py`
 - `test/test_agent_permissions.py`
 - `test/test_agent_recovery.py`
+- `test/test_agent_hooks.py`
 
 ### 未敲定问题
 
@@ -301,10 +302,10 @@ Demo 期最终必须实现以下完整链路：
 - [x] 接入 Step 2 的 CLI 人工审批入口。
 - [x] 实现最小 RecoveryManager。
 - [x] 接入 AuditLogger。
-- [ ] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
+- [x] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
 - [x] 为新增 `.py` 文件添加自测入口。
 - [x] 编写对应测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 
