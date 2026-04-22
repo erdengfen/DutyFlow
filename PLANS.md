@@ -552,6 +552,164 @@ src/dutyflow/agent/tools/
 - 审计日志至少要能记录：工具名、权限模式、权限决定、拒绝原因、审批结果、是否继续执行。
 - Hook 当前只保留接口或事件类型，不得为了引入 Hook 机制而推迟权限闭环。
 
+### Step 2.7: RecoveryManager 设计收敛
+
+状态：设计确认，待实现。范围：把 RecoveryManager 收敛为“恢复决策层”，统一处理中断原因、重试策略、挂起恢复和后台任务 restart 所需的状态描述；不把 RecoveryManager 做成后台执行器本身。
+
+#### 当前设计结论
+
+- RecoveryManager 的核心职责不是直接执行恢复动作，而是：
+  - 接收模型、工具、权限、审批链路产生的中断事件；
+  - 产出稳定的恢复决策；
+  - 把恢复状态回写到 `AgentState`；
+  - 为后续 runtime / task runner 提供可恢复的 `resume_point` 和 `resume_payload`。
+- 当前项目里“恢复”分两层：
+  - 即时恢复：在当前 loop / 当前工具执行内完成，例如工具快速重试、模型继续一轮、上下文压缩后重试。
+  - 挂起后恢复：任务进入后台等待，在满足条件后 restart，例如等待审批、等待下一次重试窗口、等待外部回调。
+- RecoveryManager 只做决策，不替代：
+  - `ToolExecutor` 的同步快速重试；
+  - `PermissionGate` 的 allow / deny / ask 判定；
+  - 后续 `AgentRuntime` / task runner 的后台调度执行。
+
+#### 中断原因字段
+
+- `failure_kind`：记录原始失败或中断来源，服务恢复策略判断。第一版建议值：
+  - `model_transport_error`
+  - `model_max_tokens`
+  - `context_overflow`
+  - `tool_timeout`
+  - `tool_transient_error`
+  - `tool_retry_exhausted`
+  - `tool_side_effect_uncertain`
+  - `permission_denied`
+  - `approval_waiting`
+  - `approval_rejected`
+  - `feedback_delivery_failed`
+  - `persistence_write_failed`
+- `interruption_reason`：记录任务为什么被挂起或等待 restart；它不是恢复原因，而是任务当前“暂停在这里”的直接原因。第一版建议值：
+  - `wait_next_retry_window`
+  - `waiting_approval`
+  - `waiting_external_callback`
+  - `waiting_schedule`
+  - `waiting_manual_review`
+  - `context_compaction_pending`
+  - `runtime_restart_pending`
+  - `user_pause`
+- `resume_point`：记录后续从哪一步恢复，第一版建议值：
+  - `before_model_call`
+  - `before_tool_execute`
+  - `after_tool_result`
+  - `after_approval`
+  - `before_feedback`
+
+#### 数据结构收敛
+
+- 当前 `AgentRecoveryState` 中的总计数字段继续保留，用于快速观察：
+  - `continuation_attempts`
+  - `compact_attempts`
+  - `transport_attempts`
+  - `tool_error_attempts`
+- 在此基础上，新增 scope 级恢复记录；第一版建议结构：
+
+```text
+RecoveryScope
+  recovery_id
+  scope_type
+  scope_id
+  status
+  failure_kind
+  interruption_reason
+  strategy
+  attempt_count
+  max_attempts
+  next_retry_at
+  resume_point
+  resume_payload
+  last_error
+  updated_at
+```
+
+- 字段语义：
+  - `scope_type`：`turn | tool_call | task`
+  - `scope_id`：当前恢复对象的稳定 ID，例如 `tool_use_id` 或 `task_id`
+  - `status`：`active | waiting | scheduled | resolved | exhausted`
+  - `strategy`：`retry_now | retry_later | wait_approval | degrade | manual_review | abort`
+  - `resume_payload`：恢复所需的可序列化上下文；禁止存 Python 回调对象
+
+#### 后台任务 restart 支持边界
+
+- 设计上支持“正常运行情况下，对定时任务或长时间挂起任务进行 restart”，但前提是：
+  - RecoveryManager 产出的恢复状态必须是可序列化的；
+  - 后续必须补 `AgentRuntime` 或 task runner，定期扫描 `waiting / scheduled` 的恢复 scope；
+  - restart 依据 `next_retry_at`、审批结果、外部回调结果等条件重新拉起执行。
+- 如果只有 RecoveryManager 而没有 runtime / task runner，这一层只能描述“以后该怎么恢复”，不能真正完成后台 restart。
+
+#### 进程退出后重启恢复支持边界
+
+- 当前代码还不支持进程退出后自动恢复任务，因为 `AgentState` 仍是纯内存运行结构。
+- 设计上允许支持“进程退出后，重启后恢复任务”，但必须满足以下前提：
+  - `AgentState` 或至少恢复相关子集需要可落盘；
+  - `RecoveryScope.resume_payload` 必须完全可序列化；
+  - 后续 runtime 启动时要扫描未完成的恢复 scope，并执行 resume。
+- 这里的恢复目标不是重放整条对话，而是按 `resume_point` 恢复当前任务链路；对于存在副作用不确定性的工具，重启后不得盲目自动重试，必须进入人工确认或手动 review。
+
+#### 关键约束
+
+- 重试信息必须同步回写 `AgentState`，不能只存在 `ToolResultEnvelope` 或日志。
+- 即时重试仍由 `ToolExecutor` 负责；跨时间窗口、跨审批、跨进程的恢复由 RecoveryManager + runtime 负责。
+- RecoveryManager 必须能服务“任务挂起到后台后再恢复”，所以恢复点描述必须稳定、可序列化、可审计。
+- RecoveryManager 不得直接持有终端输入回调、线程句柄、future 对象等不可持久化引用。
+- 本次开发先不实现依赖持久化存储的部分：不做进程退出后的自动恢复，不做 runtime 启动扫描恢复，不做真正的长期后台调度 restart。
+
+#### 涉及文件、类、方法、模块
+
+- `src/dutyflow/agent/recovery.py`
+  - `RecoveryEvent`
+  - `RecoveryDecision`
+  - `RecoveryScope`
+  - `RecoveryManager`
+- `src/dutyflow/agent/state.py`
+  - `AgentRecoveryState`
+  - 恢复 scope 的序列化 / 反序列化
+  - 恢复状态回写方法
+- `src/dutyflow/agent/loop.py`
+  - 模型中断后的恢复决策接入
+- `src/dutyflow/agent/tools/executor.py`
+  - 工具重试耗尽 / 权限等待后的恢复事件接入
+- `src/dutyflow/agent/permissions.py`
+  - `ask` 后的挂起语义对接
+- `test/test_agent_recovery.py`
+- `docs/DATA_MODEL.md`
+
+#### 任务清单
+
+- [ ] 在 `docs/DATA_MODEL.md` 明确 `AgentRecoveryState` 和 `RecoveryScope` 数据结构。
+- [ ] 实现 `RecoveryEvent`、`RecoveryDecision`、`RecoveryScope` 的第一版纯内存结构。
+- [ ] 扩展 `AgentRecoveryState`，支持总计数 + scope 级恢复记录。
+- [ ] 在 `state.py` 中实现恢复状态的序列化、反序列化和回写入口。
+- [ ] 在 `ToolExecutor` 中接入恢复事件上报，覆盖：
+  - `tool_timeout`
+  - `tool_transient_error`
+  - `tool_retry_exhausted`
+  - `approval_waiting`
+  - `approval_rejected`
+- [ ] 在 `AgentLoop` 中接入恢复决策，覆盖：
+  - `model_max_tokens`
+  - `model_transport_error`
+  - `context_overflow`
+- [ ] 将重试信息同步回写到 `AgentState.task_control` 和 `AgentState.recovery`。
+- [ ] 实现“当前进程存活期间”的挂起和 restart 描述，不实现跨进程恢复。
+- [ ] 为新增 `.py` 文件添加自测入口。
+- [ ] 编写 `test/test_agent_recovery.py`。
+- [ ] 执行本阶段完整链路检查。
+
+#### 本次不做
+
+- [ ] 不实现基于文件持久化的恢复 scope 落盘。
+- [ ] 不实现进程退出后重启自动恢复。
+- [ ] 不实现 runtime 启动扫描历史恢复任务。
+- [ ] 不实现真实后台调度器或定时任务执行器。
+
 ## Step 3: Skill 加载与权重 Skill 占位
 
 ### 最终效果

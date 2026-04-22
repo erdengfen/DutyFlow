@@ -92,6 +92,7 @@ data/
 
 -Agent State 是运行控制面，不是模型自由判断结果。
 -权重 skill、身份工具、来源工具补充的信息，都必须回到 Agent State 后再参与最终控制决策。
+-当前阶段 `Agent State` 仍以内存结构为主；本节定义的数据模型用于约束内存结构、测试序列化和后续恢复能力，不代表当前已经全部落盘。
 
 文件位置：
 
@@ -139,8 +140,13 @@ last_event_id: ""
 
 ## Recovery
 
-| scope_id | continuation_attempts | compact_attempts | transport_attempts | tool_error_attempts |
+| scope_id | continuation_attempts | compact_attempts | transport_attempts | tool_error_attempts | latest_interruption_reason | latest_resume_point |
 |---|---:|---:|---:|---:|
+
+## Recovery Scopes
+
+| recovery_id | scope_type | scope_id | status | failure_kind | interruption_reason | strategy | attempt_count | next_retry_at | resume_point |
+|---|---|---|---|---|---|---|---:|---|---|
 
 ## Notes
 
@@ -164,6 +170,104 @@ last_event_id: ""
 - 尝试轮数过多时进入审批、重试或降级。
 - 外部写入、代表用户表达立场、飞书回馈类动作必须走审批。
 - skill 判断与 Agent State 冲突时，以 Agent State 和硬规则为准。
+
+### 2.4 Recovery 字段
+
+`AgentRecoveryState` 分两层：
+
+- 聚合计数层：服务运行观察和硬规则判断。
+- scope 级恢复层：服务具体恢复对象的挂起、restart 和恢复点描述。
+
+聚合计数字段最少包括：
+
+- `continuation_attempts`
+- `compact_attempts`
+- `transport_attempts`
+- `tool_error_attempts`
+- `latest_interruption_reason`
+- `latest_resume_point`
+
+scope 级恢复记录建议结构：
+
+```yaml
+recovery_id: rec_001
+scope_type: tool_call
+scope_id: tool_123
+status: waiting
+failure_kind: tool_retry_exhausted
+interruption_reason: wait_next_retry_window
+strategy: retry_later
+attempt_count: 3
+max_attempts: 5
+next_retry_at: 2026-04-16T00:10:00+08:00
+resume_point: before_tool_execute
+resume_payload:
+  tool_name: lookup_source_context
+  tool_use_id: tool_123
+  query_id: query_001
+last_error: upstream timeout
+updated_at: 2026-04-16T00:00:00+08:00
+```
+
+字段说明：
+
+- `recovery_id`：恢复记录稳定 ID。
+- `scope_type`：`turn`、`tool_call`、`task` 之一。
+- `scope_id`：恢复对象的稳定标识，例如 `tool_use_id` 或 `task_id`。
+- `status`：`active`、`waiting`、`scheduled`、`resolved`、`exhausted` 之一。
+- `failure_kind`：原始失败或中断来源。
+- `interruption_reason`：当前任务为何挂起，等待后续 restart。
+- `strategy`：`retry_now`、`retry_later`、`wait_approval`、`degrade`、`manual_review`、`abort` 之一。
+- `attempt_count`：当前恢复 scope 已尝试次数。
+- `max_attempts`：当前恢复 scope 可尝试上限。
+- `next_retry_at`：下一次允许 restart 的时间；无调度要求时可为空。
+- `resume_point`：后续恢复时从哪一步继续。
+- `resume_payload`：恢复所需的最小可序列化上下文。
+- `last_error`：最后一次错误摘要。
+- `updated_at`：恢复状态最近更新时间。
+
+约束：
+
+- `resume_payload` 必须完全可序列化；禁止保存 Python 回调、future、线程对象或其他不可持久化引用。
+- 对存在副作用不确定性的工具，`failure_kind=tool_side_effect_uncertain` 时不得默认自动重试。
+- `interruption_reason` 用于描述任务为什么被挂起，不等同于 `failure_kind`。
+- 当前阶段即使未落盘，也必须保证这些字段可以被 `to_dict` / `from_dict` 稳定表达。
+
+### 2.5 中断原因与恢复点枚举
+
+`failure_kind` 第一版建议值：
+
+- `model_transport_error`
+- `model_max_tokens`
+- `context_overflow`
+- `tool_timeout`
+- `tool_transient_error`
+- `tool_retry_exhausted`
+- `tool_side_effect_uncertain`
+- `permission_denied`
+- `approval_waiting`
+- `approval_rejected`
+- `feedback_delivery_failed`
+- `persistence_write_failed`
+
+`interruption_reason` 第一版建议值：
+
+- `wait_next_retry_window`
+- `waiting_approval`
+- `waiting_external_callback`
+- `waiting_schedule`
+- `waiting_manual_review`
+- `context_compaction_pending`
+- `runtime_restart_pending`
+- `user_pause`
+
+`resume_point` 第一版建议值：
+
+- `before_model_call`
+- `before_tool_execute`
+- `after_tool_result`
+- `after_approval`
+- `before_feedback`
 
 ## 3. 联系人身份数据
 
