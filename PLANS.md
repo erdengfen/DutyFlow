@@ -195,7 +195,7 @@ Demo 期最终必须实现以下完整链路：
 
 ### 最终效果
 
-系统具备最小 Agent Runtime、Agent State、工具注册表、工具路由、工具执行器、权限闸门、Hook Runner、恢复管理器。模型调用和真实工具执行可以先占位，但控制链路必须成立。
+系统具备最小 Agent Runtime、Agent State、工具注册表、工具路由、工具执行器、权限闸门、最小恢复能力和审计接入。Hook 机制本阶段只保留接口或事件位，不作为 Step 2 验收阻塞项。模型调用和真实工具执行可以先占位，但控制链路必须成立。
 
 ### 当前边界
 
@@ -203,21 +203,29 @@ Demo 期最终必须实现以下完整链路：
 - `data/state/agent_control_state.md` 是本地运行状态快照文件，只用于可见性和日志型记录，不参与 agent loop 的条件判断、状态控制或上下文传递。
 - 工具层必须分清注册表层、路由层和执行层；不得把工具 handler map 直接塞进 agent loop。
 - ToolExecutor 是工具真实执行和结果回写前的最后一道运行时边界，必须严格校验 ToolCall、执行顺序、错误封装、结果顺序和上下文修改。
+- PermissionGate 是 ToolExecutor 前的运行时控制边界，基于 `ToolCall`、工具声明中的安全字段和当前 `permission_mode`，只输出 `allow`、`deny`、`ask` 三类稳定决策。
+- `permission_mode` 沿用 `docs/DATA_MODEL.md` 中已定义的 `default`、`plan`、`auto`；其中 `plan` 视为严格审查模式，避免额外引入与现有数据模型冲突的新枚举值。
 - 工具控制层文件统一收缩到 `src/dutyflow/agent/tools/` 包下，避免 `agent/` 根目录堆积 registry、router、executor 等平级文件。
 - Agent Loop 必须基于已完成的 Agent State 和 Tool Call 控制链路封装，不允许绕过 ToolRegistry、ToolRouter 或 ToolExecutor 直接执行 handler。
 - 多轮对话入口必须能使用真实模型 key 验证最小链路，但不得在代码中硬编码任何 key、base URL 或模型名。
-- Step 2 设计参考 `docs/learn-claude-code` 中 `s01-the-agent-loop.md`、`s02-tool-use.md`、`s02a-tool-control-plane.md`、`s02b-tool-execution-runtime.md`、`s00a-query-control-plane.md` 和 `data-structures.md`。
+- Step 2 中人工审批入口先使用 CLI 交互询问用户，先验证权限闸门闭环；飞书端审批消息、审批记录落盘和任务中断恢复留到后续 Step 7 / Step 10。
+- Recovery 在 Step 2 只做最小运行时恢复与留痕，不做通用自愈框架；重点覆盖权限拒绝、人工审批等待、重试耗尽后的可见状态和下一步建议。
+- Hook 机制参考实现可以保留，但当前项目不是通用 agent 平台，Step 2 不要求真实 hook 执行链路。
+- Step 2 设计参考 `docs/learn-claude-code/agents/` 中 `s01_agent_loop.py`、`s02_tool_use.py`、`s07_permission_system.py`、`s08_hook_system.py`、`s11_error_recovery.py`。
 
 ### 验收标准
 
 - Agent Runtime 能加载 Agent State。
-- Tool Call 不允许绕过 ToolRegistry、ToolRouter、PermissionGate、HookRunner、ToolExecutor。
+- Tool Call 不允许绕过 ToolRegistry、ToolRouter、PermissionGate、ToolExecutor。
 - ToolResultEnvelope 统一封装成功、失败和占位结果。
-- 权限拒绝、hook 拦截、工具错误都可记录到审计日志。
+- 权限系统能基于 `permission_mode` 对工具调用稳定返回 `allow`、`deny`、`ask` 三类决定。
+- `ask` 路径在 Step 2 先通过 CLI 审批入口完成，不直接依赖飞书。
+- 权限拒绝、人工审批结果、工具错误都可记录到审计日志。
 - Agent State 可记录任务权重、尝试轮数、审批状态、重试状态。
 - Agent State 能维护多轮 `messages`，并把工具结果作为下一轮可见输入写回消息流。
 - Agent State 能记录每轮继续原因 `transition_reason`，禁止无原因地进入下一轮。
 - Agent State 的流程状态不得写入或依赖 `data/state/agent_control_state.md`。
+- Hook 在 Step 2 仅要求保留接口或事件常量，不要求实现真实执行器。
 
 ### 涉及文件、类、方法、模块
 
@@ -261,8 +269,7 @@ Demo 期最终必须实现以下完整链路：
 - `src/dutyflow/agent/permissions.py`
   - `PermissionGate`
   - `PermissionDecision`
-- `src/dutyflow/agent/hooks.py`
-  - `HookRunner`
+- `src/dutyflow/agent/hooks.py`（预留，可暂缓）
   - `HookEvent`
   - `HookResult`
 - `src/dutyflow/agent/recovery.py`
@@ -271,14 +278,14 @@ Demo 期最终必须实现以下完整链路：
 - `test/test_agent_state.py`
 - `test/test_agent_tools.py`
 - `test/test_agent_permissions.py`
-- `test/test_agent_hooks.py`
 - `test/test_agent_recovery.py`
 
 ### 未敲定问题
 
 - `ToolUseContext` 内部字段是否全部落正式数据模型。
-- Hook 初版是否允许外部脚本；当前建议只做内置 Python hook。
 - 权限规则是否允许写回本地配置。
+- `default` 模式下“直接放行 / 人工审批 / 直接拒绝”的第一版边界仍需在工具类型更完整后继续收敛。
+- Step 2 期间 CLI 审批的默认超时、默认拒绝文案和中断后提示形式仍需细化。
 - Agent State 是否需要在 Demo 期做磁盘持久化仍未敲定；当前约束为代码内 runtime state，可通过 `to_dict`/`from_dict` 支持测试和未来恢复，但不得与 `agent_control_state.md` 混用。
 - 模型 API 的真实 response block 结构未敲定；Step 2.1 先使用项目内规范化 `AgentMessage`/`AgentContentBlock`，后续模型适配层负责转换。
 - 已决策：ToolExecutor 使用真实并发执行 concurrency-safe 批次。
@@ -291,16 +298,19 @@ Demo 期最终必须实现以下完整链路：
 - [x] Step 2.3：将工具控制层收缩到 `src/dutyflow/agent/tools/`，并完成 import 与测试更新。
 - [x] Step 2.4：实现 CLI `/chat` 多轮调试接口，返回模型结果、完整 Agent State 和 Tool Result。
 - [ ] 实现 PermissionGate。
-- [ ] 实现 HookRunner。
-- [ ] 实现 RecoveryManager。
+- [ ] 接入 Step 2 的 CLI 人工审批入口。
+- [ ] 实现最小 RecoveryManager。
 - [ ] 接入 AuditLogger。
+- [ ] 预留 Hook 事件类型或接口，真实 Hook 执行机制暂缓。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写对应测试文件。
 - [ ] 执行本阶段完整链路检查。
 
 ### 人工确认
 
-- [ ] 确认是否需要通用 shell 工具；默认不实现真实 shell 执行。
+- [x] 暂不实现通用 shell 工具；后续若文档处理等场景使用 shell 是最简方式，则将 shell 作为“内部工具”接入，并继续受权限系统约束。
+- [x] Step 2 的人工审批入口先使用 CLI 交互询问用户；飞书侧审批消息与确认链路留到后续步骤接入。
+- [x] `permission_mode` 继续沿用 `default`、`plan`、`auto`；其中 `plan` 作为严格审查模式使用。
 
 ### Step 2.1 Agent State
 
@@ -512,6 +522,35 @@ src/dutyflow/agent/tools/
 - `python -m unittest discover -s test`：通过，68 个测试。
 - `uv run src/dutyflow/app.py --health`：通过。
 - `git diff --check`：通过。
+
+### Step 2.6: 权限闸门、CLI 审批入口与最小恢复
+
+状态：待实现。范围：围绕现有 Tool Call 控制链路补上 PermissionGate、CLI 人工审批入口、审计记录接入和最小恢复留痕；不在本阶段引入真实飞书审批链路，不在本阶段实现通用 Hook 扩展机制。
+
+#### 当前目标
+
+- PermissionGate 基于模型生成的 `ToolCall`、工具声明中的安全字段、后续补充的内部/外部来源信息，以及当前 `permission_mode` 输出稳定决策。
+- 决策类型固定为：
+  - `allow`：允许继续进入 ToolExecutor。
+  - `deny`：不执行工具，不进入人工审批，记录原因并保留给后续模型/用户汇报使用。
+  - `ask`：暂停当前工具执行，进入人工审批入口。
+- `permission_mode` 第一版约定：
+  - `plan`：严格审查模式。只允许低风险、低副作用、明确安全的工具直接放行；敏感工具优先进入人工审批。
+  - `default`：标准审查模式。明确安全的工具放行，明确高风险或不满足约束的工具拒绝，介于两者之间的敏感工具进入人工审批。
+  - `auto`：自动模式。低权限工具直接放行；存在风险或不满足约束的工具不执行、不人工审批，只记录并保留给最终汇报。
+- Step 2 的人工审批入口先在 CLI 窗口内询问用户；后续再由飞书接口把审批请求直接发给用户。
+- Step 2 的 Recovery 只覆盖：
+  - 人工审批等待与结果回写；
+  - 权限拒绝后的继续汇报；
+  - 重试耗尽后的下一步建议和留痕。
+
+#### 关键约束
+
+- PermissionGate 必须在真实工具执行前完成判断，不允许“先执行再补审批”。
+- `ask` 决策只负责进入人工审批入口；审批记录落盘、任务中断记录和飞书端恢复仍以后续 Step 7 为主。
+- `auto` 模式下被拒绝的工具不能阻断本轮最终向用户汇报结果。
+- 审计日志至少要能记录：工具名、权限模式、权限决定、拒绝原因、审批结果、是否继续执行。
+- Hook 当前只保留接口或事件类型，不得为了引入 Hook 机制而推迟权限闭环。
 
 ## Step 3: Skill 加载与权重 Skill 占位
 
@@ -1033,7 +1072,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 - [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定；真实 key 提供后需要补跑完整链路。
 - [ ] 权重 skill 第一版提示词和输出格式未敲定。
 - [ ] 审批在飞书端的交互形式未敲定。
-- [ ] Demo 期是否提供通用 shell 工具未敲定；默认不提供真实通用 shell 执行。
+- [ ] Step 2 的权限模式边界、CLI 审批默认拒绝策略和最小恢复落点仍需在实现时进一步收紧。
 
 ## 阶段完成记录
 
