@@ -15,8 +15,11 @@ from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.skills import SkillRegistry  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock, create_initial_agent_state  # noqa: E402
 from dutyflow.agent.tools.context import ToolUseContext  # noqa: E402
+from dutyflow.agent.tools.executor import ToolExecutor  # noqa: E402
+from dutyflow.agent.tools.logic.create_skill import CreateSkillTool  # noqa: E402
 from dutyflow.agent.tools.logic.load_skill import LoadSkillTool  # noqa: E402
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
+from dutyflow.agent.tools.router import ToolRouter  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402
 
 
@@ -27,8 +30,11 @@ class TestSkillRegistry(unittest.TestCase):
         """项目自带的测试技能应能被实际技能目录加载。"""
         registry = SkillRegistry(PROJECT_ROOT / "skills")
         self.assertTrue(registry.has("test_skill"))
+        self.assertTrue(registry.has("skill_creator"))
         self.assertIn("test_skill", registry.system_prompt_text())
+        self.assertIn("skill_creator", registry.system_prompt_text())
         self.assertIn("Step 3 开发期验收", registry.load_full_text("test_skill"))
+        self.assertIn("create_skill", registry.load_full_text("skill_creator"))
 
     def test_registry_loads_manifest_and_body_from_skill_markdown(self) -> None:
         """注册表应解析 `skills/<name>/SKILL.md` 中的 manifest 和正文。"""
@@ -88,6 +94,68 @@ class TestLoadSkillTool(unittest.TestCase):
             result = tool.handle(_load_skill_call("missing-skill"), _tool_context(registry))
             self.assertFalse(result.ok)
             self.assertEqual(result.error_kind, "skill_not_found")
+
+
+class TestCreateSkillTool(unittest.TestCase):
+    """验证 create_skill 工具的受控写入和审批约束。"""
+
+    def test_create_skill_direct_handler_writes_skill_markdown(self) -> None:
+        """handler 在输入合法且文件不存在时应创建标准 SKILL.md。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool = CreateSkillTool()
+            call = _create_skill_call("demo_skill")
+            result = tool.handle(call, _tool_context(SkillRegistry.empty(Path(temp_dir) / "skills"), Path(temp_dir)))
+            self.assertTrue(result.ok)
+            created = Path(temp_dir) / "skills" / "demo_skill" / "SKILL.md"
+            self.assertTrue(created.exists())
+            registry = SkillRegistry(Path(temp_dir) / "skills")
+            self.assertEqual(registry.get("demo_skill").manifest.description, "Demo skill")
+
+    def test_create_skill_rejects_invalid_name(self) -> None:
+        """非法名称不能写入 skills 目录。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = CreateSkillTool().handle(
+                _create_skill_call("../bad"),
+                _tool_context(SkillRegistry.empty(Path(temp_dir) / "skills"), Path(temp_dir)),
+            )
+            self.assertFalse(result.ok)
+            self.assertEqual(result.error_kind, "invalid_skill_input")
+
+    def test_create_skill_does_not_overwrite_existing_skill(self) -> None:
+        """已存在的 skill 默认不能被覆盖。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skills_dir = Path(temp_dir) / "skills"
+            _write_skill(skills_dir, "demo_skill", "Demo skill", "# Old")
+            result = CreateSkillTool().handle(
+                _create_skill_call("demo_skill"),
+                _tool_context(SkillRegistry(skills_dir), Path(temp_dir)),
+            )
+            self.assertFalse(result.ok)
+            self.assertEqual(result.error_kind, "skill_already_exists")
+            self.assertEqual(SkillRegistry(skills_dir).load_full_text("demo_skill"), "# Old")
+
+    def test_create_skill_requires_approval_in_executor(self) -> None:
+        """通过执行层触发 create_skill 时必须先经过审批。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = create_runtime_tool_registry()
+            call = _create_skill_call("approved_skill")
+            context = _tool_context(SkillRegistry.empty(Path(temp_dir) / "skills"), Path(temp_dir), True, registry)
+            routes = ToolRouter(registry).route_many((call,))
+            result = ToolExecutor(registry).execute_routes(routes, context)[0]
+            self.assertTrue(result.ok)
+            self.assertTrue((Path(temp_dir) / "skills" / "approved_skill" / "SKILL.md").exists())
+
+    def test_create_skill_rejected_approval_does_not_write(self) -> None:
+        """审批拒绝时 create_skill 不应写入任何 skill 文件。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = create_runtime_tool_registry()
+            call = _create_skill_call("blocked_skill")
+            context = _tool_context(SkillRegistry.empty(Path(temp_dir) / "skills"), Path(temp_dir), False, registry)
+            routes = ToolRouter(registry).route_many((call,))
+            result = ToolExecutor(registry).execute_routes(routes, context)[0]
+            self.assertFalse(result.ok)
+            self.assertEqual(result.error_kind, "approval_rejected")
+            self.assertFalse((Path(temp_dir) / "skills" / "blocked_skill" / "SKILL.md").exists())
 
 
 class TestAgentLoopSkillInjection(unittest.TestCase):
@@ -172,13 +240,36 @@ def _load_skill_call(name: str) -> ToolCall:
     )
 
 
-def _tool_context(skill_registry: SkillRegistry) -> ToolUseContext:
-    """构造可供 load_skill 读取 SkillRegistry 的工具上下文。"""
+def _create_skill_call(name: str) -> ToolCall:
+    """构造测试用 create_skill 工具调用。"""
+    return ToolCall(
+        tool_use_id="tool_create_skill_001",
+        tool_name="create_skill",
+        tool_input={
+            "name": name,
+            "description": "Demo skill",
+            "body": "# Demo Skill\n\nDemo body.",
+        },
+        source_message_index=0,
+        call_index=0,
+    )
+
+
+def _tool_context(
+    skill_registry: SkillRegistry,
+    cwd: Path = PROJECT_ROOT,
+    approved: bool | None = None,
+    registry=None,
+) -> ToolUseContext:
+    """构造可供 skill 相关工具读取 SkillRegistry 的工具上下文。"""
+    tool_registry = registry or create_runtime_tool_registry()
+    requester = None if approved is None else (lambda tool_name, reason, tool_input: approved)
     return ToolUseContext(
         "query_skill_tool",
-        PROJECT_ROOT,
+        cwd,
         create_initial_agent_state("query_skill_tool", "hello"),
-        create_runtime_tool_registry(),
+        tool_registry,
+        approval_requester=requester,
         skill_registry=skill_registry,
     )
 

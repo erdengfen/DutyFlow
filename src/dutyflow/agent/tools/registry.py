@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.logic.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.echo_text import EchoTextTool
 from dutyflow.agent.tools.logic.fail_tool import FailTool
 from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 
 TOOL_REGISTRY = {
+    CreateSkillTool.name: CreateSkillTool(),
     EchoTextTool.name: EchoTextTool(),
     FailTool.name: FailTool(),
     LoadSkillTool.name: LoadSkillTool(),
@@ -114,6 +116,7 @@ def _self_test() -> None:
         registry.register(spec)
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
+        assert runtime_registry.has("create_skill")
         assert runtime_registry.has("echo_text")
         assert runtime_registry.has("load_skill")
         return

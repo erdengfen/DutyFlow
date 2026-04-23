@@ -18,6 +18,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
     def test_runtime_registry_loads_builtin_demo_tools(self) -> None:
         """运行时注册表应包含当前内置 demo 工具。"""
         registry = create_runtime_tool_registry()
+        self.assertTrue(registry.has("create_skill"))
         self.assertTrue(registry.has("echo_text"))
         self.assertTrue(registry.has("fail_tool"))
         self.assertTrue(registry.has("load_skill"))
@@ -37,10 +38,16 @@ class TestRuntimeToolRegistry(unittest.TestCase):
     def test_runtime_registry_loads_retry_policy_fields(self) -> None:
         """运行时注册表应把重试与幂等声明加载到 ToolSpec。"""
         registry = create_runtime_tool_registry()
+        create_spec = registry.get("create_skill")
         echo_spec = registry.get("echo_text")
         fail_spec = registry.get("fail_tool")
         load_spec = registry.get("load_skill")
         sensitive_spec = registry.get("sensitive_echo_text")
+        self.assertTrue(create_spec.requires_approval)
+        self.assertEqual(create_spec.max_retries, 0)
+        self.assertEqual(create_spec.retry_policy, "none")
+        self.assertEqual(create_spec.idempotency, "idempotent")
+        self.assertEqual(create_spec.degradation_mode, "escalate")
         self.assertEqual(echo_spec.max_retries, 3)
         self.assertEqual(echo_spec.retry_policy, "transient_only")
         self.assertEqual(echo_spec.idempotency, "read_only")
