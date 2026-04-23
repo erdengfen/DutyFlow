@@ -386,6 +386,7 @@ Demo 期最终必须实现以下完整链路：
 - skill 层区分轻量元信息和全量正文：
   - `SkillManifest`
   - `SkillDocument`
+- `AgentLoop` 能稳定通过 skills 解析层注册表，把全部 skills manifest 注入模型侧 system message。
 - 模型上下文默认只暴露 skill 元信息，不直接注入全量正文。
 - `load_skill` 作为内部工具接入工具控制链，可按 name 返回完整 skill 文本。
 - `load_skill` 走 `ToolRegistry`、`PermissionGate`、`HookRunner`（当前仅预留）和 `ToolExecutor`。
@@ -412,8 +413,10 @@ Demo 期最终必须实现以下完整链路：
   - `SkillRegistry`
   - `describe_available`
   - `load_full_text`
+- `src/dutyflow/agent/loop.py`
+- `src/dutyflow/agent/tools/context.py`
 - `src/dutyflow/agent/tools/registry.py`
-- `src/dutyflow/agent/tools/executor.py`
+- `src/dutyflow/app.py`
 - `src/dutyflow/agent/tools/contracts/` 下新增 `load_skill` contract
 - `src/dutyflow/agent/tools/logic/` 下新增 `load_skill` logic
 - `test/test_agent_skills.py`
@@ -435,15 +438,29 @@ Demo 期最终必须实现以下完整链路：
 
 ### 任务清单
 
-- [ ] 实现 `SkillManifest`、`SkillDocument`。
-- [ ] 实现 `SkillRegistry`，支持扫描 `skills_dir.rglob("SKILL.md")`。
-- [ ] 实现 `describe_available()`，供模型侧只读暴露元信息。
-- [ ] 实现 `load_full_text(name)`，返回完整 skill 正文。
-- [ ] 按当前内部工具目录结构新增 `load_skill` 内部工具，并接入工具控制面。
-- [ ] 记录 skill 加载审计。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写 `test/test_agent_skills.py`。
-- [ ] 执行本阶段完整链路检查。
+- [x] 实现 `SkillManifest`、`SkillDocument`。
+- [x] 实现 `SkillRegistry`，支持扫描 `skills_dir.rglob("SKILL.md")`。
+- [x] 实现 `describe_available()`，供模型侧只读暴露元信息。
+- [x] 实现 `load_full_text(name)`，返回完整 skill 正文。
+- [x] 按当前内部工具目录结构新增 `load_skill` 内部工具，并接入工具控制面。
+- [x] 通过现有 `ToolExecutor` 结构化审计，覆盖 `load_skill` 的工具执行留痕。
+- [x] 让 `AgentLoop` 在模型调用前把 skills manifest 注入 system message。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写 `test/test_agent_skills.py`。
+- [x] 执行本阶段完整链路检查。
+
+### 验收记录
+
+- `python3 -m unittest discover -s test -p 'test_agent_skills.py'`：通过，6 个测试。
+- `python3 -m unittest discover -s test -p 'test_runtime_tool_registry.py'`：通过，4 个测试。
+- `python3 -m unittest discover -s test -p 'test_agent_loop.py'`：通过，9 个测试。
+- `python3 -m unittest discover -s test`：通过，108 个测试。
+- `PYTHONPATH=src python3 -m dutyflow.agent.skills`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.contracts.load_skill_contract`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.load_skill`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
+- `python3 src/dutyflow/app.py --health`：通过。
+- `git diff --check`：通过。
 
 ## Step 4: 身份、来源、责任 Markdown 数据与查询工具
 
@@ -926,8 +943,8 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 |---|---|---|---|
 | Step 0 | completed | 2026-04-17 | 已完成项目骨架、入口迁移、uv run 入口和 Step 0 测试。 |
 | Step 1 | completed | 2026-04-17 | 已完成配置入口、Markdown 存储、按天审计日志、运行目录初始化和 Step 1 测试；真实模型与飞书链路待配置后补测。 |
-| Step 2 | pending |  |  |
-| Step 3 | pending |  |  |
+| Step 2 | completed | 2026-04-23 | 已完成最小 agent 基架控制面、权限、恢复、审计和 Hook 预留接口，并通过阶段回归。 |
+| Step 3 | completed | 2026-04-23 | 已完成 skills 解析层、`load_skill` 内部工具、system message manifest 注入和阶段测试。 |
 | Step 4 | pending |  |  |
 | Step 5 | pending |  |  |
 | Step 6 | pending |  |  |

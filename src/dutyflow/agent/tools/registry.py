@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
 from dutyflow.agent.tools.logic.echo_text import EchoTextTool
 from dutyflow.agent.tools.logic.fail_tool import FailTool
+from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
 from dutyflow.agent.tools.logic.sensitive_echo_text import SensitiveEchoTextTool
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 TOOL_REGISTRY = {
     EchoTextTool.name: EchoTextTool(),
     FailTool.name: FailTool(),
+    LoadSkillTool.name: LoadSkillTool(),
     SensitiveEchoTextTool.name: SensitiveEchoTextTool(),
 }
 
@@ -113,6 +115,7 @@ def _self_test() -> None:
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
         assert runtime_registry.has("echo_text")
+        assert runtime_registry.has("load_skill")
         return
     raise AssertionError("duplicate tool registration was not blocked")
 

@@ -20,6 +20,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         registry = create_runtime_tool_registry()
         self.assertTrue(registry.has("echo_text"))
         self.assertTrue(registry.has("fail_tool"))
+        self.assertTrue(registry.has("load_skill"))
         self.assertTrue(registry.has("sensitive_echo_text"))
 
     def test_tool_registry_objects_bind_contract_and_logic(self) -> None:
@@ -38,6 +39,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         registry = create_runtime_tool_registry()
         echo_spec = registry.get("echo_text")
         fail_spec = registry.get("fail_tool")
+        load_spec = registry.get("load_skill")
         sensitive_spec = registry.get("sensitive_echo_text")
         self.assertEqual(echo_spec.max_retries, 3)
         self.assertEqual(echo_spec.retry_policy, "transient_only")
@@ -47,6 +49,10 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         self.assertEqual(fail_spec.retry_policy, "none")
         self.assertEqual(fail_spec.idempotency, "unsafe")
         self.assertEqual(fail_spec.degradation_mode, "escalate")
+        self.assertEqual(load_spec.max_retries, 0)
+        self.assertEqual(load_spec.retry_policy, "none")
+        self.assertEqual(load_spec.idempotency, "read_only")
+        self.assertEqual(load_spec.degradation_mode, "none")
         self.assertTrue(sensitive_spec.requires_approval)
         self.assertEqual(sensitive_spec.max_retries, 0)
         self.assertEqual(sensitive_spec.retry_policy, "none")

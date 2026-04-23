@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
+from dutyflow.agent.skills import SkillRegistry
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
@@ -158,6 +159,7 @@ class DutyFlowApp:
         self._ensure_runtime_layout()
         config = load_env_config(self.project_root)
         client = OpenAICompatibleModelClient(config)
+        skill_registry = SkillRegistry(self.project_root / "skills")
         registry = create_runtime_tool_registry()
         audit_logger = self._create_audit_logger(config)
         return ChatDebugSession(
@@ -168,6 +170,7 @@ class DutyFlowApp:
                 permission_mode=config.permission_mode,
                 approval_requester=self._prompt_cli_permission,
                 audit_logger=audit_logger,
+                skill_registry=skill_registry,
             )
         )
 

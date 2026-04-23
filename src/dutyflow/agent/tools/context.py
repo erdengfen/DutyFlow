@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
+from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.state import AgentState, create_initial_agent_state
 from dutyflow.agent.tools.registry import ToolRegistry
 
@@ -65,6 +66,7 @@ class ToolUseContext:
     permission_mode: str = "default"
     approval_requester: ApprovalRequester | None = None
     audit_logger: AuditLoggerLike | None = None
+    skill_registry: SkillRegistry | None = None
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     notifications: tuple[str, ...] = ()
     tool_content: Mapping[str, Any] = field(default_factory=dict)
@@ -76,6 +78,7 @@ def _self_test() -> None:
     context = ToolUseContext("query_ctx", Path.cwd(), state, ToolRegistry())
     assert context.tool_content == {}
     assert context.permission_mode == "default"
+    assert context.skill_registry is None
 
 
 if __name__ == "__main__":

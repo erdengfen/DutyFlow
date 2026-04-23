@@ -15,8 +15,10 @@ from dutyflow.agent.recovery import (
     RecoveryManager,
     RecoveryRestartDescriptor,
 )
+from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.state import (
     AgentContentBlock,
+    AgentMessage,
     AgentState,
     append_user_message,
     append_assistant_message,
@@ -94,6 +96,7 @@ class AgentLoop:
         audit_logger=None,
         recovery_manager: RecoveryManager | None = None,
         max_model_recovery_attempts: int = 3,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -105,6 +108,7 @@ class AgentLoop:
         self.permission_mode = permission_mode
         self.approval_requester = approval_requester
         self.audit_logger = audit_logger
+        self.skill_registry = skill_registry or SkillRegistry.empty(cwd / "skills")
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
@@ -126,7 +130,10 @@ class AgentLoop:
         active_recovery_ids: list[str] = []
         while True:
             try:
-                response = self.model_client.call_model(state, self.registry.list_specs())
+                response = self.model_client.call_model(
+                    self._state_with_skill_manifest(state),
+                    self.registry.list_specs(),
+                )
             except Exception as exc:  # noqa: BLE001
                 failure_kind = self._classify_model_failure(exc)
                 state, decision, recovery_id = self._register_model_recovery(
@@ -231,10 +238,24 @@ class AgentLoop:
             permission_mode=self.permission_mode,
             approval_requester=self.approval_requester,
             audit_logger=self.audit_logger,
+            skill_registry=self.skill_registry,
             tool_content=tool_content,
         )
         envelopes = self.executor.execute_routes(routes, context)
         return context.agent_state, envelopes
+
+    def _state_with_skill_manifest(self, state: AgentState) -> AgentState:
+        """为模型调用注入当前已注册 skills 的轻量 system message。"""
+        system_message = AgentMessage(
+            role="system",
+            content=(
+                AgentContentBlock(
+                    type="text",
+                    text=self.skill_registry.system_prompt_text(),
+                ),
+            ),
+        )
+        return replace(state, messages=(system_message,) + state.messages)
 
     def _register_model_recovery(
         self,
