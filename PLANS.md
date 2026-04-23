@@ -462,6 +462,62 @@ Demo 期最终必须实现以下完整链路：
 - `python3 src/dutyflow/app.py --health`：通过。
 - `git diff --check`：通过。
 
+## Step 3.1: 第一批内部 Tools 扩展
+
+### 最终效果
+
+在现有 agent 基架、权限层和工具控制链上，新增第一批真正服务于 Demo 主链路的内部工具。当前小节只作为扩展阶段占位，后续再补具体工具名单、职责和接入顺序。
+
+### 范围边界
+
+- 仅新增内部工具，不处理外部工具生态。
+- 工具继续沿用当前目录结构：
+  - `src/dutyflow/agent/tools/contracts/`
+  - `src/dutyflow/agent/tools/logic/`
+- 工具继续手动注册到 `src/dutyflow/agent/tools/registry.py`。
+- 工具仍需服从 Step 2 已落地的权限、恢复、审计和 `/chat` 调试链路。
+
+### 预期验收方向
+
+- 新增工具可被 `ToolRegistry` 正确发现并进入模型可见工具列表。
+- 新增工具可通过 `/chat` 在当前 agent loop 下稳定触发。
+- 安全工具与敏感工具的声明字段符合现有权限规范。
+- 工具执行结果、失败留痕、审批分支和审计日志保持可见。
+
+### 后续待补内容
+
+- 待补：第一批内部工具名单。
+- 待补：每个工具的 contract / logic / 安全级别。
+- 待补：对应测试文件与阶段验收记录。
+
+## Step 3.2: 第一批 Skills 内容扩展
+
+### 最终效果
+
+在已完成的 `SkillRegistry + load_skill` 基础上，新增第一批真正参与 Demo 判断链路的 skills。当前小节只作为内容扩展阶段占位，后续再补具体 skills 名单和内容要求。
+
+### 范围边界
+
+- skill 文档继续使用固定目录结构：`skills/<skill_name>/SKILL.md`
+- frontmatter 当前最小必需字段仍是：
+  - `name`
+  - `description`
+- 具体 skill 正文由 `load_skill` 按需加载，不直接全量塞入 system prompt。
+- 本小节只处理 skills 内容扩展，不改动 `SkillRegistry` 的基础解析范式。
+
+### 预期验收方向
+
+- 新增 skills 能被 `SkillRegistry` 初始化扫描并进入 manifest 列表。
+- `AgentLoop` system message 能稳定暴露新增 skills 的元信息。
+- 模型可通过 `load_skill` 读取指定 skill 的完整正文。
+- 新增 skills 的命名、描述和正文内容与 Demo 目标一致，不偏离“身份层 + 权重层 + 审批流 + 任务可见性”。
+
+### 后续待补内容
+
+- 待补：第一批 skills 名单。
+- 待补：每个 skill 的用途、触发场景和正文要求。
+- 待补：对应测试方式与阶段验收记录。
+
 ## Step 4: 身份、来源、责任 Markdown 数据与查询工具
 
 ### 最终效果
