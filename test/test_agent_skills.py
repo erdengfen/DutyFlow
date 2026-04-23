@@ -23,6 +23,13 @@ from dutyflow.agent.tools.types import ToolCall  # noqa: E402
 class TestSkillRegistry(unittest.TestCase):
     """验证技能注册表的初始化加载与文档读取。"""
 
+    def test_project_skills_directory_loads_test_skill(self) -> None:
+        """项目自带的测试技能应能被实际技能目录加载。"""
+        registry = SkillRegistry(PROJECT_ROOT / "skills")
+        self.assertTrue(registry.has("test_skill"))
+        self.assertIn("test_skill", registry.system_prompt_text())
+        self.assertIn("Step 3 开发期验收", registry.load_full_text("test_skill"))
+
     def test_registry_loads_manifest_and_body_from_skill_markdown(self) -> None:
         """注册表应解析 `skills/<name>/SKILL.md` 中的 manifest 和正文。"""
         with tempfile.TemporaryDirectory() as temp_dir:
