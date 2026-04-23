@@ -266,6 +266,13 @@ Demo 期最终必须实现以下完整链路：
    - `degradation_mode`
    - `fallback_tool_names`
 
+当前分组约定：
+
+- 开发阶段新增工具默认标记为“内部工具”。
+- 除特殊测试工具和后续可能引入的 `bash` 工具外，其它内部工具默认可标记为安全，并由权限层直接放行。
+- 开发期内部工具继续沿用当前目录结构，逻辑写在 `src/dutyflow/agent/tools/contracts/` 和 `src/dutyflow/agent/tools/logic/` 下；后续 `skill_loader` 也遵循这套结构。
+- 内部工具继续沿用当前的显式注册方式；外部工具后续在另一层统一管理，不并入当前内部工具目录。
+
 ### 关键约束
 
 - `AgentLoop` 不允许绕过 `ToolRegistry`、`ToolRouter`、`PermissionGate`、`ToolExecutor`。
@@ -292,7 +299,7 @@ Demo 期最终必须实现以下完整链路：
 
 - [ ] 工具自动发现 / 自动装载
 - [ ] `ToolUseContext.agent_state` 的专门只读视图
-- [ ] 内部工具 / 外部工具的稳定声明字段与批次语义
+- [ ] 内部工具 / 外部工具的稳定声明字段与自动注册分层
 - [ ] 外部工具 transient error 更细分类
 - [ ] 真正的当前进程后台调度 / runtime restart 执行器
 - [ ] 进程退出后的恢复落盘与重启恢复
@@ -305,6 +312,8 @@ Demo 期最终必须实现以下完整链路：
 - [x] Step 2 的人工审批入口先使用 CLI；飞书审批留到后续步骤。
 - [x] `permission_mode` 固定为 `default / plan / auto`。
 - [x] `BASE_URL` 不在代码中自动拼接 `/chat/completions`，完全由环境控制。
+- [x] 开发阶段新增工具默认归为内部工具。
+- [x] 除特殊测试工具和后续 `bash` 工具外，内部工具默认按安全工具处理。
 
 ### 主要注意事项
 
@@ -313,6 +322,7 @@ Demo 期最终必须实现以下完整链路：
 - 结构化审计日志存放在 `data/logs/YYYY-MM-DD.md`。
 - `pending_restarts` 只表示“当前进程内可恢复描述”，不代表已经有后台调度器。
 - 当前注册表仍是手动登记；新增工具时不要假设只加文件即可自动接入。
+- 内部 / 外部工具的稳定字段还未最终落稿；当前先按“开发期默认内部工具”执行。
 
 ### 关键文件
 
@@ -364,19 +374,35 @@ Demo 期最终必须实现以下完整链路：
 - [ ] 不实现跨文件聚合报表。
 - [ ] 不实现飞书回馈链路的完整审计闭环。
 
-## Step 3: Skill 加载与权重 Skill 占位
+## Step 3: Skill Loader 与 Skill 注册层
 
 ### 最终效果
 
-系统支持 skill 轻量发现与按需加载。权重 skill 以 `skills/event_weighting/SKILL.md` 形式存在，只作为提示词补充和判断框架，不拥有最终权限决策权。
+系统先实现 skill 层的独立注册器和一个用于加载完整 skill 正文的内部工具。当前阶段只建设 skill loader，不在本 step 中创建具体业务 skills；包括权重 skill 在内的具体 `SKILL.md` 内容留到后续步骤单独添加。
 
 ### 验收标准
 
-- SkillRegistry 能发现 skill 名称和描述。
-- `load_skill` 走 ToolRegistry、PermissionGate、HookRunner 和 ToolExecutor。
-- `event_weighting` skill 可被加载并返回正文。
-- 权重 skill 结果必须回到 Agent State 和硬规则再决策。
-- skill 文档不会被执行，不会自动获得工具权限。
+- `SkillRegistry` 能从 `skills/<skill_name>/SKILL.md` 目录结构发现技能文档。
+- skill 层区分轻量元信息和全量正文：
+  - `SkillManifest`
+  - `SkillDocument`
+- 模型上下文默认只暴露 skill 元信息，不直接注入全量正文。
+- `load_skill` 作为内部工具接入工具控制链，可按 name 返回完整 skill 文本。
+- `load_skill` 走 `ToolRegistry`、`PermissionGate`、`HookRunner`（当前仅预留）和 `ToolExecutor`。
+- skill 文档不会自动执行，不会自动获得工具权限。
+
+### 设计范式
+
+- 参考 `docs/learn-claude-code`，skill 层采用独立注册表，不与工具注册表混用。
+- registry 内同时维护：
+  - `SkillManifest`
+    - `name`
+    - `description`
+  - `SkillDocument`
+    - `manifest`
+    - `body`
+- registry 负责一次性扫描并缓存全量 `SKILL.md` 内容，但对模型侧默认只暴露 manifest 列表。
+- 完整正文的注入仍通过工具逻辑完成，不在 system prompt 中直接塞全量 skills。
 
 ### 涉及文件、类、方法、模块
 
@@ -384,32 +410,40 @@ Demo 期最终必须实现以下完整链路：
   - `SkillManifest`
   - `SkillDocument`
   - `SkillRegistry`
-  - `load_skill`
-- `skills/event_weighting/SKILL.md`
+  - `describe_available`
+  - `load_full_text`
 - `src/dutyflow/agent/tools/registry.py`
 - `src/dutyflow/agent/tools/executor.py`
+- `src/dutyflow/agent/tools/contracts/` 下新增 `load_skill` contract
+- `src/dutyflow/agent/tools/logic/` 下新增 `load_skill` logic
 - `test/test_agent_skills.py`
+
+### 已确认事项
+
+- [x] Step 3 当前只做 skill loader 和 skill 注册层，不创建具体业务 skills。
+- [x] 权重 skill 在后续步骤单独添加，不作为本 step 验收前提。
+- [x] `load_skill` 依旧通过工具逻辑把完整 skill 文本注入上下文。
+- [x] `load_skill` 作为内部工具处理，按当前工具分组规则默认视为安全工具。
+- [x] skill 文档目录结构固定为 `skills/<skill_name>/SKILL.md`。
+- [x] 解析层当前只解析 frontmatter 中必需的 `name` / `description`。
+- [x] `SkillRegistry` 当前只做初始化加载，不做热重载。
 
 ### 未敲定问题
 
-- Skill frontmatter 最终字段。
-- 权重 skill 的提示词格式和输出格式。
-- `load_skill` 是否需要审批；当前建议只记录审计。
+- 后续可以出现额外 manifest 字段，但不允许成为解析层的必要字段。
+- 如在逻辑内预留额外字段解析，必须在代码旁用注释明确说明“仅为预留，不是当前必需字段”。
 
 ### 任务清单
 
-- [ ] 创建 `skills/event_weighting/SKILL.md`。
-- [ ] 实现 SkillRegistry。
-- [ ] 实现 `load_skill` 工具。
-- [ ] 将 `load_skill` 接入工具控制面。
+- [ ] 实现 `SkillManifest`、`SkillDocument`。
+- [ ] 实现 `SkillRegistry`，支持扫描 `skills_dir.rglob("SKILL.md")`。
+- [ ] 实现 `describe_available()`，供模型侧只读暴露元信息。
+- [ ] 实现 `load_full_text(name)`，返回完整 skill 正文。
+- [ ] 按当前内部工具目录结构新增 `load_skill` 内部工具，并接入工具控制面。
 - [ ] 记录 skill 加载审计。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写 `test/test_agent_skills.py`。
 - [ ] 执行本阶段完整链路检查。
-
-### 人工确认
-
-- [ ] 确认权重 skill 的第一版判断维度和用语。
 
 ## Step 4: 身份、来源、责任 Markdown 数据与查询工具
 
