@@ -108,12 +108,32 @@ class TestAgentLoopSkillInjection(unittest.TestCase):
             )
             result = loop.run_until_stop("show skills", query_id="query_skill_001")
             self.assertEqual(result.final_text, "done")
+            self.assertEqual(result.state.messages[0].role, "system")
             self.assertIsNotNone(client.last_state)
             first_message = client.last_state.messages[0]
             self.assertEqual(first_message.role, "system")
             system_text = first_message.content[0].text
             self.assertIn("Skills available:", system_text)
             self.assertIn("- task-triage: Triage incoming tasks", system_text)
+
+    def test_loop_does_not_duplicate_system_message_on_second_turn(self) -> None:
+        """持续会话进入下一轮时不应重复插入相同的 system message。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skills_dir = Path(temp_dir) / "skills"
+            _write_skill(skills_dir, "task-triage", "Triage incoming tasks", "# Triage\n\nbody")
+            registry = SkillRegistry(skills_dir)
+            client = _InspectingModelClient()
+            loop = AgentLoop(
+                client,
+                create_runtime_tool_registry(),
+                PROJECT_ROOT,
+                skill_registry=registry,
+            )
+            first = loop.run_until_stop("first", query_id="query_skill_002")
+            second = loop.run_until_stop("second", state=first.state)
+            system_roles = [message.role for message in second.state.messages if message.role == "system"]
+            self.assertEqual(len(system_roles), 1)
+            self.assertEqual(second.final_text, "done")
 
 
 class _InspectingModelClient:

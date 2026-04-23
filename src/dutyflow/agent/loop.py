@@ -130,10 +130,7 @@ class AgentLoop:
         active_recovery_ids: list[str] = []
         while True:
             try:
-                response = self.model_client.call_model(
-                    self._state_with_skill_manifest(state),
-                    self.registry.list_specs(),
-                )
+                response = self.model_client.call_model(state, self.registry.list_specs())
             except Exception as exc:  # noqa: BLE001
                 failure_kind = self._classify_model_failure(exc)
                 state, decision, recovery_id = self._register_model_recovery(
@@ -220,7 +217,8 @@ class AgentLoop:
             prepared = replace(prepared, turn_count=prepared.turn_count + 1)
             prepared = mark_transition(prepared, "user_continuation")
         # 关键开关：把本次 loop 允许追加的最大轮数写回 AgentState，供状态层统一兜底校验。
-        return replace(prepared, max_turns=prepared.turn_count + self.max_turns)
+        prepared = replace(prepared, max_turns=prepared.turn_count + self.max_turns)
+        return self._ensure_skill_manifest_message(prepared)
 
     def _execute_tool_calls(
         self,
@@ -244,17 +242,23 @@ class AgentLoop:
         envelopes = self.executor.execute_routes(routes, context)
         return context.agent_state, envelopes
 
-    def _state_with_skill_manifest(self, state: AgentState) -> AgentState:
-        """为模型调用注入当前已注册 skills 的轻量 system message。"""
+    def _ensure_skill_manifest_message(self, state: AgentState) -> AgentState:
+        """确保 AgentState 顶部始终存在当前 skills 的 system message。"""
+        text = self.skill_registry.system_prompt_text()
         system_message = AgentMessage(
             role="system",
             content=(
                 AgentContentBlock(
                     type="text",
-                    text=self.skill_registry.system_prompt_text(),
+                    text=text,
                 ),
             ),
         )
+        if state.messages and state.messages[0].role == "system":
+            first = state.messages[0]
+            if len(first.content) == 1 and first.content[0].type == "text" and first.content[0].text == text:
+                return state
+            return replace(state, messages=(system_message,) + state.messages[1:])
         return replace(state, messages=(system_message,) + state.messages)
 
     def _register_model_recovery(
