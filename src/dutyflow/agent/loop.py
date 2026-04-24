@@ -90,7 +90,7 @@ class AgentLoop:
         model_client: ModelClient,
         registry: ToolRegistry,
         cwd: Path,
-        max_turns: int = 6,
+        max_turns: int = 30,
         permission_mode: str = "default",
         approval_requester=None,
         audit_logger=None,

@@ -104,15 +104,6 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已确认删除根目录 `main.py`。
 - [x] 已确认采用 `uv run` 作为全部运行和调试入口，便于后续打包和 Docker 部署。
 
-### 验收记录
-
-- `uv run dutyflow --health`：通过。
-- `PYTHONPATH=src uv run python -m dutyflow.app --health`：通过。
-- `PYTHONPATH=src uv run python -m dutyflow.cli.main`：通过。
-- `PYTHONPATH=src uv run python test/test_app_entry.py`：通过。
-- `PYTHONPATH=src uv run python -m unittest discover -s test`：通过。
-- 说明：首次在沙箱内执行 `uv run` 时，uv 缓存目录不可写；经授权使用 uv 正常运行后通过。
-
 ## Step 1: 配置入口、Markdown 存储与日志基础
 
 ### 最终效果
@@ -179,18 +170,6 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已确认模型 API 真实 key 后续提供；本阶段先建立配置入口和缺失配置提示。
 - [x] 已确认飞书真实 API 字段未知时先网络检索；无法确定的项目接入字段标记为暂定。
 
-### 验收记录
-
-- 2026-04-17 复测：此前测试结果因 `agent_state` 与 `agent_control_state` 命名边界调整，默认作废并重新执行。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run dutyflow --health`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test`：通过，累计 10 个测试。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/config/env.py`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run python src/dutyflow/storage/file_store.py`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.storage.markdown_store`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m dutyflow.logging.audit_log`：通过。
-- 说明：本次复测使用 `/tmp/dutyflow-uv-cache` 作为 uv 缓存目录，未使用权限提升。
-- 未验证项：真实模型 API 调用和真实飞书事件订阅尚未执行，等待开发者提供真实 `.env` 配置和飞书测试环境。
-
 ## Step 2: Agent State 与 Agent 基架控制面
 
 状态：已完成。Step 2 已完成最小 agent 基架控制面，包括 `AgentState`、工具控制链路、CLI `/chat` 调试入口、权限闸门、最小恢复、结构化审计和 Hook 预留接口。当前阶段目标是“控制链成立、状态可见、审批优先、恢复可描述”，不是通用 agent 平台。
@@ -251,20 +230,9 @@ Demo 期最终必须实现以下完整链路：
 
 ### 工具接入规范
 
-新增工具当前最小流程：
+当前内部工具接入的稳定流程已迁移到 Codex skill `dutyflow-internal-tool-workflow`。
 
-1. 新增 contract 文件。
-2. 新增 logic 文件。
-3. 在 `src/dutyflow/agent/tools/registry.py` 中 import。
-4. 手动加入 `TOOL_REGISTRY`。
-5. 在 logic 声明执行字段：
-   - `is_concurrency_safe`
-   - `timeout_seconds`
-   - `max_retries`
-   - `retry_policy`
-   - `idempotency`
-   - `degradation_mode`
-   - `fallback_tool_names`
+本节只保留仍影响架构和范围判断的约束。
 
 当前分组约定：
 
@@ -344,28 +312,6 @@ Demo 期最终必须实现以下完整链路：
 - `test/test_agent_recovery.py`
 - `test/test_agent_hooks.py`
 - `test/test_audit_log.py`
-
-### 收束验收记录
-
-- `python3 -m unittest discover -s test`：通过，102 个测试。
-- `python3 src/dutyflow/app.py --health`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.state`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.recovery`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.hooks`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.logging.audit_log`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.cli.main`：通过。
-- `git diff --check`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.executor`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.cli.main`：通过。
-- `python3 -m unittest discover -s test -p 'test_audit_log.py'`：通过，3 个测试。
-- `python3 -m unittest discover -s test -p 'test_agent_executor.py'`：通过，26 个测试。
-- `python3 -m unittest discover -s test -p 'test_agent_loop.py'`：通过，9 个测试。
-- `python3 -m unittest discover -s test -p 'test_cli_chat.py'`：通过，4 个测试。
-- `python3 -m unittest discover -s test`：通过，99 个测试。
-- `python3 src/dutyflow/app.py --health`：通过。
-- `git diff --check`：通过。
 
 #### 本次不做
 
@@ -449,19 +395,6 @@ Demo 期最终必须实现以下完整链路：
 - [x] 编写 `test/test_agent_skills.py`。
 - [x] 执行本阶段完整链路检查。
 
-### 验收记录
-
-- `python3 -m unittest discover -s test -p 'test_agent_skills.py'`：通过，6 个测试。
-- `python3 -m unittest discover -s test -p 'test_runtime_tool_registry.py'`：通过，4 个测试。
-- `python3 -m unittest discover -s test -p 'test_agent_loop.py'`：通过，9 个测试。
-- `python3 -m unittest discover -s test`：通过，108 个测试。
-- `PYTHONPATH=src python3 -m dutyflow.agent.skills`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.contracts.load_skill_contract`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.load_skill`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.loop`：通过。
-- `python3 src/dutyflow/app.py --health`：通过。
-- `git diff --check`：通过。
-
 ## Step 3.1: 第一批内部 Tools 扩展
 
 ### 最终效果
@@ -474,7 +407,7 @@ Demo 期最终必须实现以下完整链路：
 - 工具继续沿用当前目录结构：
   - `src/dutyflow/agent/tools/contracts/`
   - `src/dutyflow/agent/tools/logic/`
-- 工具继续手动注册到 `src/dutyflow/agent/tools/registry.py`。
+- 工具继续手动注册到 `src/dutyflow/agent/tools/registry.py`；具体接入流程见 Codex skill `dutyflow-internal-tool-workflow`。
 - 工具仍需服从 Step 2 已落地的权限、恢复、审计和 `/chat` 调试链路。
 - skill 可以在正文中引用工具名称、工具用途、参数约束和安全注意事项，但 skill 不直接执行工具；最终仍由模型根据当前上下文生成 tool call。
 - tool 只负责确定性动作，不能把复杂判断逻辑写进工具；复杂使用策略应写在 skill 中。
@@ -556,7 +489,7 @@ Demo 期最终必须实现以下完整链路：
 ### 预期验收方向
 
 - 新增工具可被 `ToolRegistry` 正确发现并进入模型可见工具列表。
-- 新增工具可通过 `/chat` 在当前 agent loop 下稳定触发。
+- 新增工具可通过 `/chat` 在当前 agent loop 下稳定触发；具体调试与测试流程见 Codex skill `dutyflow-chat-debug-workflow`。
 - 安全工具与敏感工具的声明字段符合现有权限规范。
 - 工具执行结果、失败留痕、审批分支和审计日志保持可见。
 - `create_skill` 触发时必须能在 CLI 审批窗口中看到写入意图，按 Enter 后才允许写入。
@@ -573,18 +506,6 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已实现 `close_cli_session`。
 - [x] 已新增当前进程内的 CLI session 管理层，支持持久 bash shell、超时回收和 session 关闭。
 - [x] 已补充 CLI session tools 对应测试与阶段验收记录。
-
-### 本次验收记录补充
-
-- `python3 -m unittest discover -s test -p 'test_agent_cli_tools.py'`：通过，6 个测试。
-- `PYTHONPATH=src python3 -m dutyflow.agent.cli_session`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.open_cli_session`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.exec_cli_command`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.close_cli_session`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.registry`：通过。
-- `python3 -m unittest discover -s test`：通过，121 个测试。
-- `python3 src/dutyflow/app.py --health`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONPATH=src uv run dutyflow --health`：通过。
 
 ## Step 3.2: 第一批 Skills 内容扩展
 
@@ -635,18 +556,6 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已新增 `skills/skill_creator/SKILL.md` 正文。
 - [x] 已验证 `skill_creator` 可被 `SkillRegistry` 扫描并进入 system message manifest。
 - [x] 已补充对应测试与阶段验收记录。
-
-### 验收记录
-
-- `python3 -m unittest discover -s test -p 'test_agent_skills.py'`：通过，13 个测试。
-- `python3 -m unittest discover -s test -p 'test_runtime_tool_registry.py'`：通过，4 个测试。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.contracts.create_skill_contract`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.create_skill`：通过。
-- `PYTHONPATH=src python3 -m dutyflow.agent.tools.registry`：通过。
-- `python3 -m unittest discover -s test`：通过，115 个测试。
-- `python3 src/dutyflow/app.py --health`：通过。
-- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONPATH=src uv run dutyflow --health`：通过。
-- `git diff --check`：通过。
 
 ## Step 4: 身份、来源、责任 Markdown 数据与查询工具
 
