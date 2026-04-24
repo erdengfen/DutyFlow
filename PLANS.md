@@ -568,10 +568,23 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已接入 `ToolRegistry` 手动注册流程。
 - [x] 已验证 `create_skill` 作为敏感内部工具会进入审批链路。
 - [x] 已补充对应测试与阶段验收记录。
-- [ ] 待实现 `open_cli_session`。
-- [ ] 待实现 `exec_cli_command`。
-- [ ] 待实现 `close_cli_session`。
-- [ ] 待补充 CLI session tools 对应测试与阶段验收记录。
+- [x] 已实现 `open_cli_session`。
+- [x] 已实现 `exec_cli_command`。
+- [x] 已实现 `close_cli_session`。
+- [x] 已新增当前进程内的 CLI session 管理层，支持持久 bash shell、超时回收和 session 关闭。
+- [x] 已补充 CLI session tools 对应测试与阶段验收记录。
+
+### 本次验收记录补充
+
+- `python3 -m unittest discover -s test -p 'test_agent_cli_tools.py'`：通过，6 个测试。
+- `PYTHONPATH=src python3 -m dutyflow.agent.cli_session`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.open_cli_session`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.exec_cli_command`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.logic.close_cli_session`：通过。
+- `PYTHONPATH=src python3 -m dutyflow.agent.tools.registry`：通过。
+- `python3 -m unittest discover -s test`：通过，121 个测试。
+- `python3 src/dutyflow/app.py --health`：通过。
+- `env UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONPATH=src uv run dutyflow --health`：通过。
 
 ## Step 3.2: 第一批 Skills 内容扩展
 

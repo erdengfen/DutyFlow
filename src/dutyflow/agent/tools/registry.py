@@ -13,10 +13,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.logic.close_cli_session import CloseCliSessionTool
 from dutyflow.agent.tools.logic.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.echo_text import EchoTextTool
+from dutyflow.agent.tools.logic.exec_cli_command import ExecCliCommandTool
 from dutyflow.agent.tools.logic.fail_tool import FailTool
 from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
+from dutyflow.agent.tools.logic.open_cli_session import OpenCliSessionTool
 from dutyflow.agent.tools.logic.sensitive_echo_text import SensitiveEchoTextTool
 
 if TYPE_CHECKING:
@@ -25,10 +28,13 @@ if TYPE_CHECKING:
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 
 TOOL_REGISTRY = {
+    CloseCliSessionTool.name: CloseCliSessionTool(),
     CreateSkillTool.name: CreateSkillTool(),
     EchoTextTool.name: EchoTextTool(),
+    ExecCliCommandTool.name: ExecCliCommandTool(),
     FailTool.name: FailTool(),
     LoadSkillTool.name: LoadSkillTool(),
+    OpenCliSessionTool.name: OpenCliSessionTool(),
     SensitiveEchoTextTool.name: SensitiveEchoTextTool(),
 }
 
@@ -116,9 +122,12 @@ def _self_test() -> None:
         registry.register(spec)
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
+        assert runtime_registry.has("close_cli_session")
         assert runtime_registry.has("create_skill")
         assert runtime_registry.has("echo_text")
+        assert runtime_registry.has("exec_cli_command")
         assert runtime_registry.has("load_skill")
+        assert runtime_registry.has("open_cli_session")
         return
     raise AssertionError("duplicate tool registration was not blocked")
 
