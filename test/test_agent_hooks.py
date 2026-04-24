@@ -46,7 +46,7 @@ class TestAgentHooks(unittest.TestCase):
         runner.register("PreToolUse", allow_handler)
         runner.register("PreToolUse", inject_handler)
         runner.register("PreToolUse", late_handler)
-        result = runner.run("PreToolUse", {"tool_name": "echo_text"})
+        result = runner.run("PreToolUse", {"tool_name": "sample_tool"})
         self.assertEqual(result.exit_code, 2)
         self.assertEqual(result.message, "inject message")
         self.assertEqual(calls, ["allow", "inject"])

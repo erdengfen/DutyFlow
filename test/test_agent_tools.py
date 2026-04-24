@@ -26,7 +26,7 @@ class TestAgentTools(unittest.TestCase):
     def test_tool_call_requires_id_and_name(self) -> None:
         """工具调用必须带 tool_use_id 和 tool_name。"""
         with self.assertRaises(ValueError):
-            ToolCall("", "echo_text", {}, 0, 0)
+            ToolCall("", "sample_tool", {}, 0, 0)
         with self.assertRaises(ValueError):
             ToolCall("tool_1", "", {}, 0, 0)
 
@@ -35,16 +35,16 @@ class TestAgentTools(unittest.TestCase):
         block = AgentContentBlock(
             type="tool_use",
             tool_use_id="tool_1",
-            tool_name="echo_text",
+            tool_name="sample_tool",
             tool_input={"text": "hello"},
         )
         call = ToolCall.from_agent_block(block, 2, 3)
-        self.assertEqual(call.tool_name, "echo_text")
+        self.assertEqual(call.tool_name, "sample_tool")
         self.assertEqual(call.call_index, 3)
 
     def test_result_envelope_converts_to_agent_block(self) -> None:
         """ToolResultEnvelope 应能转换为 tool_result 内容块。"""
-        result = ToolResultEnvelope("tool_1", "echo_text", True, "hello")
+        result = ToolResultEnvelope("tool_1", "sample_tool", True, "hello")
         block = result.to_agent_block()
         self.assertEqual(block.type, "tool_result")
         self.assertEqual(block.tool_use_id, "tool_1")
@@ -55,13 +55,13 @@ class TestAgentTools(unittest.TestCase):
         contract = {
             "type": "function",
             "function": {
-                "name": "echo_text",
-                "description": "Echo text.",
+                "name": "sample_tool",
+                "description": "Sample tool.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
         }
         spec = ToolSpec.from_contract(contract, is_concurrency_safe=True)
-        self.assertEqual(spec.name, "echo_text")
+        self.assertEqual(spec.name, "sample_tool")
         self.assertTrue(spec.is_concurrency_safe)
         self.assertEqual(spec.timeout_seconds, 30.0)
         self.assertEqual(spec.max_retries, 3)
@@ -69,7 +69,7 @@ class TestAgentTools(unittest.TestCase):
         self.assertEqual(spec.idempotency, "read_only")
         self.assertEqual(spec.degradation_mode, "none")
         self.assertEqual(spec.fallback_tool_names, ())
-        self.assertEqual(spec.to_contract()["function"]["description"], "Echo text.")
+        self.assertEqual(spec.to_contract()["function"]["description"], "Sample tool.")
 
 
 def _self_test() -> None:

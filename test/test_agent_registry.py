@@ -21,8 +21,8 @@ class TestAgentRegistry(unittest.TestCase):
         registry = ToolRegistry()
         spec = _echo_spec()
         registry.register(spec, _echo_handler)
-        self.assertEqual(registry.get("echo_text").name, "echo_text")
-        self.assertIsNotNone(registry.get_handler("echo_text"))
+        self.assertEqual(registry.get("sample_tool").name, "sample_tool")
+        self.assertIsNotNone(registry.get_handler("sample_tool"))
 
     def test_duplicate_tool_name_is_rejected(self) -> None:
         """重复注册同名工具必须失败。"""
@@ -40,16 +40,16 @@ class TestAgentRegistry(unittest.TestCase):
         """缺失必填 input 字段必须失败。"""
         registry = ToolRegistry()
         registry.register(_echo_spec(), _echo_handler)
-        call = ToolCall("tool_1", "echo_text", {}, 0, 0)
+        call = ToolCall("tool_1", "sample_tool", {}, 0, 0)
         with self.assertRaises(ValueError):
             registry.validate_tool_input(call)
 
 
 def _echo_spec() -> ToolSpec:
-    """构造 echo_text 测试工具定义。"""
+    """构造 sample_tool 测试工具定义。"""
     return ToolSpec(
-        name="echo_text",
-        description="Echo text.",
+        name="sample_tool",
+        description="Sample tool.",
         input_schema={"required": ["text"]},
         is_concurrency_safe=True,
     )

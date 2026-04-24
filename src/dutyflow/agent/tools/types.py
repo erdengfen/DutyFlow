@@ -234,20 +234,20 @@ def _validate_tool_contract(contract: Mapping[str, Any]) -> None:
 
 def _self_test() -> None:
     """验证工具调用可转换为 tool_result 内容块。"""
-    call = ToolCall("tool_1", "echo_text", {"text": "ok"}, 0, 0)
+    call = ToolCall("tool_1", "sample_tool", {"text": "ok"}, 0, 0)
     result = ToolResultEnvelope(call.tool_use_id, call.tool_name, True, "ok")
     assert result.to_agent_block().tool_use_id == "tool_1"
     spec = ToolSpec.from_contract(
         {
             "type": "function",
             "function": {
-                "name": "echo_text",
-                "description": "Echo text.",
+                "name": "sample_tool",
+                "description": "Sample tool.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
         }
     )
-    assert spec.to_contract()["function"]["name"] == "echo_text"
+    assert spec.to_contract()["function"]["name"] == "sample_tool"
 
 
 if __name__ == "__main__":

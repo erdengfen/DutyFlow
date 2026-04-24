@@ -42,7 +42,7 @@ class TestAuditLog(unittest.TestCase):
                 note="token should be hidden",
                 query_id="query_001",
                 task_id="task_001",
-                tool_name="sensitive_echo_text",
+                tool_name="approval_tool",
                 tool_use_id="tool_001",
                 permission_mode="default",
                 payload={"token": "secret-value", "text": "hello"},

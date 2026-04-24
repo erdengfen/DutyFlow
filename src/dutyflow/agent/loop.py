@@ -529,9 +529,9 @@ def _continuation_message() -> str:
 def _self_test() -> None:
     """验证 extract_tool_calls 能读取最后一条 assistant 消息。"""
     state = create_initial_agent_state("query_loop", "hello")
-    block = AgentContentBlock(type="tool_use", tool_use_id="tool_1", tool_name="echo_text")
+    block = AgentContentBlock(type="tool_use", tool_use_id="tool_1", tool_name="sample_tool")
     state = append_assistant_message(state, (block,))
-    assert extract_tool_calls(state)[0].tool_name == "echo_text"
+    assert extract_tool_calls(state)[0].tool_name == "sample_tool"
 
 
 if __name__ == "__main__":

@@ -60,9 +60,12 @@ Demo 完整闭环目标如下：
   - 每轮输出模型结果、完整 Agent State、Tool Result
   - 支持 `/back` 返回主 CLI
   - 支持 `/exit` 退出程序
-- 调试工具：
-  - `echo_text`
-  - `fail_tool`
+- 当前内置内部工具：
+  - `load_skill`
+  - `create_skill`
+  - `open_cli_session`
+  - `exec_cli_command`
+  - `close_cli_session`
 
 当前 `/chat` 是开发调试接口，不是最终面向用户的产品入口。它用于验证模型调用、Agent State、多轮上下文、工具调用和工具结果回写是否正确。
 

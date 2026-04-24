@@ -32,7 +32,7 @@ class TestModelClient(unittest.TestCase):
         response = parse_model_response(payload)
         block = response.assistant_blocks[0]
         self.assertEqual(block.type, "tool_use")
-        self.assertEqual(block.tool_name, "echo_text")
+        self.assertEqual(block.tool_name, "sample_tool")
         self.assertEqual(block.tool_input["text"], "hello")
 
     def test_missing_model_config_fails_clearly(self) -> None:
@@ -51,7 +51,7 @@ def _tool_call() -> dict:
     return {
         "id": "tool_1",
         "type": "function",
-        "function": {"name": "echo_text", "arguments": "{\"text\": \"hello\"}"},
+        "function": {"name": "sample_tool", "arguments": "{\"text\": \"hello\"}"},
     }
 
 

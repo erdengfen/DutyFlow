@@ -12,7 +12,8 @@ if str(SRC_ROOT) not in sys.path:
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
-from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
+from dutyflow.agent.tools import ToolResultEnvelope, ToolSpec  # noqa: E402
+from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry  # noqa: E402
 
 
 class TestAgentLoop(unittest.TestCase):
@@ -21,7 +22,7 @@ class TestAgentLoop(unittest.TestCase):
     def test_tool_call_continues_to_second_model_turn(self) -> None:
         """第一轮 tool_use、第二轮 text 时应完整回写工具结果。"""
         client = _FakeModelClient((_tool_response(), _text_response("done")))
-        result = _loop(client).run_until_stop("run", query_id="query_001")
+        result = _loop(client, registry=_tool_test_registry()).run_until_stop("run", query_id="query_001")
         self.assertEqual(result.final_text, "done")
         self.assertEqual(result.tool_result_count, 1)
         self.assertEqual(result.tool_results[0].content, "hello")
@@ -71,14 +72,14 @@ class TestAgentLoop(unittest.TestCase):
     def test_max_turns_stops_continuous_tool_calls(self) -> None:
         """连续 tool_use 超出 max_turns 时应返回失败结果。"""
         client = _FakeModelClient((_tool_response(), _tool_response()))
-        result = _loop(client, max_turns=2).run_until_stop("run")
+        result = _loop(client, registry=_tool_test_registry(), max_turns=2).run_until_stop("run")
         self.assertEqual(result.stop_reason, "max_turns_reached")
         self.assertEqual(result.state.transition_reason, "failed")
 
     def test_debug_text_contains_state_and_tool_results(self) -> None:
         """调试输出必须包含完整 state 和 tool result。"""
         client = _FakeModelClient((_tool_response(), _text_response("done")))
-        text = _loop(client).run_until_stop("run").to_debug_text()
+        text = _loop(client, registry=_tool_test_registry()).run_until_stop("run").to_debug_text()
         self.assertIn('"agent_state"', text)
         self.assertIn('"tool_results"', text)
         self.assertIn('"pending_restarts"', text)
@@ -128,11 +129,11 @@ class _FakeModelClient:
         return item
 
 
-def _loop(client: _FakeModelClient, max_turns: int = 6, audit_logger=None) -> AgentLoop:
+def _loop(client: _FakeModelClient, registry=None, max_turns: int = 6, audit_logger=None) -> AgentLoop:
     """构造测试用 AgentLoop。"""
     return AgentLoop(
         client,
-        create_runtime_tool_registry(),
+        registry or create_runtime_tool_registry(),
         PROJECT_ROOT,
         max_turns=max_turns,
         audit_logger=audit_logger,
@@ -140,14 +141,29 @@ def _loop(client: _FakeModelClient, max_turns: int = 6, audit_logger=None) -> Ag
 
 
 def _tool_response() -> ModelResponse:
-    """构造包含 echo_text 工具调用的模型响应。"""
+    """构造包含 sample_tool 工具调用的模型响应。"""
     block = AgentContentBlock(
         type="tool_use",
         tool_use_id="tool_1",
-        tool_name="echo_text",
+        tool_name="sample_tool",
         tool_input={"text": "hello"},
     )
     return ModelResponse((block,), "tool_use")
+
+
+def _tool_test_registry() -> ToolRegistry:
+    """构造仅供 loop 测试使用的最小工具注册表。"""
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec("sample_tool", "Return text.", {"required": ["text"]}, is_concurrency_safe=True),
+        _sample_handler,
+    )
+    return registry
+
+
+def _sample_handler(tool_call, tool_use_context) -> ToolResultEnvelope:
+    """返回测试工具的输入文本。"""
+    return ToolResultEnvelope(tool_call.tool_use_id, tool_call.tool_name, True, str(tool_call.tool_input["text"]))
 
 
 def _text_response(text: str, stop_reason: str = "stop") -> ModelResponse:

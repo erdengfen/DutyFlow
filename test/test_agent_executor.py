@@ -28,10 +28,10 @@ from dutyflow.agent.tools.router import ToolRoute, ToolRouter  # noqa: E402
 class TestAgentExecutor(unittest.TestCase):
     """验证工具执行层的运行时约束。"""
 
-    def test_echo_text_uses_shared_tool_content(self) -> None:
+    def test_sample_tool_uses_shared_tool_content(self) -> None:
         """handler 应通过 ToolUseContext 读取显式共享 tool_content。"""
         registry = _registry()
-        call = ToolCall("tool_1", "echo_text", {"text": "hello"}, 0, 0)
+        call = ToolCall("tool_1", "sample_tool", {"text": "hello"}, 0, 0)
         result = _execute(registry, (call,), {"prefix": "ctx:"})[0]
         self.assertTrue(result.ok)
         self.assertEqual(result.content, "ctx:hello")
@@ -39,7 +39,7 @@ class TestAgentExecutor(unittest.TestCase):
     def test_handler_exception_is_wrapped(self) -> None:
         """handler 异常必须封装为 error envelope。"""
         registry = _registry()
-        call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
+        call = ToolCall("tool_1", "failure_tool", {}, 0, 0)
         result = _execute(
             registry,
             (call,),
@@ -220,7 +220,7 @@ class TestAgentExecutor(unittest.TestCase):
                 max_retries=1,
                 retry_policy="transient_only",
                 degradation_mode="fallback",
-                fallback_tool_names=("echo_text",),
+                fallback_tool_names=("sample_tool",),
             ),
             transient_handler,
         )
@@ -232,7 +232,7 @@ class TestAgentExecutor(unittest.TestCase):
         self.assertTrue(
             any(
                 item.get("strategy") == "fallback_tool"
-                and item.get("fallback_tool_names") == ("echo_text",)
+                and item.get("fallback_tool_names") == ("sample_tool",)
                 for item in result.context_modifiers
             )
         )
@@ -240,7 +240,7 @@ class TestAgentExecutor(unittest.TestCase):
     def test_unsafe_failure_adds_manual_review_hint(self) -> None:
         """非幂等副作用工具失败时应附加人工确认升级建议。"""
         registry = _registry()
-        call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
+        call = ToolCall("tool_1", "failure_tool", {}, 0, 0)
         result = _execute(
             registry,
             (call,),
@@ -261,7 +261,7 @@ class TestAgentExecutor(unittest.TestCase):
                 "task_control": AgentTaskControl(weight_level="high"),
             }
         )
-        call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
+        call = ToolCall("tool_1", "failure_tool", {}, 0, 0)
         executor = _TestExecutor(registry, max_workers=4)
         routes = ToolRouter(registry).route_many((call,))
         result = executor.execute_routes(
@@ -286,7 +286,7 @@ class TestAgentExecutor(unittest.TestCase):
                 "task_control": AgentTaskControl(attempt_count=3),
             }
         )
-        call = ToolCall("tool_1", "fail_tool", {}, 0, 0)
+        call = ToolCall("tool_1", "failure_tool", {}, 0, 0)
         executor = _TestExecutor(registry, max_workers=4)
         routes = ToolRouter(registry).route_many((call,))
         result = executor.execute_routes(
@@ -410,7 +410,7 @@ class TestAgentExecutor(unittest.TestCase):
     def test_invalid_input_is_wrapped(self) -> None:
         """缺少必填参数应由 executor 封装为 invalid_input。"""
         registry = _registry()
-        call = ToolCall("tool_1", "echo_text", {}, 0, 0)
+        call = ToolCall("tool_1", "sample_tool", {}, 0, 0)
         result = _execute(registry, (call,))[0]
         self.assertFalse(result.ok)
         self.assertEqual(result.error_kind, "invalid_input")
@@ -418,7 +418,7 @@ class TestAgentExecutor(unittest.TestCase):
     def test_route_mismatch_is_wrapped(self) -> None:
         """route/spec/call 不一致必须在执行前被拦截。"""
         registry = _registry()
-        call = ToolCall("tool_1", "echo_text", {"text": "x"}, 0, 0)
+        call = ToolCall("tool_1", "sample_tool", {"text": "x"}, 0, 0)
         bad_route = ToolRoute(call, ToolSpec("other", "bad"), "native", True, "concurrent", True)
         context = _context(registry)
         result = ToolExecutor(registry).execute_routes((bad_route,), context)[0]
@@ -428,10 +428,10 @@ class TestAgentExecutor(unittest.TestCase):
         """执行层应按并发安全性分批。"""
         registry = _registry()
         calls = (
-            ToolCall("tool_1", "echo_text", {"text": "a"}, 0, 0),
-            ToolCall("tool_2", "echo_text", {"text": "b"}, 0, 1),
+            ToolCall("tool_1", "sample_tool", {"text": "a"}, 0, 0),
+            ToolCall("tool_2", "sample_tool", {"text": "b"}, 0, 1),
             ToolCall("tool_3", "exclusive_echo", {"text": "c"}, 0, 2),
-            ToolCall("tool_4", "echo_text", {"text": "d"}, 0, 3),
+            ToolCall("tool_4", "sample_tool", {"text": "d"}, 0, 3),
         )
         routes = ToolRouter(registry).route_many(calls)
         batches = ToolExecutor(registry).partition_routes(routes)
@@ -454,8 +454,8 @@ class TestAgentExecutor(unittest.TestCase):
         """结果必须按 call_index 稳定排序，而不是完成顺序。"""
         registry = _registry()
         calls = (
-            ToolCall("tool_2", "echo_text", {"text": "b"}, 0, 2),
-            ToolCall("tool_1", "echo_text", {"text": "a"}, 0, 1),
+            ToolCall("tool_2", "sample_tool", {"text": "b"}, 0, 2),
+            ToolCall("tool_1", "sample_tool", {"text": "a"}, 0, 1),
         )
         results = _execute(registry, calls)
         self.assertEqual([result.call_index for result in results], [1, 2])
@@ -465,7 +465,7 @@ class TestAgentExecutor(unittest.TestCase):
         registry = _registry()
         state = create_initial_agent_state("query_001", "run")
         context = _context(registry, state)
-        call = ToolCall("tool_1", "echo_text", {"text": "hello"}, 0, 0)
+        call = ToolCall("tool_1", "sample_tool", {"text": "hello"}, 0, 0)
         route = ToolRouter(registry).route(call)
         ToolExecutor(registry).execute_routes((route,), context)
         self.assertEqual(state.turn_count, 1)
@@ -478,7 +478,7 @@ class TestAgentExecutor(unittest.TestCase):
         block = AgentContentBlock(
             type="tool_use",
             tool_use_id="tool_1",
-            tool_name="echo_text",
+            tool_name="sample_tool",
             tool_input={"text": "hello"},
         )
         state = append_assistant_message(state, (block,))
@@ -492,12 +492,12 @@ class TestAgentExecutor(unittest.TestCase):
 def _registry(barrier: threading.Barrier | None = None) -> ToolRegistry:
     """构造带假工具的测试注册表。"""
     registry = ToolRegistry()
-    registry.register(_spec("echo_text", True), _echo_handler)
+    registry.register(_spec("sample_tool", True), _echo_handler)
     registry.register(_spec("exclusive_echo", False), _echo_handler)
     registry.register(
         ToolSpec(
-            "fail_tool",
-            "Fail tool.",
+            "failure_tool",
+            "Failure tool.",
             max_retries=0,
             retry_policy="none",
             idempotency="unsafe",

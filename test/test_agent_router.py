@@ -21,7 +21,7 @@ class TestAgentRouter(unittest.TestCase):
         """native 工具应被路由为可执行路线。"""
         registry = ToolRegistry()
         registry.register(_echo_spec(), _echo_handler)
-        route = ToolRouter(registry).route(ToolCall("tool_1", "echo_text", {"text": "x"}, 0, 0))
+        route = ToolRouter(registry).route(ToolCall("tool_1", "sample_tool", {"text": "x"}, 0, 0))
         self.assertTrue(route.is_executable)
         self.assertEqual(route.source, "native")
         self.assertEqual(route.execution_mode, "concurrent")
@@ -43,8 +43,8 @@ class TestAgentRouter(unittest.TestCase):
 
 
 def _echo_spec() -> ToolSpec:
-    """构造 echo_text 测试工具定义。"""
-    return ToolSpec("echo_text", "Echo text.", {"required": ["text"]}, is_concurrency_safe=True)
+    """构造 sample_tool 测试工具定义。"""
+    return ToolSpec("sample_tool", "Sample tool.", {"required": ["text"]}, is_concurrency_safe=True)
 
 
 def _echo_handler(tool_call, tool_use_context) -> ToolResultEnvelope:
