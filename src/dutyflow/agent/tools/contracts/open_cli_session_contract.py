@@ -4,7 +4,7 @@ OPEN_CLI_SESSION_TOOL_CONTRACT = {
     "type": "function",
     "function": {
         "name": "open_cli_session",
-        "description": "在 Linux / WSL 下创建危险的持久 bash shell 会话，必须经过人工审批。",
+        "description": "在 Linux / WSL 下创建持久 bash shell 会话。",
         "parameters": {
             "type": "object",
             "properties": {

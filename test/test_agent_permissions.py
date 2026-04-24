@@ -40,6 +40,21 @@ class TestAgentPermissions(unittest.TestCase):
         decision = PermissionGate().decide(_route(), _context("default"))
         self.assertEqual(decision.behavior, "allow")
 
+    def test_default_mode_asks_for_dangerous_cli_command(self) -> None:
+        """default 模式下危险 CLI 命令应升级为审批。"""
+        decision = PermissionGate().decide(_exec_route("git commit -m demo"), _context("default"))
+        self.assertEqual(decision.behavior, "ask")
+
+    def test_auto_mode_denies_dangerous_cli_command(self) -> None:
+        """auto 模式下危险 CLI 命令应直接拒绝。"""
+        decision = PermissionGate().decide(_exec_route("rm -rf data"), _context("auto"))
+        self.assertEqual(decision.behavior, "deny")
+
+    def test_read_only_cli_command_is_allowed(self) -> None:
+        """只读 CLI 命令在 default 模式下应直接放行。"""
+        decision = PermissionGate().decide(_exec_route("git status"), _context("default"))
+        self.assertEqual(decision.behavior, "allow")
+
     def test_unknown_mode_is_rejected(self) -> None:
         """未知权限模式必须报错，避免静默回退。"""
         with self.assertRaises(ValueError):
@@ -74,6 +89,30 @@ def _route(
         source="native",
         is_concurrency_safe=True,
         execution_mode="concurrent",
+        is_executable=True,
+    )
+
+
+def _exec_route(command: str) -> ToolRoute:
+    """构造测试用 exec_cli_command 路线。"""
+    return ToolRoute(
+        tool_call=ToolCall(
+            "tool_2",
+            "exec_cli_command",
+            {"session_id": "sess_1", "command": command, "timeout": 1.0},
+            0,
+            0,
+        ),
+        tool_spec=ToolSpec(
+            name="exec_cli_command",
+            description="exec",
+            input_schema={"required": ["session_id", "command", "timeout"]},
+            requires_approval=False,
+            idempotency="read_only",
+        ),
+        source="native",
+        is_concurrency_safe=False,
+        execution_mode="serial",
         is_executable=True,
     )
 

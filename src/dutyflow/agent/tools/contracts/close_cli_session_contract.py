@@ -4,7 +4,7 @@ CLOSE_CLI_SESSION_TOOL_CONTRACT = {
     "type": "function",
     "function": {
         "name": "close_cli_session",
-        "description": "关闭危险的持久 bash shell 会话并清理资源，必须经过人工审批。",
+        "description": "关闭持久 bash shell 会话并清理资源。",
         "parameters": {
             "type": "object",
             "properties": {

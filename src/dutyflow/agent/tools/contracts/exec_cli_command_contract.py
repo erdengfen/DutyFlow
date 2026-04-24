@@ -4,7 +4,7 @@ EXEC_CLI_COMMAND_TOOL_CONTRACT = {
     "type": "function",
     "function": {
         "name": "exec_cli_command",
-        "description": "在已打开的危险 bash session 中执行一条命令，必须经过人工审批。",
+        "description": "在已打开的 bash session 中执行一条命令；权限层会按命令内容判断是否需要审批。",
         "parameters": {
             "type": "object",
             "properties": {

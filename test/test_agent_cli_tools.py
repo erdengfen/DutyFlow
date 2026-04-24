@@ -34,10 +34,10 @@ class TestAgentCliTools(unittest.TestCase):
         get_cli_session_manager().close_all_sessions()
 
     def test_open_exec_close_round_trip(self) -> None:
-        """审批通过后应能打开、执行并关闭一个 bash session。"""
+        """只读命令应能打开、执行并关闭一个 bash session。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = create_runtime_tool_registry()
-            context = _context(registry, Path(temp_dir), approved=True)
+            context = _context(registry, Path(temp_dir), approved=False)
             opened = _execute(registry, _open_call(), context)
             self.assertTrue(opened.ok)
             session_id = _json_content(opened)["session_id"]
@@ -55,7 +55,7 @@ class TestAgentCliTools(unittest.TestCase):
             cwd = Path(temp_dir)
             (cwd / "nested").mkdir()
             registry = create_runtime_tool_registry()
-            context = _context(registry, cwd, approved=True)
+            context = _context(registry, cwd, approved=False)
             session_id = _json_content(_execute(registry, _open_call(), context))["session_id"]
             first = _execute(registry, _exec_call(session_id, "cd nested"), context)
             second = _execute(registry, _exec_call(session_id, "pwd"), context)
@@ -66,7 +66,7 @@ class TestAgentCliTools(unittest.TestCase):
         """同一 session 内 export 的环境变量应能在下一条命令中读取。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = create_runtime_tool_registry()
-            context = _context(registry, Path(temp_dir), approved=True)
+            context = _context(registry, Path(temp_dir), approved=False)
             session_id = _json_content(_execute(registry, _open_call(), context))["session_id"]
             _execute(registry, _exec_call(session_id, "export DUTYFLOW_SESSION_VAR=hello"), context)
             result = _execute(registry, _exec_call(session_id, 'printf "$DUTYFLOW_SESSION_VAR"'), context)
@@ -76,7 +76,7 @@ class TestAgentCliTools(unittest.TestCase):
         """命令输出应分别返回 stdout 和 stderr。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = create_runtime_tool_registry()
-            context = _context(registry, Path(temp_dir), approved=True)
+            context = _context(registry, Path(temp_dir), approved=False)
             session_id = _json_content(_execute(registry, _open_call(), context))["session_id"]
             result = _execute(registry, _exec_call(session_id, "printf out; printf err >&2"), context)
             payload = _json_content(result)
@@ -84,12 +84,13 @@ class TestAgentCliTools(unittest.TestCase):
             self.assertEqual(payload["stderr"], "err")
             self.assertFalse(payload["timed_out"])
 
-    def test_cli_tools_require_manual_approval(self) -> None:
-        """审批拒绝时危险 CLI 工具不应创建 session。"""
+    def test_dangerous_cli_command_requires_manual_approval(self) -> None:
+        """审批拒绝时危险 CLI 命令不应执行。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = create_runtime_tool_registry()
             context = _context(registry, Path(temp_dir), approved=False)
-            result = _execute(registry, _open_call(), context)
+            session_id = _json_content(_execute(registry, _open_call(), context))["session_id"]
+            result = _execute(registry, _exec_call(session_id, "git commit -m demo"), context)
             self.assertFalse(result.ok)
             self.assertEqual(result.error_kind, "approval_rejected")
 
@@ -97,7 +98,7 @@ class TestAgentCliTools(unittest.TestCase):
         """命令超时后应返回结构化超时结果，并关闭原 session。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = create_runtime_tool_registry()
-            context = _context(registry, Path(temp_dir), approved=True)
+            context = _context(registry, Path(temp_dir), approved=False)
             session_id = _json_content(_execute(registry, _open_call(), context))["session_id"]
             timed_out = _execute(registry, _exec_call(session_id, "sleep 0.2", timeout=0.05), context)
             self.assertFalse(timed_out.ok)

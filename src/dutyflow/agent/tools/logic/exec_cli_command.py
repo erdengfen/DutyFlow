@@ -10,16 +10,16 @@ from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envel
 
 
 class ExecCliCommandTool:
-    """在持久 bash 会话中执行一条危险命令的内部工具。"""
+    """在持久 bash 会话中执行一条命令的内部工具。"""
 
     name = "exec_cli_command"
     contract = EXEC_CLI_COMMAND_TOOL_CONTRACT
     is_concurrency_safe = False
-    requires_approval = True
+    requires_approval = False
     timeout_seconds = 30.0
     max_retries = 0
     retry_policy = "none"
-    idempotency = "unsafe"
+    idempotency = "read_only"
     degradation_mode = "escalate"
     fallback_tool_names = ()
 

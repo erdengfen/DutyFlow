@@ -10,17 +10,17 @@ from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envel
 
 
 class OpenCliSessionTool:
-    """创建危险 bash 会话的内部工具。"""
+    """创建持久 bash 会话的内部工具。"""
 
     name = "open_cli_session"
     contract = OPEN_CLI_SESSION_TOOL_CONTRACT
     is_concurrency_safe = False
-    requires_approval = True
+    requires_approval = False
     timeout_seconds = 30.0
     max_retries = 0
     retry_policy = "none"
-    idempotency = "unsafe"
-    degradation_mode = "escalate"
+    idempotency = "read_only"
+    degradation_mode = "none"
     fallback_tool_names = ()
 
     def handle(self, tool_call: ToolCall, tool_use_context) -> ToolResultEnvelope:
