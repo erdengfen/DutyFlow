@@ -29,8 +29,11 @@ class TestSkillRegistry(unittest.TestCase):
     def test_project_skills_directory_loads_current_project_skill(self) -> None:
         """项目自带业务技能应能被实际技能目录加载。"""
         registry = SkillRegistry(PROJECT_ROOT / "skills")
+        self.assertTrue(registry.has("cli_session_operator"))
         self.assertTrue(registry.has("skill_creator"))
+        self.assertIn("cli_session_operator", registry.system_prompt_text())
         self.assertIn("skill_creator", registry.system_prompt_text())
+        self.assertIn("exec_cli_command", registry.load_full_text("cli_session_operator"))
         self.assertIn("create_skill", registry.load_full_text("skill_creator"))
 
     def test_registry_loads_manifest_and_body_from_skill_markdown(self) -> None:
