@@ -2,6 +2,7 @@ docs/learn-claude-code
 docs/learn-claude-code/*
 
 .codex
+codex_skills/
 .env
 src/dutyflow.egg-info
 src/dutyflow.egg-info/*
