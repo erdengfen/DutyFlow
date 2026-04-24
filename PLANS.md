@@ -490,6 +490,68 @@ Demo 期最终必须实现以下完整链路：
   - 幂等约束：默认不覆盖已存在 skill；如后续需要覆盖，必须单独声明参数并再次审批。
   - 输入建议：`name`、`description`、`body`。
   - 输出建议：返回创建路径、manifest 摘要和是否成功。
+- `open_cli_session`
+  - 作用：创建新的持久 shell 会话。
+  - 当前批次范围：
+    - Linux
+    - WSL
+  - 其它系统适配延后到后续步骤。
+  - 安全级别：危险内部工具，必须人工审批。
+  - 建议输入：
+    - `cwd`
+    - `timeout`
+  - 当前批次的 shell 固定为 `bash`；`shell_type` 可以预留，但不作为当前必填字段。
+  - 建议输出：
+    - `session_id`
+    - `shell_type`
+    - `platform`
+    - `cwd`
+- `exec_cli_command`
+  - 作用：在指定 `session_id` 中执行一条命令。
+  - 安全级别：危险内部工具，必须人工审批。
+  - 建议输入：
+    - `session_id`
+    - `command`
+    - `timeout`
+  - 说明：
+    - 当前批次不建议把 `cwd` 作为本工具必填入参；目录上下文应主要由 session 持续维护。
+    - 若后续保留 `cwd` 覆盖能力，必须明确“会先切换目录，再执行命令，并更新 session 当前目录”。
+  - 建议输出：
+    - `exit_code`
+    - `stdout`
+    - `stderr`
+    - `cwd_after`
+    - `duration_ms`
+    - `timed_out`
+    - `truncated`
+- `close_cli_session`
+  - 作用：关闭 shell 会话并清理资源。
+  - 安全级别：危险内部工具，必须人工审批。
+  - 建议输入：
+    - `session_id`
+  - 建议输出：
+    - `session_id`
+    - `closed`
+    - `cwd_after`
+
+### CLI 工具关键约束
+
+- 当前批次 CLI 工具只支持 Linux / WSL。
+- 风险等级和审批要求不作为模型可控入参，而由运行时根据“CLI 工具 + 命令内容”自动判定。
+- 会改变文件系统、Git 状态、系统环境、网络状态或长时间占用资源的命令，默认按危险命令处理。
+- 当前批次只允许 bash 会话；不做 PowerShell、cmd、macOS shell 兼容。
+- 当前批次不支持后台常驻进程管理、交互式全屏程序或复杂 TUI。
+- 当前只允许“一次 tool call 执行一条命令”。
+- 为保留 shell 上下文，命令运行在持久 shell session 中，而不是每次新开进程。
+- 命令执行必须有统一 timeout。
+- 输出必须支持截断，避免污染上下文。
+- session 需要有统一资源回收策略，避免僵尸 shell 和遗留子进程。
+
+### 当前已确认的实现注意点
+
+- 持久 shell session 可以通过长期存在的 `subprocess.Popen(...)` 进程维护，不要求当前批次一定上 PTY。
+- 如果后续实现选择 PTY，`stdout / stderr` 很难天然稳定分离；若要求二者分离返回，则必须补充命令包装和 marker 方案，不能假设 PTY 自然满足该能力。
+- skill 层后续只负责约束 CLI 工具的调用顺序、命令边界和审批提醒，不负责实际执行命令。
 
 ### 预期验收方向
 
@@ -498,6 +560,7 @@ Demo 期最终必须实现以下完整链路：
 - 安全工具与敏感工具的声明字段符合现有权限规范。
 - 工具执行结果、失败留痕、审批分支和审计日志保持可见。
 - `create_skill` 触发时必须能在 CLI 审批窗口中看到写入意图，按 Enter 后才允许写入。
+- CLI session tools 触发时必须能在 CLI 审批窗口中看到会话创建、命令执行或会话关闭意图，并且 session 状态可追踪。
 
 ### 后续待补内容
 
@@ -505,6 +568,10 @@ Demo 期最终必须实现以下完整链路：
 - [x] 已接入 `ToolRegistry` 手动注册流程。
 - [x] 已验证 `create_skill` 作为敏感内部工具会进入审批链路。
 - [x] 已补充对应测试与阶段验收记录。
+- [ ] 待实现 `open_cli_session`。
+- [ ] 待实现 `exec_cli_command`。
+- [ ] 待实现 `close_cli_session`。
+- [ ] 待补充 CLI session tools 对应测试与阶段验收记录。
 
 ## Step 3.2: 第一批 Skills 内容扩展
 
