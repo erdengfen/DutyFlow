@@ -18,11 +18,15 @@ class TestRuntimeToolRegistry(unittest.TestCase):
     def test_runtime_registry_loads_current_internal_tools(self) -> None:
         """运行时注册表应包含当前项目内置内部工具。"""
         registry = create_runtime_tool_registry()
+        self.assertTrue(registry.has("add_contact_knowledge"))
         self.assertTrue(registry.has("close_cli_session"))
         self.assertTrue(registry.has("create_skill"))
         self.assertTrue(registry.has("exec_cli_command"))
+        self.assertTrue(registry.has("get_contact_knowledge_detail"))
         self.assertTrue(registry.has("load_skill"))
         self.assertTrue(registry.has("open_cli_session"))
+        self.assertTrue(registry.has("search_contact_knowledge_headers"))
+        self.assertTrue(registry.has("update_contact_knowledge"))
 
     def test_tool_registry_objects_bind_contract_and_logic(self) -> None:
         """统一注册表中的工具对象应同时具备 contract 和 handle。"""
@@ -38,16 +42,24 @@ class TestRuntimeToolRegistry(unittest.TestCase):
     def test_runtime_registry_loads_retry_policy_fields(self) -> None:
         """运行时注册表应把重试与幂等声明加载到 ToolSpec。"""
         registry = create_runtime_tool_registry()
+        add_spec = registry.get("add_contact_knowledge")
         close_spec = registry.get("close_cli_session")
         create_spec = registry.get("create_skill")
         exec_spec = registry.get("exec_cli_command")
+        detail_spec = registry.get("get_contact_knowledge_detail")
         load_spec = registry.get("load_skill")
         open_spec = registry.get("open_cli_session")
+        search_spec = registry.get("search_contact_knowledge_headers")
+        update_spec = registry.get("update_contact_knowledge")
+        self.assertTrue(add_spec.requires_approval)
+        self.assertEqual(add_spec.idempotency, "unsafe")
         self.assertTrue(create_spec.requires_approval)
         self.assertEqual(create_spec.max_retries, 0)
         self.assertEqual(create_spec.retry_policy, "none")
         self.assertEqual(create_spec.idempotency, "idempotent")
         self.assertEqual(create_spec.degradation_mode, "escalate")
+        self.assertFalse(detail_spec.requires_approval)
+        self.assertEqual(detail_spec.idempotency, "read_only")
         self.assertEqual(load_spec.max_retries, 0)
         self.assertEqual(load_spec.retry_policy, "none")
         self.assertEqual(load_spec.idempotency, "read_only")
@@ -58,6 +70,10 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         self.assertEqual(exec_spec.idempotency, "read_only")
         self.assertFalse(close_spec.requires_approval)
         self.assertEqual(close_spec.idempotency, "read_only")
+        self.assertFalse(search_spec.requires_approval)
+        self.assertEqual(search_spec.idempotency, "read_only")
+        self.assertTrue(update_spec.requires_approval)
+        self.assertEqual(update_spec.idempotency, "unsafe")
 
 
 def _self_test() -> None:

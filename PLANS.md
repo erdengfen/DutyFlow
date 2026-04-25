@@ -753,13 +753,13 @@ Demo 期最终必须实现以下完整链路：
 - [ ] 实现 SourceContextResolver。
 - [ ] 实现三类 lookup 工具。
 - [ ] 创建联系人知识补充记录 fixture。
-- [ ] 实现结构化 Markdown 内部解析层，至少覆盖 frontmatter 解析、候选定位、section 抽取和稳定返回组装。
-- [ ] 为联系人知识记录补充两段式工具：
+- [x] 实现结构化 Markdown 内部解析层，至少覆盖 frontmatter 解析、候选定位、section 抽取和稳定返回组装。
+- [x] 为联系人知识记录补充两段式工具：
   - `search_contact_knowledge_headers`
   - `get_contact_knowledge_detail`
   - `add_contact_knowledge`
   - `update_contact_knowledge`
-- [ ] 让联系人知识工具与 `DATA_MODEL` 当前结构保持一致；如未新增索引文件，首版按固定目录扫描 frontmatter。
+- [x] 让联系人知识工具与 `DATA_MODEL` 当前结构保持一致；如未新增索引文件，首版按固定目录扫描 frontmatter。
 - [ ] 接入工具控制面。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写对应测试文件。

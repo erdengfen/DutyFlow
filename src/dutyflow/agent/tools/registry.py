@@ -13,11 +13,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.logic.add_contact_knowledge import AddContactKnowledgeTool
 from dutyflow.agent.tools.logic.close_cli_session import CloseCliSessionTool
 from dutyflow.agent.tools.logic.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.exec_cli_command import ExecCliCommandTool
+from dutyflow.agent.tools.logic.get_contact_knowledge_detail import GetContactKnowledgeDetailTool
 from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
 from dutyflow.agent.tools.logic.open_cli_session import OpenCliSessionTool
+from dutyflow.agent.tools.logic.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool
+from dutyflow.agent.tools.logic.update_contact_knowledge import UpdateContactKnowledgeTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext
@@ -25,11 +29,15 @@ if TYPE_CHECKING:
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 
 TOOL_REGISTRY = {
+    AddContactKnowledgeTool.name: AddContactKnowledgeTool(),
     CloseCliSessionTool.name: CloseCliSessionTool(),
     CreateSkillTool.name: CreateSkillTool(),
     ExecCliCommandTool.name: ExecCliCommandTool(),
+    GetContactKnowledgeDetailTool.name: GetContactKnowledgeDetailTool(),
     LoadSkillTool.name: LoadSkillTool(),
     OpenCliSessionTool.name: OpenCliSessionTool(),
+    SearchContactKnowledgeHeadersTool.name: SearchContactKnowledgeHeadersTool(),
+    UpdateContactKnowledgeTool.name: UpdateContactKnowledgeTool(),
 }
 
 
@@ -116,11 +124,15 @@ def _self_test() -> None:
         registry.register(spec)
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
+        assert runtime_registry.has("add_contact_knowledge")
         assert runtime_registry.has("close_cli_session")
         assert runtime_registry.has("create_skill")
         assert runtime_registry.has("exec_cli_command")
+        assert runtime_registry.has("get_contact_knowledge_detail")
         assert runtime_registry.has("load_skill")
         assert runtime_registry.has("open_cli_session")
+        assert runtime_registry.has("search_contact_knowledge_headers")
+        assert runtime_registry.has("update_contact_knowledge")
         return
     raise AssertionError("duplicate tool registration was not blocked")
 
