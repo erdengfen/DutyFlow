@@ -45,6 +45,8 @@ Demo 完整闭环目标如下：
 - 本地 Markdown 存储与基础审计日志
 - `data/state/agent_control_state.md` 运行状态快照初始化
 - 纯内存 `AgentState`，支持多轮消息、工具结果回写、序列化
+- `PermissionGate + ToolExecutor + Recovery + Audit` 的最小控制闭环
+- `/chat` 多轮调试子会话，支持多行输入聚合、持续复用同一 `AgentState`
 - 工具控制层：
   - `ToolSpec`
   - `ToolCall`
@@ -55,17 +57,36 @@ Demo 完整闭环目标如下：
   - `ToolUseContext`
 - 工具执行层支持串行与真实并发批次，并封装工具异常
 - OpenAI-compatible 模型调用适配
-- CLI `/chat` 多轮调试子会话：
-  - 持续复用同一个 Agent State
-  - 每轮输出模型结果、完整 Agent State、Tool Result
-  - 支持 `/back` 返回主 CLI
-  - 支持 `/exit` 退出程序
+- Skill 注册与按需加载：
+  - `SkillRegistry`
+  - `load_skill`
+  - `skill_creator`
+  - `cli_session_operator`
 - 当前内置内部工具：
   - `load_skill`
   - `create_skill`
   - `open_cli_session`
   - `exec_cli_command`
   - `close_cli_session`
+  - `lookup_contact_identity`
+  - `lookup_source_context`
+  - `lookup_responsibility_context`
+  - `search_contact_knowledge_headers`
+  - `get_contact_knowledge_detail`
+  - `add_contact_knowledge`
+  - `update_contact_knowledge`
+- Step 4 身份 / 来源 / 责任查询链：
+  - `data/identity/contacts/index.md`
+  - `data/identity/contacts/people/contact_<id>.md`
+  - `data/identity/sources/index.md`
+  - 联系人补充知识 `data/knowledge/contacts/contact_<id>/ckn_<id>.md`
+- 结构化 Markdown 内部解析层：
+  - `SchemaRegistry`
+  - `FrontmatterParser`
+  - `RecordLocator`
+  - `SectionExtractor`
+  - `SnippetBuilder`
+  - `StructuredRecordUpdater`
 
 当前 `/chat` 是开发调试接口，不是最终面向用户的产品入口。它用于验证模型调用、Agent State、多轮上下文、工具调用和工具结果回写是否正确。
 
@@ -75,14 +96,15 @@ Demo 完整闭环目标如下：
 
 - 飞书事件接收
 - 飞书消息、文件、审批回馈
-- 联系人身份索引与单人详情查询工具
-- 事项权重 skill
-- 权限核实与审批恢复链路
+- 事件权重判断与硬规则决策层
+- 飞书端审批与审批后恢复原任务链路
 - 用户可查看的任务清单
 - 上下文压缩与摘要落盘
 - 完整任务审计报告
+- 更完整的长期记忆与知识库工具
+- Step 5 之后的真实事件入口、任务沉淀、飞书反馈闭环
 
-这些能力会在后续 step 中逐步实现。当前代码中已先完成 Agent State 和 Tool Call 控制面，为后续权限层、审批层和飞书接入提供基础。
+这些能力会在后续 step 中逐步实现。当前代码已经完成控制面、权限层、身份/来源/责任查询层和联系人知识查询层，但离完整 Demo 闭环还差事件入口、决策层、任务层和飞书反馈层。
 
 ## 目录结构
 
@@ -150,8 +172,8 @@ DUTYFLOW_MODEL_NAME=your-model-name
 
 模型接口当前按 OpenAI-compatible `/chat/completions` 适配：
 
-- 如果 `DUTYFLOW_MODEL_BASE_URL` 已以 `/chat/completions` 结尾，直接使用。
-- 否则程序会自动追加 `/chat/completions`。
+- `DUTYFLOW_MODEL_BASE_URL` 必须直接填写完整端点。
+- 程序不会自动追加 `/chat/completions`。
 
 飞书配置字段已在 `.env.example` 中预留，真实接入时再按飞书开放平台配置确认。
 
