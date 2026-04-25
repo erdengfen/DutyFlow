@@ -36,11 +36,14 @@ updated_at: <ISO-8601>
 约束：
 
 - frontmatter 使用简单 YAML 子集，便于无额外依赖解析。
+- 当前运行期 `MarkdownStore` 只支持字符串值；frontmatter 中不得使用 YAML 列表、嵌套对象或多行值。
+- 多值字段在 v1 结构中统一使用英文逗号分隔字符串，或放入正文表格中，不使用 YAML 数组。
 - `schema` 必须存在，用于区分记录类型和版本。
 - `id` 必须稳定，不随显示名称变化。
 - `updated_at` 使用 ISO-8601 字符串。
 - 文件正文用于人工阅读和上下文片段抽取。
 - 工具优先读取 frontmatter 和指定标题段落，不允许默认读取整份文件。
+- 需要支持 `search / add / update` 的记录，必须具备稳定的 frontmatter 字段、稳定标题和稳定表格列，不能依赖自由文本整篇搜索。
 
 ### 1.2 ID 命名
 
@@ -76,6 +79,8 @@ Demo 期数据文件主要位于：
 ```text
 data/
   identity/
+  knowledge/
+  memory/
   state/
   events/
   contexts/
@@ -87,6 +92,41 @@ data/
 ```
 
 源码不得把记录散落写入未约束目录。
+
+开发期默认工作区：
+
+- 仓库根目录下的 `data/`、`skills/` 直接作为运行期结构化文件目录。
+
+后续安装式工作区预留：
+
+```text
+<workspace_root>/
+  data/
+    identity/
+    state/
+    events/
+    contexts/
+    approvals/
+    tasks/
+    reports/
+    logs/
+    plans/
+  skills/
+  tools/
+  knowledge/
+    contacts/
+    sources/
+  memory/
+    index.md
+    entries/
+```
+
+约束：
+
+- 当前 Demo 期仍以仓库内 `data/` 为默认根路径。
+- 后续如迁移到 `workspace_root`，业务层应通过统一配置切换，不允许把仓库相对路径硬编码进工具逻辑。
+- 外部工具、skills、知识库、长期记忆与运行数据在未来都应落到统一 workspace 内，避免仓库源码目录和用户运行数据混写。
+- workspace 化与沙箱边界调整属于同一批设计事项，当前阶段先只固定数据范式，不在此文档中展开执行策略。
 
 ## 2. Agent State
 
@@ -347,7 +387,7 @@ Frontmatter：
 schema: dutyflow.contact_detail.v1
 id: contact_001
 display_name: 张三
-aliases: ["三哥", "zhangsan"]
+aliases: 三哥, zhangsan
 feishu_user_id: ""
 feishu_open_id: ""
 feishu_union_id: ""
@@ -355,7 +395,7 @@ department: 产品部
 org_level: manager
 role_title: 产品经理
 relationship_to_user: manager
-responsibility_scope: ["需求确认", "项目排期"]
+responsibility_scope: 需求确认, 项目排期
 trust_level: normal
 updated_at: 2026-04-16T00:00:00+08:00
 ```
@@ -406,6 +446,65 @@ updated_at: 2026-04-16T00:00:00+08:00
 - 默认只读取 frontmatter、`Identity Summary`、`Relationship To User`、`Decision Snippets`。
 - 需要责任判断时再读取 `Responsibility Context`。
 - 不返回整份联系人详情文件。
+- `contact_detail` 是当前第一层联系人知识文件；后续补充知识应优先写入结构化补充记录，而不是不断堆积到单人详情正文中。
+
+### 3.3 联系人知识补充记录
+
+联系人基础身份和高频责任保留在 `contact_detail` 中；更细的协作习惯、偏好、注意事项等补充知识，后续使用独立记录承载。
+
+文件位置：
+
+```text
+data/knowledge/contacts/contact_<id>/ckn_<id>.md
+```
+
+Frontmatter：
+
+```yaml
+schema: dutyflow.contact_knowledge_note.v1
+id: ckn_001
+contact_id: contact_001
+topic: working_preference
+keywords: review, feedback, async
+confidence: medium
+status: active
+source_refs: evt_001, manual_input
+created_at: 2026-04-16T00:00:00+08:00
+updated_at: 2026-04-16T00:00:00+08:00
+```
+
+正文结构：
+
+```md
+# Contact Knowledge ckn_001
+
+## Summary
+
+一句话描述这条联系人知识。
+
+## Structured Facts
+
+| fact_key | fact_value | confidence | source_ref |
+|---|---|---|---|
+| review_style | 先异步评论后口头同步 | medium | evt_001 |
+
+## Decision Value
+
+说明这条知识会如何影响提醒、协作方式或责任判断。
+
+## Change Log
+
+| at | action | note |
+|---|---|---|
+| 2026-04-16T00:00:00+08:00 | created | 初次记录 |
+```
+
+约束：
+
+- 一条补充记录只承载一个稳定主题，不把多种无关事实塞进同一文件。
+- `search` 工具优先读 frontmatter、`Summary`、`Structured Facts` 和 `Decision Value`。
+- `add / update` 工具必须按 `ckn_<id>` 定位，做字段级或 section 级修改，不允许模糊改写整份联系人目录。
+- 已过期或被推翻的信息通过 `status` 和 `Change Log` 表达，不直接静默删除历史。
 
 ## 4. 来源与责任数据
 
@@ -524,7 +623,7 @@ Frontmatter：
 schema: dutyflow.context_summary.v1
 id: ctx_001
 task_id: task_001
-event_ids: ["evt_001"]
+event_ids: evt_001
 created_at: 2026-04-16T00:00:00+08:00
 compact_level: short
 ```
@@ -559,6 +658,12 @@ compact_level: short
 
 - 上下文摘要用于继续任务，不是长期记忆。
 - 摘要必须保留当前目标、关键事实、责任关系和下一步。
+
+## 6.1 长期记忆的边界
+
+- 长期记忆只保存“跨会话仍有价值、且不能轻易从当前仓库状态或当前任务状态直接重新推导”的信息。
+- 当前任务进度、临时上下文、原始聊天流水、完整飞书原文和代码结构说明，不应写入长期记忆。
+- 长期记忆不是上下文摘要的延长版；上下文摘要服务当前任务，长期记忆服务后续会话和稳定偏好。
 
 ## 7. 任务状态
 
@@ -973,7 +1078,282 @@ data/logs/YYYY-MM-DD.md
 ## 12. 后续待细化
 
 - 飞书实际返回的用户标识字段如何映射到联系人字段。
-- 联系人详情文件是否需要更严格的 frontmatter 列表格式。
+- 联系人详情文件是否需要继续细化固定 section 和固定表格列。
 - `weight_level` 与具体提醒策略的映射。
 - 审批过期时间和恢复 token 的生命周期。
 - Markdown 表格解析失败时的降级策略。
+- `workspace_root` 的配置方式，以及从仓库内 `data/` 迁移到独立 workspace 的具体步骤。
+
+## 13. 长期记忆结构
+
+长期记忆当前不接入 Demo 主链路，但结构需要先固定，便于后续实现 `search / add / update` 工具。
+
+文件位置：
+
+```text
+data/memory/index.md
+data/memory/entries/memory_<id>.md
+```
+
+### 13.1 记忆索引
+
+```md
+---
+schema: dutyflow.memory_index.v1
+id: memory_index
+updated_at: 2026-04-16T00:00:00+08:00
+---
+
+# Memory Index
+
+| memory_id | title | memory_type | scope_type | scope_id | keywords | status | confidence | detail_file |
+|---|---|---|---|---|---|---|---|---|
+| memory_001 | 张三偏好先异步评审 | preference | contact | contact_001 | review, async | active | medium | entries/memory_001.md |
+```
+
+### 13.2 单条长期记忆
+
+Frontmatter：
+
+```yaml
+schema: dutyflow.long_term_memory.v1
+id: memory_001
+title: 张三偏好先异步评审
+memory_type: preference
+scope_type: contact
+scope_id: contact_001
+status: active
+importance: normal
+confidence: medium
+keywords: review, async, feedback
+source_refs: evt_001, ckn_001
+created_at: 2026-04-16T00:00:00+08:00
+updated_at: 2026-04-16T00:00:00+08:00
+last_verified_at: 2026-04-16T00:00:00+08:00
+```
+
+正文结构：
+
+```md
+# Memory memory_001
+
+## Summary
+
+一句话说明这条长期记忆保留了什么。
+
+## Memory Body
+
+跨会话仍有价值的稳定描述。
+
+## Structured Facts
+
+| fact_key | fact_value | confidence | source_ref |
+|---|---|---|---|
+| review_style | 先异步评论，再决定是否开会 | medium | evt_001 |
+
+## Retrieval Hints
+
+- related_contacts:
+- related_sources:
+- related_tasks:
+
+## Validation
+
+- verification_status:
+- stale_after:
+- overwrite_policy:
+
+## Change Log
+
+| at | action | note |
+|---|---|---|
+| 2026-04-16T00:00:00+08:00 | created | 初次记录 |
+```
+
+约束：
+
+- 一条长期记忆只表达一个原子主题，避免把整段项目历史堆成单个文件。
+- `memory_type` 第一版建议值：`preference`、`relationship`、`decision`、`process`、`risk`、`project_fact`。
+- `scope_type` 第一版建议值：`global`、`contact`、`source`、`task`、`project`。
+- `search` 工具优先查 `index.md`，再按需读取单条记忆的 frontmatter、`Summary` 和 `Structured Facts`。
+- `add / update` 工具必须按 `memory_id` 定位；对 `status`、`confidence`、`last_verified_at`、`Structured Facts` 的修改应可追溯。
+- 长期记忆可能过期；与当前观察冲突时，应优先相信当前事件、当前文件和当前上下文。
+
+## 14. 面向结构化知识与记忆的工具参数草案
+
+以下工具当前只定义文档级 contract，不代表已经接入 Demo 主链路。
+
+### 14.1 `search_contact_knowledge`
+
+用途：搜索联系人补充知识记录。
+
+输入：
+
+```yaml
+contact_id: ""
+name: ""
+topic: ""
+keywords: ""
+query: ""
+status: active
+```
+
+输出：
+
+```yaml
+match_status: unique | ambiguous | multiple | not_found
+contact_id: ""
+note_ids: []
+matched_by: ""
+snippets: []
+source_files: []
+```
+
+约束：
+
+- 优先按 `contact_id` 定位，再按 `topic / keywords / query` 缩小范围。
+- 返回结果必须是裁剪片段和文件定位，不直接返回整份笔记。
+
+### 14.2 `add_contact_knowledge`
+
+输入：
+
+```yaml
+contact_id: ""
+topic: ""
+keywords: ""
+summary: ""
+structured_facts_markdown: ""
+decision_value: ""
+source_refs: ""
+```
+
+输出：
+
+```yaml
+note_id: ""
+status: created
+file_path: ""
+```
+
+约束：
+
+- 每次调用只新增一条 `ckn_<id>`。
+- 新记录必须符合 `dutyflow.contact_knowledge_note.v1`。
+
+### 14.3 `update_contact_knowledge`
+
+输入：
+
+```yaml
+note_id: ""
+summary: ""
+structured_facts_markdown: ""
+decision_value: ""
+status: ""
+confidence: ""
+change_note: ""
+```
+
+输出：
+
+```yaml
+note_id: ""
+status: updated
+file_path: ""
+```
+
+约束：
+
+- 必须先按 `note_id` 命中唯一文件后再修改。
+- 更新时必须同步追加 `Change Log` 条目。
+
+### 14.4 `search_long_term_memory`
+
+用途：按类型、作用域和关键词检索长期记忆。
+
+输入：
+
+```yaml
+memory_id: ""
+memory_type: ""
+scope_type: ""
+scope_id: ""
+keywords: ""
+query: ""
+status: active
+```
+
+输出：
+
+```yaml
+match_status: unique | multiple | not_found
+memory_ids: []
+matched_by: ""
+snippets: []
+source_files: []
+```
+
+约束：
+
+- 优先查 `memory/index.md`，只在候选集上打开明细文件。
+- 返回结果必须包含命中依据，避免模型把长期记忆当成无来源结论。
+
+### 14.5 `add_long_term_memory`
+
+输入：
+
+```yaml
+title: ""
+memory_type: ""
+scope_type: ""
+scope_id: ""
+importance: ""
+confidence: ""
+keywords: ""
+summary: ""
+memory_body: ""
+structured_facts_markdown: ""
+source_refs: ""
+```
+
+输出：
+
+```yaml
+memory_id: ""
+status: created
+file_path: ""
+```
+
+约束：
+
+- 当前任务状态、短期摘要和大段原文日志不得直接写入长期记忆。
+- 新记录必须同步更新 `data/memory/index.md`。
+
+### 14.6 `update_long_term_memory`
+
+输入：
+
+```yaml
+memory_id: ""
+summary: ""
+memory_body: ""
+structured_facts_markdown: ""
+status: ""
+confidence: ""
+last_verified_at: ""
+change_note: ""
+```
+
+输出：
+
+```yaml
+memory_id: ""
+status: updated
+file_path: ""
+```
+
+约束：
+
+- 必须保留 `Change Log`。
+- 当事实被推翻时，优先更新 `status` 和验证信息，不直接删除旧记录。

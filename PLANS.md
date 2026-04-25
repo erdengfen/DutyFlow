@@ -51,6 +51,14 @@ Demo 期最终必须实现以下完整链路：
 - 所有密钥、api_key、base URL、飞书认证和用户配置只能来自 `.env`。
 - 真实飞书 API、真实模型 API、真实外部能力未接入时，必须返回明确占位字符串，不得伪装为真实成功。
 
+## 已确认的存储范式
+
+- 当前开发期的结构化运行文件直接放在仓库内 `data/` 下。
+- 当前项目内 skills 继续放在仓库内 `skills/` 下。
+- 后续如采用类似 openclaw / hermes 的安装式运行，再引入独立 `workspace_root`，例如 `~/DutyFlow/workspace/`。
+- 进入 workspace 模式后，外部工具、skills、知识库、长期记忆和运行数据统一迁移到 workspace 内，由统一配置决定根路径。
+- workspace 化与沙箱边界调整属于同一批设计事项；当前阶段先固定结构化 Markdown 范式和工具 contract，不提前改运行形态。
+
 ## Step 0: 项目骨架与入口迁移
 
 ### 最终效果
@@ -634,7 +642,57 @@ Demo 期最终必须实现以下完整链路：
 
 ### 最终效果
 
-系统能从 Markdown 文件夹索引和单人详情文件中精准查询身份、来源和责任上下文，并以裁剪片段补充到当前上下文。
+系统能从 Markdown 文件夹索引、单人详情文件和联系人补充知识记录中精准查询身份、来源和责任上下文，并以裁剪片段补充到当前上下文；同时为后续 `search / add / update` 型联系人知识工具固定文档结构和 contract。
+
+### 查询与解析范式
+
+- 面向模型的工具按“业务数据族”暴露，不直接暴露“通用 Markdown 浏览工具”。
+- `identity / source / responsibility` 继续使用业务专用查询工具，不拆成通用 header/detail。
+- `contact_knowledge` 采用两段式工具：
+  - 第一轮先获取轻量 header 结果
+  - 第二轮再按稳定 `note_id` 读取 detail
+- 后续 `long_term_memory` 与 `contact_knowledge` 复用相同的两段式查询范式。
+- 面向模型的第一轮工具只返回足够做下一步选择的轻量字段，不默认展开正文全文。
+- 面向模型的第二轮工具只返回允许 section 的裁剪结果，不返回整份 Markdown 原文。
+
+### 内部通用解析层
+
+当前规划中，模型不会直接调用“通用 frontmatter 解析器”；但代码内部应沉淀一层结构化 Markdown 解析与更新能力，供联系人知识、长期记忆等工具复用。
+
+建议内部职责拆分如下：
+
+- `SchemaRegistry`
+  - 维护 `schema`、允许路径、允许 section、必需字段和 detail 定位规则。
+- `FrontmatterParser`
+  - 负责解析当前 `MarkdownStore` 兼容的简单字符串 frontmatter。
+- `RecordLocator`
+  - 负责按数据族定位候选记录。
+  - 有 `index.md` 的数据族优先走索引。
+  - 当前无 `index.md` 的数据族，按 `DATA_MODEL` 约定目录扫描 frontmatter。
+- `SectionExtractor`
+  - 只抽取允许返回的 section，例如 `Summary`、`Structured Facts`、`Decision Value`。
+- `SnippetBuilder`
+  - 把 frontmatter 和允许 section 拼成稳定返回结构。
+- `StructuredRecordUpdater`
+  - 负责新增、更新、回写 `Change Log`，并在存在索引时同步更新索引。
+
+内部逻辑链路约定：
+
+1. `search headers`
+   - 工具接收查询条件
+   - `RecordLocator` 定位候选
+   - `FrontmatterParser` 读取轻量字段
+   - `SnippetBuilder` 组装 header 结果
+2. `get detail`
+   - 工具按稳定 ID 定位唯一文件
+   - `FrontmatterParser` 读取 frontmatter
+   - `SectionExtractor` 抽取允许 section
+   - `SnippetBuilder` 返回 detail 结构
+3. `add / update`
+   - 工具先校验 schema 所需字段
+   - `StructuredRecordUpdater` 写入 detail 文件
+   - 如存在索引则同步更新索引
+   - 写回 `Change Log`
 
 ### 验收标准
 
@@ -644,6 +702,8 @@ Demo 期最终必须实现以下完整链路：
 - `lookup_responsibility_context` 可结合联系人、来源、事项类型返回责任片段。
 - 查询工具不返回整份 Markdown 文档。
 - 示例联系人、来源和责任 fixture 可支持完整链路测试。
+- 联系人知识补充记录采用独立 Markdown 结构，不与 `contact_detail` 混写。
+- 后续联系人知识维护工具只能按稳定字段和固定 section 更新，不允许自由改写整个联系人目录。
 
 ### 涉及文件、类、方法、模块
 
@@ -658,8 +718,21 @@ Demo 期最终必须实现以下完整链路：
   - `resolve_contact`
 - `src/dutyflow/identity/source_context.py`
   - `SourceContextResolver`
+- `src/dutyflow/agent/tools/contact_knowledge.py`
+  - `search_contact_knowledge_headers`
+  - `get_contact_knowledge_detail`
+  - `add_contact_knowledge`
+  - `update_contact_knowledge`
+- `src/dutyflow/storage/structured_markdown.py`
+  - `SchemaRegistry`
+  - `FrontmatterParser`
+  - `RecordLocator`
+  - `SectionExtractor`
+  - `SnippetBuilder`
+  - `StructuredRecordUpdater`
 - `data/identity/contacts/index.md`
 - `data/identity/contacts/people/contact_<id>.md`
+- `data/knowledge/contacts/contact_<id>/ckn_<id>.md`
 - `data/identity/sources/index.md`
 - `test/test_identity_lookup.py`
 - `test/test_identity_source_context.py`
@@ -668,7 +741,8 @@ Demo 期最终必须实现以下完整链路：
 
 - 飞书实际用户 ID、open_id、union_id 的字段来源。
 - 联系人详情文件中上下级字段的最终形式。
-- 责任范围是否需要独立文件。
+- 联系人补充知识是否需要再区分“偏好 / 风险 / 协作习惯”等更细 topic 枚举。
+- 联系人补充知识在当前 `DATA_MODEL` 未定义独立 `index.md` 的前提下，首版是否直接按固定目录扫描 frontmatter，还是先补索引文件。
 
 ### 任务清单
 
@@ -678,6 +752,14 @@ Demo 期最终必须实现以下完整链路：
 - [ ] 实现 ContactResolver。
 - [ ] 实现 SourceContextResolver。
 - [ ] 实现三类 lookup 工具。
+- [ ] 创建联系人知识补充记录 fixture。
+- [ ] 实现结构化 Markdown 内部解析层，至少覆盖 frontmatter 解析、候选定位、section 抽取和稳定返回组装。
+- [ ] 为联系人知识记录补充两段式工具：
+  - `search_contact_knowledge_headers`
+  - `get_contact_knowledge_detail`
+  - `add_contact_knowledge`
+  - `update_contact_knowledge`
+- [ ] 让联系人知识工具与 `DATA_MODEL` 当前结构保持一致；如未新增索引文件，首版按固定目录扫描 frontmatter。
 - [ ] 接入工具控制面。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写对应测试文件。
@@ -687,6 +769,7 @@ Demo 期最终必须实现以下完整链路：
 
 - [ ] 提供 Demo 联系人样例。
 - [ ] 提供 Demo 来源样例，如群、文档、文件或私聊。
+- [ ] 确认第一版联系人补充知识 topic 范围，例如偏好、风险、协作习惯。
 
 ## Step 5: 事件入口与飞书占位适配层
 
@@ -1004,7 +1087,18 @@ Demo 期最终必须实现以下完整链路：
 
 ### 最终效果
 
-Demo 期不实现的能力在程序中留有接口，但不接入真实数据，不执行真实能力，只返回明确字符串占位，并在代码注释中说明“Demo 期不实现”。
+Demo 期不实现的能力在程序中留有接口，但不接入真实数据，不执行真实能力，只返回明确字符串占位，并在代码注释中说明“Demo 期不实现”。其中长期记忆先固定结构化 Markdown 范式和 `search / add / update` 工具 contract，但仍不接入 Demo 主链路。
+
+### 长期记忆工具范式
+
+- `long_term_memory` 后续采用与 `contact_knowledge` 一致的两段式工具设计：
+  - `search_long_term_memory_headers`
+  - `get_long_term_memory_detail`
+  - `add_long_term_memory`
+  - `update_long_term_memory`
+- 第一轮查询优先读取 `data/memory/index.md`，返回轻量 header。
+- 第二轮再按 `memory_id` 打开 `data/memory/entries/memory_<id>.md`，只返回允许 section。
+- 长期记忆相关工具后续复用 Step 4 规划的内部通用解析层，不再为 memory 单独复制一套 Markdown 解析逻辑。
 
 ### 验收标准
 
@@ -1014,6 +1108,8 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 - 多 Agent 接口存在但返回占位。
 - 完整联系人画像接口存在但返回占位。
 - 复杂规划接口存在但返回占位。
+- 长期记忆的数据目录、索引结构、单条记录结构和维护工具 contract 已在文档中固定。
+- 未来 workspace 模式的路径规划已确认，但当前运行期仍不切换到独立 workspace。
 - 测试验证这些占位接口不会被 Demo 主链路误调用。
 
 ### 涉及文件、类、方法、模块
@@ -1025,11 +1121,20 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
   - `MultiAgentPlaceholder`
   - `ContactProfilePlaceholder`
   - `PlanningPlaceholder`
+- `src/dutyflow/agent/tools/memory_tools.py`
+  - `search_long_term_memory_headers`
+  - `get_long_term_memory_detail`
+  - `add_long_term_memory`
+  - `update_long_term_memory`
+- `src/dutyflow/storage/structured_markdown.py`
 - `test/test_demo_placeholders.py`
 
 ### 未敲定问题
 
 - 占位接口最终是否单独放在 `agent/placeholders.py`，或分散到对应模块。
+- 长期记忆工具在未来接入时，是单独归到 `memory/` 模块，还是继续通过内部工具目录统一管理。
+- `workspace_root` 切换后，哪些目录继续保留在仓库内作为 fixture，哪些彻底迁到用户工作区。
+- 长期记忆进入真实实现时，`Memory Body` 返回是否默认裁剪，还是仅在明确需要时返回。
 
 ### 任务清单
 
@@ -1041,12 +1146,19 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 - [ ] 实现复杂规划占位接口。
 - [ ] 每个占位接口返回明确字符串。
 - [ ] 每个占位接口有中文注释说明 Demo 期不实现。
+- [ ] 为长期记忆补充两段式工具 contract：
+  - `search_long_term_memory_headers`
+  - `get_long_term_memory_detail`
+  - `add_long_term_memory`
+  - `update_long_term_memory`
+- [ ] 为未来 `workspace_root` 目录结构补充统一配置入口设计说明。
 - [ ] 编写测试文件。
 - [ ] 执行本阶段完整链路检查。
 
 ### 人工确认
 
 - [ ] 确认占位接口命名是否需要与未来真实能力保持一致。
+- [ ] 确认未来安装式运行时的默认工作区是否采用 `~/DutyFlow/workspace/`。
 
 ## Step 12: 完整 Demo 链路验收
 
