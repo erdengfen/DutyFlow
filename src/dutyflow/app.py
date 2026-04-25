@@ -236,10 +236,11 @@ def _chat_error(error_kind: str, message: str) -> str:
         "error": error_kind,
         "message": message,
         "final_text": "",
-        "agent_state": {},
-        "tool_results": [],
         "stop_reason": "failed",
         "turn_count": 0,
+        "tool_result_count": 0,
+        "tools": [],
+        "pending_restart_count": 0,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
 

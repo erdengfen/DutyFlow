@@ -28,7 +28,6 @@ from dutyflow.agent.state import (
     mark_transition,
     record_recovery_attempt,
     resolve_recovery_scope,
-    to_dict,
     upsert_recovery_scope,
 )
 from dutyflow.agent.tools.context import ToolUseContext
@@ -55,15 +54,16 @@ class AgentLoopResult:
         return len(self.tool_results)
 
     def to_debug_text(self) -> str:
-        """返回 CLI 可打印的完整调试文本。"""
+        """返回 CLI 可打印的精简调试文本。"""
         payload = {
             "final_text": self.final_text,
             "stop_reason": self.stop_reason,
             "turn_count": self.turn_count,
             "tool_result_count": self.tool_result_count,
-            "tool_results": [_tool_result_to_dict(item) for item in self.tool_results],
-            "pending_restarts": [_restart_descriptor_to_dict(item) for item in self.pending_restarts],
-            "agent_state": to_dict(self.state),
+            "tools": [_tool_result_summary_to_dict(item) for item in self.tool_results],
+            "pending_restart_count": len(self.pending_restarts),
+            "pending_restarts": [_restart_descriptor_summary_to_dict(item) for item in self.pending_restarts],
+            "transition_reason": self.state.transition_reason,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -500,6 +500,20 @@ def _tool_result_to_dict(result: ToolResultEnvelope) -> dict[str, Any]:
     }
 
 
+def _tool_result_summary_to_dict(result: ToolResultEnvelope) -> dict[str, Any]:
+    """把工具结果压缩成 CLI 摘要，避免输出过长。"""
+    payload = {
+        "tool_name": result.tool_name,
+        "ok": result.ok,
+        "error_kind": result.error_kind,
+        "attempt_count": result.attempt_count,
+        "content_preview": _trim_debug_text(result.content, 160),
+    }
+    if result.context_modifiers:
+        payload["context_modifiers"] = [dict(item) for item in result.context_modifiers]
+    return payload
+
+
 def _restart_descriptor_to_dict(descriptor: RecoveryRestartDescriptor) -> dict[str, Any]:
     """把 restart 描述转换为 CLI 调试可读字典。"""
     return {
@@ -516,6 +530,18 @@ def _restart_descriptor_to_dict(descriptor: RecoveryRestartDescriptor) -> dict[s
     }
 
 
+def _restart_descriptor_summary_to_dict(descriptor: RecoveryRestartDescriptor) -> dict[str, Any]:
+    """把挂起恢复信息压缩成 CLI 摘要。"""
+    return {
+        "scope_type": descriptor.scope_type,
+        "scope_id": descriptor.scope_id,
+        "restart_action": descriptor.restart_action,
+        "resume_point": descriptor.resume_point,
+        "can_restart_now": descriptor.can_restart_now,
+        "next_retry_at": descriptor.next_retry_at,
+    }
+
+
 def _new_query_id() -> str:
     """生成本地调试 query id。"""
     return "chat_" + uuid4().hex
@@ -524,6 +550,13 @@ def _new_query_id() -> str:
 def _continuation_message() -> str:
     """返回模型输出截断后的继续提示。"""
     return "Output limit hit. Continue directly from where you stopped."
+
+
+def _trim_debug_text(text: str, max_chars: int) -> str:
+    """截断过长调试文本，避免 CLI 输出刷屏。"""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "...(truncated)"
 
 
 def _self_test() -> None:

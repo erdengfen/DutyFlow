@@ -77,16 +77,15 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(result.state.transition_reason, "failed")
 
     def test_debug_text_contains_state_and_tool_results(self) -> None:
-        """调试输出必须包含完整 state 和 tool result。"""
+        """调试输出必须包含精简后的工具和恢复摘要。"""
         client = _FakeModelClient((_tool_response(), _text_response("done")))
         text = _loop(client, registry=_tool_test_registry()).run_until_stop("run").to_debug_text()
-        self.assertIn('"agent_state"', text)
-        self.assertIn('"tool_results"', text)
+        self.assertIn('"tools"', text)
         self.assertIn('"pending_restarts"', text)
+        self.assertIn('"pending_restart_count"', text)
         self.assertIn('"final_text": "done"', text)
         self.assertIn('"attempt_count": 1', text)
-        self.assertIn('"context_modifiers"', text)
-        self.assertIn('"retry_exhausted": false', text)
+        self.assertIn('"content_preview": "hello"', text)
 
     def test_chat_session_reuses_agent_state(self) -> None:
         """持续 chat 会话应复用同一个 Agent State。"""

@@ -25,8 +25,8 @@ class TestCliChat(unittest.TestCase):
         """CLI /chat 应委托给 app 的调试链路。"""
         output = CliConsole(_FakeApp()).handle_command("/chat ping")
         self.assertIn('"final_text": "pong: ping"', output)
-        self.assertIn('"agent_state"', output)
-        self.assertIn('"tool_results"', output)
+        self.assertIn('"tools"', output)
+        self.assertIn('"tool_result_count"', output)
 
     def test_interactive_chat_session_keeps_running(self) -> None:
         """交互式 /chat 应持续接收多轮输入直到 /back。"""
@@ -65,8 +65,8 @@ class _FakeApp:
         return (
             '{\n'
             f'  "final_text": "pong: {user_text}",\n'
-            '  "agent_state": {},\n'
-            '  "tool_results": []\n'
+            '  "tool_result_count": 0,\n'
+            '  "tools": []\n'
             '}'
         )
 
