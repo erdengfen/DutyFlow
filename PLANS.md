@@ -472,173 +472,61 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 3.1: 第一批内部 Tools 扩展
 
-### 最终效果
+状态：已完成。当前已交付第一批内部工具与 CLI session 工具链，并稳定接入现有权限、审批、恢复、审计和 `/chat` 调试链路。
 
-在现有 agent 基架、权限层和工具控制链上，新增第一批真正服务于 Demo 主链路的内部工具。第一批先围绕 skill 自举能力展开，用一个内部工具支持创建新的 `skills/<skill_name>/SKILL.md`。
-
-### 范围边界
-
-- 仅新增内部工具，不处理外部工具生态。
-- 工具继续沿用当前目录结构：
-  - `src/dutyflow/agent/tools/contracts/`
-  - `src/dutyflow/agent/tools/logic/`
-- 工具继续手动注册到 `src/dutyflow/agent/tools/registry.py`；具体接入流程见 Codex skill `dutyflow-internal-tool-workflow`。
-- 工具仍需服从 Step 2 已落地的权限、恢复、审计和 `/chat` 调试链路。
-- skill 可以在正文中引用工具名称、工具用途、参数约束和安全注意事项，但 skill 不直接执行工具；最终仍由模型根据当前上下文生成 tool call。
-- tool 只负责确定性动作，不能把复杂判断逻辑写进工具；复杂使用策略应写在 skill 中。
-
-### 第一批内部工具
+### 已交付内容
 
 - `create_skill`
-  - 类型：内部工具。
-  - 作用：按名称、描述和正文创建新的 `skills/<skill_name>/SKILL.md`。
-  - 写入范围：仅允许写入 `skills/<skill_name>/SKILL.md`，不允许写入任意路径。
-  - 安全级别：敏感内部工具。虽然属于内部工具，但会改变后续 agent 可见能力，必须走权限确认。
-  - 权限建议：`requires_approval = True`。
-  - 幂等约束：默认不覆盖已存在 skill；如后续需要覆盖，必须单独声明参数并再次审批。
-  - 输入建议：`name`、`description`、`body`。
-  - 输出建议：返回创建路径、manifest 摘要和是否成功。
+  - 受控创建 `skills/<skill_name>/SKILL.md`
+  - 写入必须审批
 - `open_cli_session`
-  - 作用：创建新的持久 shell 会话。
-  - 当前批次范围：
-    - Linux
-    - WSL
-  - 其它系统适配延后到后续步骤。
-  - 安全级别：低风险内部工具；当前不再通过静态危险字段强制审批。
-  - 建议输入：
-    - `cwd`
-    - `timeout`
-  - 当前批次的 shell 固定为 `bash`；`shell_type` 可以预留，但不作为当前必填字段。
-  - 建议输出：
-    - `session_id`
-    - `shell_type`
-    - `platform`
-    - `cwd`
+  - 创建持久 bash 会话
 - `exec_cli_command`
-  - 作用：在指定 `session_id` 中执行一条命令。
-  - 安全级别：命令级判定工具。
-  - 审批方式：
-    - 只读低风险命令可直接放行
-    - 危险命令按 `permission_mode` 进入 `ask / deny`
-  - 建议输入：
-    - `session_id`
-    - `command`
-    - `timeout`
-  - 说明：
-    - 当前批次不建议把 `cwd` 作为本工具必填入参；目录上下文应主要由 session 持续维护。
-    - 若后续保留 `cwd` 覆盖能力，必须明确“会先切换目录，再执行命令，并更新 session 当前目录”。
-  - 建议输出：
-    - `exit_code`
-    - `stdout`
-    - `stderr`
-    - `cwd_after`
-    - `duration_ms`
-    - `timed_out`
-    - `truncated`
+  - 在指定 session 中执行单条命令
+  - 风险判定为“静态字段 + 命令内容”
 - `close_cli_session`
-  - 作用：关闭 shell 会话并清理资源。
-  - 安全级别：低风险内部工具；当前不再通过静态危险字段强制审批。
-  - 建议输入：
-    - `session_id`
-  - 建议输出：
-    - `session_id`
-    - `closed`
-    - `cwd_after`
+  - 关闭 shell session 并回收资源
 
-### CLI 工具关键约束
+### 关键约束
 
-- 当前批次 CLI 工具只支持 Linux / WSL。
-- 风险等级和审批要求不作为模型可控入参，而由运行时根据“工具静态声明 + 命令内容”自动判定。
-- 会改变文件系统、Git 状态、系统环境、网络状态或长时间占用资源的命令，默认按危险命令处理。
-- 当前批次只允许 bash 会话；不做 PowerShell、cmd、macOS shell 兼容。
-- 当前批次不支持后台常驻进程管理、交互式全屏程序或复杂 TUI。
-- 当前只允许“一次 tool call 执行一条命令”。
-- 为保留 shell 上下文，命令运行在持久 shell session 中，而不是每次新开进程。
-- 命令执行必须有统一 timeout。
-- 输出必须支持截断，避免污染上下文。
-- session 需要有统一资源回收策略，避免僵尸 shell 和遗留子进程。
+- 工具继续手动注册到 `src/dutyflow/agent/tools/registry.py`
+- CLI 工具当前只覆盖 Linux / WSL + bash
+- `open_cli_session` / `close_cli_session` 不因工具名本身进入审批
+- `exec_cli_command` 按命令内容决定 `allow / ask / deny`
+- tool 只负责确定性动作；调用顺序和使用边界放到 skill 中约束
 
-### 当前已确认的实现注意点
+### 当前结果
 
-- 持久 shell session 可以通过长期存在的 `subprocess.Popen(...)` 进程维护，不要求当前批次一定上 PTY。
-- 如果后续实现选择 PTY，`stdout / stderr` 很难天然稳定分离；若要求二者分离返回，则必须补充命令包装和 marker 方案，不能假设 PTY 自然满足该能力。
-- skill 层后续只负责约束 CLI 工具的调用顺序、命令边界和审批提醒，不负责实际执行命令。
-- 当前实现下：
-  - `open_cli_session` / `close_cli_session` 不因工具名本身进入审批
-  - `exec_cli_command` 由权限层解析本次 `command` 决定是否需要审批
-
-### 预期验收方向
-
-- 新增工具可被 `ToolRegistry` 正确发现并进入模型可见工具列表。
-- 新增工具可通过 `/chat` 在当前 agent loop 下稳定触发；具体调试与测试流程见 Codex skill `dutyflow-chat-debug-workflow`。
-- 安全工具与敏感工具的声明字段符合现有权限规范。
-- 工具执行结果、失败留痕、审批分支和审计日志保持可见。
-- `create_skill` 触发时必须能在 CLI 审批窗口中看到写入意图，按 Enter 后才允许写入。
-- 危险 CLI 命令触发时必须能在 CLI 审批窗口中看到执行意图；只读命令不应因工具名本身被重复审批；session 状态仍需可追踪。
-
-### 后续待补内容
-
-- [x] 已实现 `create_skill` 的 contract / logic。
-- [x] 已接入 `ToolRegistry` 手动注册流程。
-- [x] 已验证 `create_skill` 作为敏感内部工具会进入审批链路。
-- [x] 已补充对应测试与阶段验收记录。
-- [x] 已实现 `open_cli_session`。
-- [x] 已实现 `exec_cli_command`。
-- [x] 已实现 `close_cli_session`。
-- [x] 已新增当前进程内的 CLI session 管理层，支持持久 bash shell、超时回收和 session 关闭。
-- [x] 已补充 CLI session tools 对应测试与阶段验收记录。
+- 已完成 `create_skill`、`open_cli_session`、`exec_cli_command`、`close_cli_session`
+- 已完成对应 contract / logic / registry / 测试
+- 当前 `/chat` 已可稳定触发这些工具，具体调试流程见 Codex skill `dutyflow-chat-debug-workflow`
 
 ## Step 3.2: 第一批 Skills 内容扩展
 
-### 最终效果
+状态：已完成。当前已把第一批项目内 skill 内容接入 `SkillRegistry + load_skill` 体系。
 
-在已完成的 `SkillRegistry + load_skill` 基础上，新增第一批真正参与 Demo 判断链路的 skills。第一批先新增一个指导模型创建新 skill 的自举 skill，用于规范模型如何结合 `load_skill` 和 `create_skill` 完成 skill 创建。
-
-### 范围边界
-
-- skill 文档继续使用固定目录结构：`skills/<skill_name>/SKILL.md`
-- frontmatter 当前最小必需字段仍是：
-  - `name`
-  - `description`
-- 具体 skill 正文由 `load_skill` 按需加载，不直接全量塞入 system prompt。
-- 本小节只处理 skills 内容扩展，不改动 `SkillRegistry` 的基础解析范式。
-- skill 正文可以列出推荐工具和使用步骤，但不得把工具注册表复制成长期静态副本；工具真实 schema 仍以 `ToolRegistry` 为准。
-- skill 只能引导模型生成 tool call，不能绕过权限层、审批层或工具执行层。
-
-### Tool 与 Skill 协同范式
-
-- system message 默认只暴露 skill manifest，使模型知道“有哪些能力说明可加载”。
-- 当任务需要某个能力说明时，模型先调用 `load_skill(name=...)` 读取完整 skill 正文。
-- skill 正文负责说明判断标准、执行步骤、推荐工具名称、参数组织方式和审批注意事项。
-- 模型再根据 skill 正文和当前可见工具列表生成具体 tool call。
-- 工具负责执行确定性动作，并通过 `ToolResultEnvelope` 返回结果；skill 不保存状态、不直接写文件、不直接修改工具行为。
-- 对会改变后续 agent 能力的工具，例如 `create_skill`，即使是内部工具，也必须作为敏感动作进入审批。
-
-### 第一批 Skills
+### 已交付内容
 
 - `skill_creator`
-  - 路径：`skills/skill_creator/SKILL.md`
-  - 作用：指导模型把用户的 skill 创建需求整理为标准 `SKILL.md`，并在用户确认后调用 `create_skill`。
-  - 推荐工具：`load_skill`、`create_skill`。
-  - 核心流程：先澄清 skill 名称、description 和正文目标；再生成待写入内容；最后调用 `create_skill`。
-  - 安全要求：不得自行覆盖已有 skill；涉及写入时必须依赖 `create_skill` 的审批链路。
-  - 当前不负责：不创建 tools、不修改 registry、不生成复杂外部集成逻辑。
+  - 约束模型整理 skill 需求并通过 `create_skill` 受控写入
+- `cli_session_operator`
+  - 约束模型按正确顺序使用 `open_cli_session`、`exec_cli_command`、`close_cli_session`
+  - 明确只读命令和危险命令的审批边界
 
-### 预期验收方向
+### 关键约束
 
-- 新增 skills 能被 `SkillRegistry` 初始化扫描并进入 manifest 列表。
-- `AgentLoop` system message 能稳定暴露新增 skills 的元信息。
-- 模型可通过 `load_skill` 读取指定 skill 的完整正文。
-- 新增 skills 的命名、描述和正文内容与 Demo 目标一致，不偏离“身份层 + 权重层 + 审批流 + 任务可见性”。
-- 模型在使用 `skill_creator` 时，能明确先整理内容，再通过 `create_skill` 触发受控写入。
+- skill 目录继续固定为 `skills/<skill_name>/SKILL.md`
+- system message 默认只暴露 manifest；正文通过 `load_skill` 按需加载
+- skill 只能指导模型生成 tool call，不能绕过权限层、审批层或工具执行层
 
-### 后续待补内容
+### 当前结果
 
-- [x] 已新增 `skills/skill_creator/SKILL.md` 正文。
-- [x] 已验证 `skill_creator` 可被 `SkillRegistry` 扫描并进入 system message manifest。
-- [x] 已补充对应测试与阶段验收记录。
+- 已完成 `skill_creator`、`cli_session_operator`
+- 已通过 `SkillRegistry` 扫描、`load_skill` 读取和对应测试验证
 
 ## Step 4: 身份、来源、责任 Markdown 数据与查询工具
+
+状态：已完成。当前已具备身份、来源、责任主链路查询能力，以及联系人知识的两段式查询与受控写入能力。
 
 ### 最终效果
 
@@ -756,7 +644,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 实现 ContactResolver。
 - [x] 实现 SourceContextResolver。
 - [x] 实现三类 lookup 工具。
-- [ ] 创建联系人知识补充记录 fixture。
+- [x] 创建联系人知识补充记录 fixture。
 - [x] 实现结构化 Markdown 内部解析层，至少覆盖 frontmatter 解析、候选定位、section 抽取和稳定返回组装。
 - [x] 为联系人知识记录补充两段式工具：
   - `search_contact_knowledge_headers`
