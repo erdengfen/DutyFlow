@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import select
+import sys
 from typing import Protocol
 
 
@@ -95,7 +97,34 @@ class CliConsole:
             if normalized.startswith("/") and not normalized.startswith("/chat "):
                 print(f"Unsupported chat command: {normalized}")
                 continue
-            self._run_chat_turn(session, user_text)
+            self._run_chat_turn(session, self._collect_chat_message(user_text))
+
+    def _collect_chat_message(self, first_line: str) -> str:
+        """把当前行和已缓冲的多行粘贴内容合并成一次 chat 输入。"""
+        lines = [first_line]
+        lines.extend(self._read_immediate_chat_lines())
+        return "\n".join(lines)
+
+    def _read_immediate_chat_lines(self) -> tuple[str, ...]:
+        """读取终端中已缓冲但尚未消费的多行粘贴内容。"""
+        buffered: list[str] = []
+        while self._stdin_has_buffered_line():
+            try:
+                buffered.append(input(""))
+            except (EOFError, KeyboardInterrupt):
+                break
+        return tuple(buffered)
+
+    def _stdin_has_buffered_line(self) -> bool:
+        """判断标准输入当前是否还有可立即读取的一整行内容。"""
+        stdin = sys.stdin
+        if not getattr(stdin, "isatty", lambda: False)():
+            return False
+        try:
+            ready, _, _ = select.select((stdin,), (), (), 0.03)
+        except (OSError, ValueError):
+            return False
+        return bool(ready)
 
     def _run_chat_turn(self, session: object, user_text: str) -> None:
         """执行 chat 子会话的一轮输入并打印调试结果。"""

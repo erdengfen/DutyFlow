@@ -707,18 +707,21 @@ Demo 期最终必须实现以下完整链路：
 
 ### 涉及文件、类、方法、模块
 
-- `src/dutyflow/agent/tools/identity_lookup.py`
-  - `lookup_contact_identity`
-- `src/dutyflow/agent/tools/source_lookup.py`
-  - `lookup_source_context`
-- `src/dutyflow/agent/tools/responsibility_lookup.py`
-  - `lookup_responsibility_context`
 - `src/dutyflow/identity/contact_resolver.py`
   - `ContactResolver`
   - `resolve_contact`
 - `src/dutyflow/identity/source_context.py`
   - `SourceContextResolver`
-- `src/dutyflow/agent/tools/contact_knowledge.py`
+- `src/dutyflow/agent/tools/contracts/lookup_contact_identity_contract.py`
+- `src/dutyflow/agent/tools/contracts/lookup_source_context_contract.py`
+- `src/dutyflow/agent/tools/contracts/lookup_responsibility_context_contract.py`
+- `src/dutyflow/agent/tools/logic/lookup_contact_identity.py`
+  - `LookupContactIdentityTool`
+- `src/dutyflow/agent/tools/logic/lookup_source_context.py`
+  - `LookupSourceContextTool`
+- `src/dutyflow/agent/tools/logic/lookup_responsibility_context.py`
+  - `LookupResponsibilityContextTool`
+- `src/dutyflow/knowledge/contact_knowledge.py`
   - `search_contact_knowledge_headers`
   - `get_contact_knowledge_detail`
   - `add_contact_knowledge`
@@ -734,6 +737,7 @@ Demo 期最终必须实现以下完整链路：
 - `data/identity/contacts/people/contact_<id>.md`
 - `data/knowledge/contacts/contact_<id>/ckn_<id>.md`
 - `data/identity/sources/index.md`
+- `test/identity_fixture_data.py`
 - `test/test_identity_lookup.py`
 - `test/test_identity_source_context.py`
 
@@ -746,12 +750,12 @@ Demo 期最终必须实现以下完整链路：
 
 ### 任务清单
 
-- [ ] 创建联系人索引 fixture。
-- [ ] 创建单人详情 fixture。
-- [ ] 创建来源索引 fixture。
-- [ ] 实现 ContactResolver。
-- [ ] 实现 SourceContextResolver。
-- [ ] 实现三类 lookup 工具。
+- [x] 创建联系人索引 fixture。
+- [x] 创建单人详情 fixture。
+- [x] 创建来源索引 fixture。
+- [x] 实现 ContactResolver。
+- [x] 实现 SourceContextResolver。
+- [x] 实现三类 lookup 工具。
 - [ ] 创建联系人知识补充记录 fixture。
 - [x] 实现结构化 Markdown 内部解析层，至少覆盖 frontmatter 解析、候选定位、section 抽取和稳定返回组装。
 - [x] 为联系人知识记录补充两段式工具：
@@ -760,10 +764,10 @@ Demo 期最终必须实现以下完整链路：
   - `add_contact_knowledge`
   - `update_contact_knowledge`
 - [x] 让联系人知识工具与 `DATA_MODEL` 当前结构保持一致；如未新增索引文件，首版按固定目录扫描 frontmatter。
-- [ ] 接入工具控制面。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写对应测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [x] 接入工具控制面。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写对应测试文件。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 

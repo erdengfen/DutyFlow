@@ -228,7 +228,41 @@ class AuditLogger:
     def _load_or_create(self, path: Path) -> MarkdownDocument:
         """读取当天日志，不存在则创建新文档。"""
         if self.markdown_store.exists(path):
-            return self.markdown_store.read_document(path)
+            try:
+                return self.markdown_store.read_document(path)
+            except UnicodeDecodeError:
+                return self._repair_corrupted_document(path)
+        return self._new_document()
+
+    def _repair_corrupted_document(self, path: Path) -> MarkdownDocument:
+        """把包含非法 UTF-8 字节的日志文件修复为可继续追加的文档。"""
+        resolved = self.markdown_store.file_store.resolve(path)
+        text = resolved.read_bytes().decode("utf-8", errors="replace")
+        parser = getattr(self.markdown_store, "_parse", None)
+        if callable(parser):
+            document = parser(text)
+        else:
+            document = MarkdownDocument(frontmatter={}, body=text)
+        frontmatter = dict(document.frontmatter) if isinstance(document.frontmatter, Mapping) else {}
+        frontmatter.setdefault("schema", "dutyflow.audit_log.v1")
+        frontmatter.setdefault("id", f"audit_log_{datetime.now().astimezone().date().isoformat()}")
+        frontmatter["updated_at"] = _now_text()
+        body = document.body.rstrip()
+        repair_note = (
+            "## "
+            + _now_text()
+            + " audit_log_repaired\n\n"
+            + "- note: previous invalid utf-8 bytes were replaced so the daily audit log can continue accepting new records.\n\n"
+            + "```json\n"
+            + '{\n  "repair_action": "utf8_replacement_decode"\n}\n'
+            + "```"
+        )
+        if "audit_log_repaired" not in body:
+            body = body + "\n\n" + repair_note if body else "# Audit Log\n\n" + repair_note
+        return MarkdownDocument(frontmatter=frontmatter, body=body)
+
+    def _new_document(self) -> MarkdownDocument:
+        """创建新的当天日志文档。"""
         return MarkdownDocument(
             frontmatter={
                 "schema": "dutyflow.audit_log.v1",

@@ -19,6 +19,9 @@ from dutyflow.agent.tools.logic.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.exec_cli_command import ExecCliCommandTool
 from dutyflow.agent.tools.logic.get_contact_knowledge_detail import GetContactKnowledgeDetailTool
 from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
+from dutyflow.agent.tools.logic.lookup_contact_identity import LookupContactIdentityTool
+from dutyflow.agent.tools.logic.lookup_responsibility_context import LookupResponsibilityContextTool
+from dutyflow.agent.tools.logic.lookup_source_context import LookupSourceContextTool
 from dutyflow.agent.tools.logic.open_cli_session import OpenCliSessionTool
 from dutyflow.agent.tools.logic.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool
 from dutyflow.agent.tools.logic.update_contact_knowledge import UpdateContactKnowledgeTool
@@ -35,6 +38,9 @@ TOOL_REGISTRY = {
     ExecCliCommandTool.name: ExecCliCommandTool(),
     GetContactKnowledgeDetailTool.name: GetContactKnowledgeDetailTool(),
     LoadSkillTool.name: LoadSkillTool(),
+    LookupContactIdentityTool.name: LookupContactIdentityTool(),
+    LookupResponsibilityContextTool.name: LookupResponsibilityContextTool(),
+    LookupSourceContextTool.name: LookupSourceContextTool(),
     OpenCliSessionTool.name: OpenCliSessionTool(),
     SearchContactKnowledgeHeadersTool.name: SearchContactKnowledgeHeadersTool(),
     UpdateContactKnowledgeTool.name: UpdateContactKnowledgeTool(),
@@ -130,6 +136,9 @@ def _self_test() -> None:
         assert runtime_registry.has("exec_cli_command")
         assert runtime_registry.has("get_contact_knowledge_detail")
         assert runtime_registry.has("load_skill")
+        assert runtime_registry.has("lookup_contact_identity")
+        assert runtime_registry.has("lookup_responsibility_context")
+        assert runtime_registry.has("lookup_source_context")
         assert runtime_registry.has("open_cli_session")
         assert runtime_registry.has("search_contact_knowledge_headers")
         assert runtime_registry.has("update_contact_knowledge")

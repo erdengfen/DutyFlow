@@ -41,6 +41,19 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"turn": 2', output)
         self.assertIn('"final_text": "second"', output)
 
+    def test_multiline_paste_is_merged_into_single_chat_turn(self) -> None:
+        """多行粘贴内容应合并成一轮 chat 输入，而不是拆成多条命令。"""
+        cli = CliConsole(_FakeApp())
+        inputs = iter(("/chat", "line one", "/back", "/exit"))
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch.object(cli, "_read_immediate_chat_lines", return_value=("line two", "", "line four")):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertEqual(cli.start(), 0)
+        output = stdout.getvalue()
+        self.assertIn('line one\nline two\n\nline four', output)
+        self.assertNotIn("Unsupported command", output)
+        self.assertIn('"turn": 1', output)
+
     def test_interactive_chat_turn_error_does_not_exit(self) -> None:
         """Chat 单轮异常应封装输出，并允许返回主 CLI。"""
         cli = CliConsole(_ErrorApp())

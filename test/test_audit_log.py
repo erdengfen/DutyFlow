@@ -64,6 +64,36 @@ class TestAuditLog(unittest.TestCase):
         self.assertIn("hello", preview)
         self.assertNotIn("abc", preview)
 
+    def test_record_repairs_corrupted_daily_log_before_append(self) -> None:
+        """今日日志损坏时，审计记录应先修复再继续追加。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            markdown = MarkdownStore(FileStore(root))
+            logger = AuditLogger(markdown, Path("data/logs"))
+            path = root / "data/logs" / "2026-04-25.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(
+                (
+                    b"---\n"
+                    b"schema: dutyflow.audit_log.v1\n"
+                    b"id: audit_log_2026-04-25\n"
+                    b"updated_at: 2026-04-25T00:00:00+08:00\n"
+                    b"---\n\n"
+                    b"# Audit Log\n\n"
+                    b"broken:\x9butf8\n"
+                )
+            )
+            written = logger.record_event(
+                category="system",
+                event_type="health_check",
+                outcome="info",
+                note="repair test",
+            )
+            content = written.read_text(encoding="utf-8")
+        self.assertEqual(written, path)
+        self.assertIn("audit_log_repaired", content)
+        self.assertIn("health_check", content)
+
 
 def _self_test() -> None:
     """运行本文件单元测试。"""
