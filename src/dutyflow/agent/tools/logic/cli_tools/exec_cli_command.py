@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from dutyflow.agent.cli_session import CliSessionError, get_cli_session_manager
-from dutyflow.agent.tools.contracts.exec_cli_command_contract import EXEC_CLI_COMMAND_TOOL_CONTRACT
+from dutyflow.agent.tools.contracts.cli_tools.exec_cli_command_contract import EXEC_CLI_COMMAND_TOOL_CONTRACT
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope
 
 

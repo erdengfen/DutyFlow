@@ -6,7 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from dutyflow.agent.tools.contracts.create_skill_contract import CREATE_SKILL_TOOL_CONTRACT
+from dutyflow.agent.tools.contracts.skill_tools.create_skill_contract import CREATE_SKILL_TOOL_CONTRACT
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope
 
 # 关键边界：skill 名称最多 64 个字符，只允许安全目录名字符，防止路径穿越和过长文件名。

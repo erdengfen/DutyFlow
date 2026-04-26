@@ -1,6 +1,7 @@
 # 本文件验证按日 Markdown 审计日志。
 
 from pathlib import Path
+from datetime import datetime
 import sys
 import tempfile
 import unittest
@@ -70,14 +71,15 @@ class TestAuditLog(unittest.TestCase):
             root = Path(temp_dir)
             markdown = MarkdownStore(FileStore(root))
             logger = AuditLogger(markdown, Path("data/logs"))
-            path = root / "data/logs" / "2026-04-25.md"
+            today = datetime.now().astimezone().date().isoformat()
+            path = root / "data/logs" / f"{today}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(
                 (
                     b"---\n"
                     b"schema: dutyflow.audit_log.v1\n"
-                    b"id: audit_log_2026-04-25\n"
-                    b"updated_at: 2026-04-25T00:00:00+08:00\n"
+                    + f"id: audit_log_{today}\n".encode("utf-8")
+                    + b"updated_at: 2026-04-25T00:00:00+08:00\n"
                     b"---\n\n"
                     b"# Audit Log\n\n"
                     b"broken:\x9butf8\n"

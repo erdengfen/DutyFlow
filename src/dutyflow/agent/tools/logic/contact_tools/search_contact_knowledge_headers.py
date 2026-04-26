@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dutyflow.agent.tools.contracts.search_contact_knowledge_headers_contract import (
+from dutyflow.agent.tools.contracts.contact_tools.search_contact_knowledge_headers_contract import (
     SEARCH_CONTACT_KNOWLEDGE_HEADERS_TOOL_CONTRACT,
 )
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope

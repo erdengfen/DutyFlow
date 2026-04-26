@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-SRC_ROOT = Path(__file__).resolve().parents[4]
+SRC_ROOT = Path(__file__).resolve().parents[5]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.agent.tools.contracts.lookup_source_context_contract import LOOKUP_SOURCE_CONTEXT_TOOL_CONTRACT
+from dutyflow.agent.tools.contracts.identity_tools.lookup_source_context_contract import LOOKUP_SOURCE_CONTEXT_TOOL_CONTRACT
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope
 from dutyflow.identity.source_context import SourceContextResolver
 

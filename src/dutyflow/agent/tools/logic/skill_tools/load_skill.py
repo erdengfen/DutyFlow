@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dutyflow.agent.tools.contracts.load_skill_contract import LOAD_SKILL_TOOL_CONTRACT
+from dutyflow.agent.tools.contracts.skill_tools.load_skill_contract import LOAD_SKILL_TOOL_CONTRACT
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope
 
 

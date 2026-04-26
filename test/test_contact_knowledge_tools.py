@@ -16,10 +16,10 @@ if str(SRC_ROOT) not in sys.path:
 from dutyflow.agent.state import create_initial_agent_state  # noqa: E402
 from dutyflow.agent.tools.context import ToolUseContext  # noqa: E402
 from dutyflow.agent.tools.executor import ToolExecutor  # noqa: E402
-from dutyflow.agent.tools.logic.add_contact_knowledge import AddContactKnowledgeTool  # noqa: E402
-from dutyflow.agent.tools.logic.get_contact_knowledge_detail import GetContactKnowledgeDetailTool  # noqa: E402
-from dutyflow.agent.tools.logic.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool  # noqa: E402
-from dutyflow.agent.tools.logic.update_contact_knowledge import UpdateContactKnowledgeTool  # noqa: E402
+from dutyflow.agent.tools.logic.contact_tools.add_contact_knowledge import AddContactKnowledgeTool  # noqa: E402
+from dutyflow.agent.tools.logic.contact_tools.get_contact_knowledge_detail import GetContactKnowledgeDetailTool  # noqa: E402
+from dutyflow.agent.tools.logic.contact_tools.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool  # noqa: E402
+from dutyflow.agent.tools.logic.contact_tools.update_contact_knowledge import UpdateContactKnowledgeTool  # noqa: E402
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 from dutyflow.agent.tools.router import ToolRouter  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402

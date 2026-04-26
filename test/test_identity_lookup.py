@@ -18,9 +18,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from dutyflow.agent.state import create_initial_agent_state  # noqa: E402
 from dutyflow.agent.tools.context import ToolUseContext  # noqa: E402
 from dutyflow.agent.tools.executor import ToolExecutor  # noqa: E402
-from dutyflow.agent.tools.logic.lookup_contact_identity import LookupContactIdentityTool  # noqa: E402
-from dutyflow.agent.tools.logic.lookup_responsibility_context import LookupResponsibilityContextTool  # noqa: E402
-from dutyflow.agent.tools.logic.lookup_source_context import LookupSourceContextTool  # noqa: E402
+from dutyflow.agent.tools.logic.identity_tools.lookup_contact_identity import LookupContactIdentityTool  # noqa: E402
+from dutyflow.agent.tools.logic.identity_tools.lookup_responsibility_context import LookupResponsibilityContextTool  # noqa: E402
+from dutyflow.agent.tools.logic.identity_tools.lookup_source_context import LookupSourceContextTool  # noqa: E402
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 from dutyflow.agent.tools.router import ToolRouter  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402

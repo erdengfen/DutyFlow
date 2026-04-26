@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dutyflow.agent.tools.contracts.get_contact_knowledge_detail_contract import (
+from dutyflow.agent.tools.contracts.contact_tools.get_contact_knowledge_detail_contract import (
     GET_CONTACT_KNOWLEDGE_DETAIL_TOOL_CONTRACT,
 )
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, error_envelope

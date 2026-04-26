@@ -13,18 +13,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
-from dutyflow.agent.tools.logic.add_contact_knowledge import AddContactKnowledgeTool
-from dutyflow.agent.tools.logic.close_cli_session import CloseCliSessionTool
-from dutyflow.agent.tools.logic.create_skill import CreateSkillTool
-from dutyflow.agent.tools.logic.exec_cli_command import ExecCliCommandTool
-from dutyflow.agent.tools.logic.get_contact_knowledge_detail import GetContactKnowledgeDetailTool
-from dutyflow.agent.tools.logic.load_skill import LoadSkillTool
-from dutyflow.agent.tools.logic.lookup_contact_identity import LookupContactIdentityTool
-from dutyflow.agent.tools.logic.lookup_responsibility_context import LookupResponsibilityContextTool
-from dutyflow.agent.tools.logic.lookup_source_context import LookupSourceContextTool
-from dutyflow.agent.tools.logic.open_cli_session import OpenCliSessionTool
-from dutyflow.agent.tools.logic.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool
-from dutyflow.agent.tools.logic.update_contact_knowledge import UpdateContactKnowledgeTool
+from dutyflow.agent.tools.logic.cli_tools.close_cli_session import CloseCliSessionTool
+from dutyflow.agent.tools.logic.cli_tools.exec_cli_command import ExecCliCommandTool
+from dutyflow.agent.tools.logic.cli_tools.open_cli_session import OpenCliSessionTool
+from dutyflow.agent.tools.logic.contact_tools.add_contact_knowledge import AddContactKnowledgeTool
+from dutyflow.agent.tools.logic.contact_tools.get_contact_knowledge_detail import GetContactKnowledgeDetailTool
+from dutyflow.agent.tools.logic.contact_tools.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool
+from dutyflow.agent.tools.logic.contact_tools.update_contact_knowledge import UpdateContactKnowledgeTool
+from dutyflow.agent.tools.logic.identity_tools.lookup_contact_identity import LookupContactIdentityTool
+from dutyflow.agent.tools.logic.identity_tools.lookup_responsibility_context import LookupResponsibilityContextTool
+from dutyflow.agent.tools.logic.identity_tools.lookup_source_context import LookupSourceContextTool
+from dutyflow.agent.tools.logic.skill_tools.create_skill import CreateSkillTool
+from dutyflow.agent.tools.logic.skill_tools.load_skill import LoadSkillTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext

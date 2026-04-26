@@ -16,8 +16,8 @@ from dutyflow.agent.skills import SkillRegistry  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock, create_initial_agent_state  # noqa: E402
 from dutyflow.agent.tools.context import ToolUseContext  # noqa: E402
 from dutyflow.agent.tools.executor import ToolExecutor  # noqa: E402
-from dutyflow.agent.tools.logic.create_skill import CreateSkillTool  # noqa: E402
-from dutyflow.agent.tools.logic.load_skill import LoadSkillTool  # noqa: E402
+from dutyflow.agent.tools.logic.skill_tools.create_skill import CreateSkillTool  # noqa: E402
+from dutyflow.agent.tools.logic.skill_tools.load_skill import LoadSkillTool  # noqa: E402
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 from dutyflow.agent.tools.router import ToolRouter  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402
