@@ -663,57 +663,113 @@ Demo 期最终必须实现以下完整链路：
 - [ ] 提供 Demo 来源样例，如群、文档、文件或私聊。
 - [ ] 确认第一版联系人补充知识 topic 范围，例如偏好、风险、协作习惯。
 
-## Step 5: 事件入口与飞书占位适配层
+## Step 5: 飞书接入层与原始事件入口
 
 ### 最终效果
 
-系统可以接收本地 fixture 事件，并预留真实飞书事件接入接口。真实飞书未接入前，所有飞书 API 调用返回明确字符串占位。
+系统通过飞书开放平台应用和 Python SDK 长连接接收原始事件，完成最小接入闭环：建立应用身份、接收 Bot 可见消息事件、按账号空间归属原始事件、做最小去重并落盘，不在本阶段做语义解析、业务判断或 Agent Loop 注入。
+
+本阶段初版边界固定为：
+
+- 单 `app_id`
+- 单 `tenant_key`
+- 单 `owner_open_id`
+- 单 Bot 汇报目标
+- 只接收：
+  - 用户与 Bot 的私聊消息
+  - 群聊中 `@Bot` 的消息
+
+本阶段必须显式预留后续扩展方向：
+
+- 后续项目需要获取完整的“用户可见信息”，而不只是当前 Bot 可见信息。
+- 该扩展不在本阶段实现，但账号空间、配置入口和接入抽象必须允许后续接入用户 OAuth 链路。
+
+本阶段不允许按“读取本机飞书客户端登录态”设计；所有接入必须基于飞书开放平台应用、凭证、Token 和事件订阅。
 
 ### 验收标准
 
-- 本地事件可进入主流程。
-- 事件记录落盘到 `data/events/`。
-- 飞书 client 有真实接口方法名，但 Demo 未接入时返回占位字符串。
-- 占位接口有中文注释说明“Demo 期未接真实飞书 API”。
-- 占位接口不会伪装真实发送成功。
+- 本地 Agent 可使用飞书 SDK 长连接接收原始事件，不依赖本机飞书客户端是否打开。
+- 事件回调只做最小归属、去重、落盘和快速确认；不在回调中执行重逻辑。
+- 初版只接收：
+  - 用户与 Bot 的私聊消息
+  - 群聊中 `@Bot` 的消息
+- 原始事件记录落盘到 `data/events/`，保留最小接入字段和完整原始 payload。
+- 接入层必须区分以下空间，不得混用：
+  - `installation_scope = app_id + tenant_key`
+  - `owner_profile = app_id + tenant_key + owner_open_id`
+  - `sender_subject = app_id + tenant_key + sender_open_id`
+  - `chat_binding = app_id + tenant_key + chat_id`
+- 接入层必须至少实现两层去重：
+  - `event_dedup_key = event_id`
+  - `message_dedup_key = message_id`
+- 如涉及消息资源拉取，必须以消息内原始资源标识做补充去重，例如 `message_id + file_key`。
+- 所有显式配置项，包括飞书 Bot 和后续用户权限相关的 `app_id`、`secret`、验证字段、加密字段、Owner 标识、OAuth 配置、显式 Token/Refresh Token 占位，必须统一来自 `.env`，并通过 `config` 模块读取。
+- 本阶段即使未接入完整用户 OAuth，也必须为后续“用户可见信息”能力预留配置链路和抽象边界。
+- 接入层不做：
+  - 身份解析
+  - 联系人关系判断
+  - 权重判断
+  - 任务生成
+  - Agent Loop 注入
 
 ### 涉及文件、类、方法、模块
 
+- `src/dutyflow/config/env.py`
+  - `EnvConfig`
+  - `load_env_config`
+  - `validate_env_config`
+- `.env.example`
 - `src/dutyflow/feishu/events.py`
   - `FeishuEventAdapter`
-  - `parse_event`
+  - `normalize_raw_event`
+  - `build_event_envelope`
   - `create_local_fixture_event`
 - `src/dutyflow/feishu/client.py`
   - `FeishuClient`
-  - `fetch_context_placeholder`
-  - `send_message_placeholder`
-- `src/dutyflow/feishu/feedback.py`
-  - `FeishuFeedbackService`
+  - `connect_long_connection`
+  - `fetch_message_resource`
+  - `send_message`
+- `src/dutyflow/feishu/runtime.py`
+  - `FeishuIngressService`
+  - `handle_raw_event`
+  - `ack_event`
 - `src/dutyflow/storage/markdown_store.py`
 - `data/events/`
 - `test/test_feishu_events.py`
 
 ### 未敲定问题
 
-- 飞书真实事件 payload 结构。
-- 飞书消息、文档、文件 API 权限和字段。
-- 飞书回调、认证、加解密方式。
+- 飞书真实事件 payload 的最终字段差异与第一版白名单事件范围。
+- Bot 拉取消息内图片、文件、音视频资源时所需的最小权限集合。
+- `owner_open_id` 与默认汇报会话的确定方式，是纯配置还是可由事件发现补齐。
+- 后续从“Bot 可见信息”扩展到“完整用户可见信息”时，用户 OAuth 的落地边界和授权流程。
 
 ### 任务清单
 
-- [ ] 实现本地 fixture 事件输入。
-- [ ] 实现事件解析占位结构。
-- [ ] 实现 FeishuClient 占位方法。
-- [ ] 实现 FeedbackService 占位方法。
-- [ ] 事件写入 Markdown。
+- [ ] 扩展 `.env.example` 与 `EnvConfig`，将飞书接入显式配置统一收口到 `.env`。
+- [ ] 增加 Owner、租户、Bot、用户 OAuth 预留字段的配置校验和读取链路。
+- [ ] 实现基于飞书 SDK 的长连接接入骨架。
+- [ ] 实现原始事件最小规范化，不做业务解析，只抽取接入层 routing 所需字段。
+- [ ] 实现账号空间归属：
+  - `installation_scope`
+  - `owner_profile`
+  - `sender_subject`
+  - `chat_binding`
+- [ ] 实现按 `event_id` 和 `message_id` 的最小去重逻辑。
+- [ ] 实现原始事件 Markdown 落盘。
+- [ ] 实现消息内原始资源获取接口。
+- [ ] 保留 Bot 发消息接口，但不在本阶段承接完整回馈逻辑。
+- [ ] 保留本地 fixture 事件输入，用于无真实飞书环境时测试接入层。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写 `test/test_feishu_events.py`。
 - [ ] 执行本阶段完整链路检查。
 
 ### 人工确认
 
-- [ ] 提供飞书应用凭证和权限范围前，不接真实 API。
-- [ ] 提供真实事件样例前，继续使用 fixture。
+- [ ] 提供飞书应用凭证、事件订阅方式和最小权限范围前，不接真实 API。
+- [ ] 确认初版只接收 Bot 私聊和群聊 `@Bot` 消息，不纳入“别人私聊用户”的事件面。
+- [ ] 提供 `tenant_key`、`owner_open_id` 和默认汇报目标后，再接真实长连接。
+- [ ] 提供真实事件样例前，继续使用 fixture 和官方文档字段。
 
 ## Step 6: 权重决策、硬规则与决策留痕
 
