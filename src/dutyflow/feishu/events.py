@@ -22,6 +22,7 @@ class FeishuEventEnvelope:
     sender_open_id: str
     sender_user_id: str
     sender_union_id: str
+    message_text: str
     content_preview: str
     mentions_bot: bool
     received_at: str
@@ -34,6 +35,10 @@ class FeishuEventEnvelope:
     def is_group_at_bot(self) -> bool:
         """判断是否为群聊中显式 @Bot 的消息。"""
         return self.chat_type in {"group", "topic_group"} and self.mentions_bot
+
+    def is_bind_request(self) -> bool:
+        """判断当前消息是否为显式的绑定指令。"""
+        return self.is_p2p_message() and self.message_text.strip() == "/bind"
 
 
 class FeishuEventAdapter:
@@ -70,6 +75,7 @@ class FeishuEventAdapter:
             sender_open_id=_as_text(sender_id.get("open_id")),
             sender_user_id=_as_text(sender_id.get("user_id")),
             sender_union_id=_as_text(sender_id.get("union_id")),
+            message_text=_extract_message_text(message.get("content")),
             content_preview=_extract_content_preview(message.get("content")),
             mentions_bot=_mentions_bot(mentions),
             received_at=received_at or _received_at_from_header(header),
@@ -182,6 +188,22 @@ def _extract_content_preview(raw_content: object) -> str:
     if isinstance(parsed, Mapping):
         return _preview_from_mapping(dict(parsed))
     return _truncate(content_text)
+
+
+def _extract_message_text(raw_content: object) -> str:
+    """从飞书消息内容中提取完整文本，用于识别绑定指令。"""
+    if isinstance(raw_content, Mapping):
+        return _as_text(dict(raw_content).get("text"))
+    content_text = _as_text(raw_content)
+    if not content_text:
+        return ""
+    try:
+        parsed = json.loads(content_text)
+    except json.JSONDecodeError:
+        return content_text
+    if isinstance(parsed, Mapping):
+        return _as_text(dict(parsed).get("text"))
+    return content_text
 
 
 def _preview_from_mapping(content: dict[str, Any]) -> str:

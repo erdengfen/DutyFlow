@@ -21,6 +21,7 @@ class TestCliChat(unittest.TestCase):
         """help 输出必须包含 /chat。"""
         self.assertIn("/chat", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_calls_app_chat_debug(self) -> None:
         """CLI /chat 应委托给 app 的调试链路。"""
@@ -77,6 +78,31 @@ class TestCliChat(unittest.TestCase):
         cli = CliConsole(_FakeApp())
         self.assertIn("listener_started", cli.handle_command("/feishu listen"))
         self.assertIn('"action": "latest"', cli.handle_command("/feishu latest"))
+        self.assertIn('"action": "doctor_status"', cli.handle_command("/feishu doctor"))
+
+    def test_interactive_feishu_listen_session_keeps_running(self) -> None:
+        """交互式 /feishu listen 应进入监听子会话，直到 /back。"""
+        cli = CliConsole(_FakeApp())
+        inputs = iter(("/feishu listen", "/latest", "/back", "/exit"))
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(cli.start(), 0)
+        output = stdout.getvalue()
+        self.assertIn("Feishu listen started", output)
+        self.assertIn('"action": "listener_started"', output)
+        self.assertIn('"action": "latest"', output)
+
+    def test_interactive_feishu_doctor_session_keeps_running(self) -> None:
+        """交互式 /feishu doctor 应进入诊断子会话，直到 /back。"""
+        cli = CliConsole(_FakeApp())
+        inputs = iter(("/feishu doctor", "/status", "/back", "/exit"))
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(cli.start(), 0)
+        output = stdout.getvalue()
+        self.assertIn("Feishu doctor started", output)
+        self.assertIn('"action": "doctor_status"', output)
+        self.assertIn('"raw_event_count": 0', output)
 
 
 class _FakeApp:
@@ -111,6 +137,14 @@ class _FakeApp:
     def get_latest_feishu_debug(self) -> str:
         """返回测试最近飞书事件。"""
         return '{"action": "latest", "detail": "none"}'
+
+    def start_feishu_doctor_debug(self) -> str:
+        """返回测试飞书 doctor 结果。"""
+        return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
+
+    def get_feishu_doctor_debug(self) -> str:
+        """返回测试飞书 doctor 快照。"""
+        return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
 
 
 class _FakeChatSession:

@@ -56,7 +56,7 @@ class TestEnvConfig(unittest.TestCase):
         self.assertTrue(result.ok)
 
     def test_long_connection_mode_requires_owner_and_tenant(self) -> None:
-        """长连接模式应要求应用与 owner 相关关键字段齐全。"""
+        """长连接模式只应强制要求真正的应用接入字段。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / ".env").write_text(
@@ -68,8 +68,29 @@ class TestEnvConfig(unittest.TestCase):
             config = load_env_config(root)
             result = validate_feishu_ingress_config(config)
         self.assertFalse(result.ok)
-        self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY", result.missing_keys)
-        self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID", result.missing_keys)
+        self.assertIn("DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN", result.missing_keys)
+        self.assertIn("DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY", result.missing_keys)
+
+    def test_long_connection_mode_rejects_placeholder_values(self) -> None:
+        """长连接模式只应拒绝真正必需字段的占位值。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "DUTYFLOW_FEISHU_EVENT_MODE=long_connection\n"
+                "DUTYFLOW_FEISHU_APP_ID=replace-with-feishu-app-id\n"
+                "DUTYFLOW_FEISHU_APP_SECRET=replace-with-feishu-app-secret\n"
+                "DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN=replace-with-feishu-event-token\n"
+                "DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY=replace-with-feishu-encrypt-key\n"
+                "DUTYFLOW_FEISHU_TENANT_KEY=replace-with-feishu-tenant-key\n"
+                "DUTYFLOW_FEISHU_OWNER_OPEN_ID=replace-with-owner-open-id\n"
+                "DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=replace-with-owner-report-chat-id\n",
+                encoding="utf-8",
+            )
+            config = load_env_config(root)
+            result = validate_feishu_ingress_config(config)
+        self.assertFalse(result.ok)
+        self.assertIn("DUTYFLOW_FEISHU_APP_ID", result.invalid_keys)
+        self.assertNotIn("DUTYFLOW_FEISHU_TENANT_KEY", result.invalid_keys)
 
 
 def _self_test() -> None:

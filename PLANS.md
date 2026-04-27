@@ -665,7 +665,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 5: 飞书接入层与原始事件入口
 
-状态：进行中。已完成 `.env` 字段收敛、`EnvConfig` 扩展、fixture 事件输入、原始事件最小规范化、账号空间归属字段、`event_id/message_id` 去重、事件 Markdown 落盘、官方 `lark_oapi` sample 风格的默认长连接 wiring，以及 CLI `/feishu fixture`、`/feishu listen`、`/feishu latest` 本地调试入口。真实凭证和真实网络环境下的人工接入验证仍待执行。
+状态：进行中。已完成 `.env` 字段收敛、`EnvConfig` 扩展、fixture 事件输入、原始事件最小规范化、账号空间归属字段、`event_id/message_id` 去重、事件 Markdown 落盘、官方 `lark_oapi` sample 风格的默认长连接 wiring，以及 CLI `/feishu fixture`、`/feishu listen`、`/feishu latest`、`/feishu doctor` 本地调试入口。当前已支持 bootstrap 模式：收到私聊 `/bind` 后，会从 `im.message.receive_v1` 中提取 `tenant_key`、`sender open_id` 和 `chat_id`，回填 `.env` 对应字段，并由 Bot 回一条绑定成功消息。真实飞书人工验证已完成 p2p 私聊链路：长连接接入、原始事件打印、事件 Markdown 落盘、`/bind` 回填 `.env`、Bot 回信均已跑通；群聊 `@Bot` 和消息资源获取仍待补测。
 
 ### 最终效果
 
@@ -735,6 +735,17 @@ Demo 期最终必须实现以下完整链路：
   - `FeishuIngressService`
   - `handle_raw_event`
   - `ack_event`
+- `src/dutyflow/cli/main.py`
+  - `/feishu fixture`
+  - `/feishu listen`
+  - `/feishu latest`
+  - `/feishu doctor`
+- `src/dutyflow/app.py`
+  - `run_feishu_fixture_debug`
+  - `start_feishu_listener_debug`
+  - `get_latest_feishu_debug`
+  - `start_feishu_doctor_debug`
+  - `get_feishu_doctor_debug`
 - `src/dutyflow/storage/markdown_store.py`
 - `data/events/`
 - `test/test_feishu_events.py`
@@ -820,9 +831,8 @@ Demo 期最终必须实现以下完整链路：
 
 ### 未敲定问题
 
-- 飞书真实事件 payload 的最终字段差异与第一版白名单事件范围。
-- Bot 拉取消息内图片、文件、音视频资源时所需的最小权限集合。
-- `owner_open_id` 与默认汇报会话的确定方式，是纯配置还是可由事件发现补齐。
+- 群聊 `@Bot` 事件的真实样例与第一版白名单范围补测。
+- Bot 拉取消息内图片、文件、音视频资源时所需的最小权限集合与真实响应结构。
 - 后续从“Bot 可见信息”扩展到“完整用户可见信息”时，用户 OAuth 的落地边界和授权流程。
 
 ### 任务清单
@@ -847,10 +857,11 @@ Demo 期最终必须实现以下完整链路：
 
 ### 人工确认
 
-- [ ] 提供飞书应用凭证、事件订阅方式和最小权限范围前，不接真实 API。
-- [ ] 确认初版只接收 Bot 私聊和群聊 `@Bot` 消息，不纳入“别人私聊用户”的事件面。
-- [ ] 提供 `tenant_key`、`owner_open_id` 和默认汇报目标后，再接真实长连接。
-- [ ] 提供真实事件样例前，继续使用 fixture 和官方文档字段。
+- [x] 已提供飞书应用凭证，并确认事件订阅采用长连接模式完成真实 API 接入。
+- [x] 已确认初版只接收 Bot 私聊和群聊 `@Bot` 消息，不纳入“别人私聊用户”的事件面。
+- [x] 已通过私聊 `/bind` 回填 `tenant_key`、`owner_open_id` 和默认汇报目标。
+- [x] 已获取真实 `im.message.receive_v1` 事件样例，并完成 p2p 私聊链路人工验证。
+- [ ] 仍需补测群聊 `@Bot` 事件和消息资源获取场景。
 
 ## Step 6: 权重决策、硬规则与决策留痕
 
@@ -1240,7 +1251,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 
 ## 当前阻塞与风险记录
 
-- [ ] 飞书真实 API 结构、权限、事件 payload、回馈方式未敲定；`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 仍为项目暂定字段。
+- [ ] Step 5 已完成真实 p2p 私聊接入与 `/bind` bootstrap，但群聊 `@Bot` 事件和消息资源获取仍待人工补测；`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 仍为预留字段。
 - [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定；真实 key 提供后需要补跑完整链路。
 - [ ] 权重 skill 第一版提示词和输出格式未敲定。
 - [ ] 审批在飞书端的交互形式未敲定。
@@ -1255,7 +1266,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 2 | completed | 2026-04-23 | 已完成最小 agent 基架控制面、权限、恢复、审计和 Hook 预留接口，并通过阶段回归。 |
 | Step 3 | completed | 2026-04-23 | 已完成 skills 解析层、`load_skill` 内部工具、system message manifest 注入和阶段测试。 |
 | Step 4 | pending |  |  |
-| Step 5 | pending |  |  |
+| Step 5 | in_progress | 2026-04-27 | 已完成真实 p2p 私聊链路、`/bind` 回填 `.env`、Bot 回信与 `/feishu doctor` 诊断；群聊 `@Bot` 与消息资源获取仍待补测。 |
 | Step 6 | pending |  |  |
 | Step 7 | pending |  |  |
 | Step 8 | pending |  |  |

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
 from typing import Any, Mapping
 
-from dutyflow.config.env import EnvConfig, validate_feishu_ingress_config
+from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
 from dutyflow.storage.file_store import FileStore
@@ -24,6 +24,7 @@ class FeishuIngressResult:
     message_id: str
     record_path: str
     detail: str
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 class FeishuIngressService:
@@ -53,16 +54,19 @@ class FeishuIngressService:
         """启动长连接接入骨架，收到事件后交给当前服务处理。"""
         validation = validate_feishu_ingress_config(self.config)
         if not validation.ok:
-            return FeishuClientResult(
+            result = FeishuClientResult(
                 ok=False,
                 status="invalid_config",
                 detail=validation.message(),
             )
+            self.client.latest_listener_result = result
+            return result
         return self.client.connect_long_connection(self._handle_for_connection)
 
     def handle_raw_event(self, raw_event: Mapping[str, Any]) -> FeishuIngressResult:
         """处理单条原始事件，执行过滤、去重和结构化落盘。"""
         envelope = self.adapter.build_event_envelope(raw_event)
+        event_payload = self._build_event_debug_payload(envelope)
         if not self._is_supported_event(envelope):
             result = FeishuIngressResult(
                 action="ignored",
@@ -70,23 +74,34 @@ class FeishuIngressService:
                 message_id=envelope.message_id,
                 record_path="",
                 detail="event is outside Step 5 initial scope",
+                payload={**event_payload, **self._build_discovery_payload(envelope)},
             )
             self.latest_result = result
             return result
-        duplicate = self._detect_duplicate(envelope)
+        duplicate = self._detect_duplicate(envelope, event_payload)
         if duplicate is not None:
             self.latest_result = duplicate
             return duplicate
+        bind_payload: dict[str, Any] = {}
+        action = "accepted"
+        detail = "event accepted and persisted"
+        if envelope.is_bind_request():
+            bind_payload = self._handle_bind_request(envelope)
+            action = "bind_saved"
+            detail = "bind command processed and persisted"
         record_path = self._write_event_record(envelope)
         self._remember_event(envelope)
         result = FeishuIngressResult(
-            action="accepted",
+            action=action,
             event_id=envelope.event_id,
             message_id=envelope.message_id,
             record_path=str(record_path),
-            detail="event accepted and persisted",
+            detail=detail,
+            payload={**event_payload, **self._build_discovery_payload(envelope), **bind_payload},
         )
         self.latest_result = result
+        if envelope.is_bind_request():
+            self._print_bind_result(result)
         return result
 
     def ack_event(self, result: FeishuIngressResult) -> dict[str, Any]:
@@ -96,6 +111,8 @@ class FeishuIngressService:
     def _handle_for_connection(self, raw_event: Mapping[str, Any]) -> dict[str, Any]:
         """把长连接收到的原始事件桥接到统一确认格式。"""
         result = self.handle_raw_event(raw_event)
+        if result.action != "bind_saved":
+            self._print_live_event_result(result)
         return self.ack_event(result)
 
     def _is_supported_event(self, envelope: FeishuEventEnvelope) -> bool:
@@ -105,6 +122,7 @@ class FeishuIngressService:
     def _detect_duplicate(
         self,
         envelope: FeishuEventEnvelope,
+        event_payload: Mapping[str, Any],
     ) -> FeishuIngressResult | None:
         """按 event_id 和 message_id 执行最小去重。"""
         if envelope.event_id and envelope.event_id in self.seen_event_ids:
@@ -114,6 +132,7 @@ class FeishuIngressService:
                 message_id=envelope.message_id,
                 record_path="",
                 detail="event_id already processed",
+                payload={**event_payload, **self._build_discovery_payload(envelope)},
             )
         if envelope.message_id and envelope.message_id in self.seen_message_ids:
             return FeishuIngressResult(
@@ -122,6 +141,7 @@ class FeishuIngressService:
                 message_id=envelope.message_id,
                 record_path="",
                 detail="message_id already processed",
+                payload={**event_payload, **self._build_discovery_payload(envelope)},
             )
         return None
 
@@ -171,6 +191,112 @@ class FeishuIngressService:
             event_ids.add(event_id)
         if message_id:
             message_ids.add(message_id)
+
+    def _build_discovery_payload(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
+        """为首次人工接入提供可回填到 `.env` 的候选字段。"""
+        tenant_key = envelope.tenant_key or self.config.feishu_tenant_key
+        owner_open_id = self.config.feishu_owner_open_id
+        owner_report_chat_id = self.config.feishu_owner_report_chat_id
+        missing_env_keys: list[str] = []
+        payload = {
+            "tenant_key_candidate": tenant_key,
+            "owner_open_id_candidate": owner_open_id,
+            "owner_report_chat_id_candidate": owner_report_chat_id,
+            "candidate_source": "config",
+        }
+        if _is_bootstrap_field_missing(self.config.feishu_tenant_key):
+            payload["tenant_key_candidate"] = tenant_key
+            if tenant_key:
+                missing_env_keys.append("DUTYFLOW_FEISHU_TENANT_KEY")
+                payload["candidate_source"] = "event"
+        if envelope.is_p2p_message():
+            if _is_bootstrap_field_missing(self.config.feishu_owner_open_id):
+                payload["owner_open_id_candidate"] = envelope.sender_open_id
+                if envelope.sender_open_id:
+                    missing_env_keys.append("DUTYFLOW_FEISHU_OWNER_OPEN_ID")
+                    payload["candidate_source"] = "event"
+            if _is_bootstrap_field_missing(self.config.feishu_owner_report_chat_id):
+                payload["owner_report_chat_id_candidate"] = envelope.chat_id
+                if envelope.chat_id:
+                    missing_env_keys.append("DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID")
+                    payload["candidate_source"] = "event"
+        payload["missing_env_keys"] = missing_env_keys
+        return payload
+
+    def _build_event_debug_payload(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
+        """为本地 CLI 输出构造精简事件摘要。"""
+        return {
+            "event_type": envelope.event_type,
+            "chat_type": envelope.chat_type,
+            "chat_id": envelope.chat_id,
+            "sender_open_id": envelope.sender_open_id,
+            "content_preview": envelope.content_preview,
+        }
+
+    def _handle_bind_request(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
+        """处理 `/bind` 指令，回填 `.env` 并向当前会话回消息。"""
+        env_values = {
+            "DUTYFLOW_FEISHU_TENANT_KEY": envelope.tenant_key,
+            "DUTYFLOW_FEISHU_OWNER_OPEN_ID": envelope.sender_open_id,
+            "DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID": envelope.chat_id,
+        }
+        saved_keys = save_env_values(self.project_root, env_values)
+        self._apply_bound_values_to_config(env_values)
+        message_result = self.client.send_message(
+            envelope.chat_id,
+            "绑定成功。已记录 tenant_key、owner_open_id 和 owner_report_chat_id。",
+        )
+        return {
+            "bind_command_detected": True,
+            "saved_env_keys": saved_keys,
+            "saved_env_values": env_values,
+            "send_message_status": message_result.status,
+            "send_message_ok": message_result.ok,
+            "send_message_payload": message_result.payload,
+        }
+
+    def _apply_bound_values_to_config(self, env_values: Mapping[str, str]) -> None:
+        """把绑定结果同步写回当前进程内配置，避免后续仍使用占位值。"""
+        self.config.feishu_tenant_key = env_values["DUTYFLOW_FEISHU_TENANT_KEY"]
+        self.config.feishu_owner_open_id = env_values["DUTYFLOW_FEISHU_OWNER_OPEN_ID"]
+        self.config.feishu_owner_report_chat_id = env_values[
+            "DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID"
+        ]
+
+    def _print_bind_result(self, result: FeishuIngressResult) -> None:
+        """在本地 CLI 中直接打印绑定结果，便于首次人工接入。"""
+        print("\n[Feishu] bind request received", flush=True)
+        payload = {
+            "status": "ok",
+            "action": result.action,
+            "event_id": result.event_id,
+            "message_id": result.message_id,
+            "record_path": result.record_path,
+            "detail": result.detail,
+            "payload": result.payload,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+
+    def _print_live_event_result(self, result: FeishuIngressResult) -> None:
+        """在本地 CLI 中打印实时接入结果，证明监听仍在持续运行。"""
+        payload = {
+            "status": "ok",
+            "action": result.action,
+            "event_id": result.event_id,
+            "message_id": result.message_id,
+            "detail": result.detail,
+            "payload": {
+                "event_type": result.payload.get("event_type", ""),
+                "chat_type": result.payload.get("chat_type", ""),
+                "chat_id": result.payload.get("chat_id", ""),
+                "sender_open_id": result.payload.get("sender_open_id", ""),
+                "content_preview": result.payload.get("content_preview", ""),
+            },
+        }
+        if result.record_path:
+            payload["record_path"] = result.record_path
+        print("\n[Feishu] event received", flush=True)
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
 
 
 def _build_record_id(envelope: FeishuEventEnvelope) -> str:
@@ -260,6 +386,12 @@ def _build_event_body(
 def _join_scope_id(*parts: str) -> str:
     """把账号空间各段稳定拼成统一 scope id。"""
     return ":".join(part for part in parts if part)
+
+
+def _is_bootstrap_field_missing(value: str) -> bool:
+    """判断 bootstrap 阶段的 owner/tenant 字段是否仍未完成填写。"""
+    normalized = value.strip().lower()
+    return not normalized or normalized.startswith("replace-with-")
 
 
 def _self_test() -> None:

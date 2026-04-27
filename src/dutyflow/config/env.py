@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 
 @dataclass
@@ -77,6 +78,7 @@ class EnvConfig:
     def validate_feishu_ingress(self) -> EnvValidationResult:
         """按 Step 5 接入模式校验飞书接入所需字段。"""
         invalid = self._validate_feishu_event_mode()
+        invalid.extend(self._invalid_feishu_placeholder_keys_for_mode())
         missing = self._missing_feishu_keys_for_mode()
         return EnvValidationResult(
             ok=not missing and not invalid,
@@ -97,11 +99,26 @@ class EnvConfig:
         required = {
             "DUTYFLOW_FEISHU_APP_ID": self.feishu_app_id,
             "DUTYFLOW_FEISHU_APP_SECRET": self.feishu_app_secret,
-            "DUTYFLOW_FEISHU_TENANT_KEY": self.feishu_tenant_key,
-            "DUTYFLOW_FEISHU_OWNER_OPEN_ID": self.feishu_owner_open_id,
-            "DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID": self.feishu_owner_report_chat_id,
+            "DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN": self.feishu_event_verify_token,
+            "DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY": self.feishu_event_encrypt_key,
         }
-        return [key for key, value in required.items() if not value]
+        missing: list[str] = []
+        for key, value in required.items():
+            if not value:
+                missing.append(key)
+        return missing
+
+    def _invalid_feishu_placeholder_keys_for_mode(self) -> list[str]:
+        """拦截 `.env.example` 风格的占位值，避免误判为真实配置。"""
+        if self.feishu_event_mode != "long_connection":
+            return []
+        fields = {
+            "DUTYFLOW_FEISHU_APP_ID": self.feishu_app_id,
+            "DUTYFLOW_FEISHU_APP_SECRET": self.feishu_app_secret,
+            "DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN": self.feishu_event_verify_token,
+            "DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY": self.feishu_event_encrypt_key,
+        }
+        return [key for key, value in fields.items() if _is_placeholder_value(value)]
 
 
 def load_env_config(project_root: Path | None = None) -> EnvConfig:
@@ -160,6 +177,17 @@ def validate_feishu_ingress_config(config: EnvConfig) -> EnvValidationResult:
     return config.validate_feishu_ingress()
 
 
+def save_env_values(project_root: Path, values: Mapping[str, str]) -> list[str]:
+    """把指定键值稳定回填到项目根目录 `.env` 文件。"""
+    env_path = project_root / ".env"
+    existing_lines = []
+    if env_path.exists():
+        existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+    updated_lines, saved_keys = _upsert_env_lines(existing_lines, values)
+    env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    return saved_keys
+
+
 def _read_dotenv(path: Path) -> dict[str, str]:
     """读取简单 .env 文件，支持 KEY=VALUE 和注释。"""
     if not path.exists():
@@ -186,6 +214,39 @@ def _split_comma_separated_values(value: str) -> list[str]:
     if not value.strip():
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _is_placeholder_value(value: str) -> bool:
+    """识别 `.env.example` 中的占位字符串，避免误判为真实配置。"""
+    normalized = value.strip().lower()
+    return normalized.startswith("replace-with-")
+
+
+def _upsert_env_lines(
+    lines: list[str],
+    values: Mapping[str, str],
+) -> tuple[list[str], list[str]]:
+    """在保留注释和未知字段的前提下更新指定 env 键。"""
+    pending = {key: value for key, value in values.items() if value.strip()}
+    saved_keys: list[str] = []
+    updated_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated_lines.append(line)
+            continue
+        key, _old_value = line.split("=", 1)
+        env_key = key.strip()
+        if env_key not in pending:
+            updated_lines.append(line)
+            continue
+        updated_lines.append(f"{env_key}={pending[env_key]}")
+        saved_keys.append(env_key)
+        pending.pop(env_key)
+    for env_key, env_value in pending.items():
+        updated_lines.append(f"{env_key}={env_value}")
+        saved_keys.append(env_key)
+    return updated_lines, saved_keys
 
 
 def _self_test() -> None:

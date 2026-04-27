@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
 import argparse
 import json
 from dataclasses import dataclass
+import os
 from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
@@ -170,6 +171,7 @@ class DutyFlowApp:
             message_id=result.message_id,
             record_path=result.record_path,
             detail=result.detail,
+            payload=result.payload,
         )
 
     def start_feishu_listener_debug(self) -> str:
@@ -179,20 +181,50 @@ class DutyFlowApp:
             result = service.start_long_connection()
         except Exception as exc:  # noqa: BLE001
             return _feishu_error("listener_failed", str(exc))
+        detail = result.detail
+        if result.ok and result.status in {"listener_started", "already_running"}:
+            detail = (
+                f"{result.detail}. send /bind to the bot in a p2p chat and watch this terminal "
+                "for realtime Feishu event logs."
+            )
         return _feishu_debug_payload(
             status="ok" if result.ok else "error",
             action=result.status,
             event_id="",
             message_id="",
             record_path="",
-            detail=result.detail,
+            detail=detail,
             payload=result.payload,
         )
+
+    def start_feishu_doctor_debug(self) -> str:
+        """启动飞书长连接并返回 doctor 诊断快照。"""
+        service = self._get_or_create_feishu_ingress_service()
+        listener_status = service.client.get_listener_status()
+        if listener_status is None or listener_status.status not in {
+            "listener_started",
+            "already_running",
+        }:
+            start_payload = self.start_feishu_listener_debug()
+            if _debug_payload_is_error(start_payload):
+                return start_payload
+        return self.get_feishu_doctor_debug()
 
     def get_latest_feishu_debug(self) -> str:
         """返回最近一条飞书接入结果，便于本地 CLI 调试查看。"""
         service = self._get_or_create_feishu_ingress_service()
         if service.latest_result is None:
+            listener_status = service.client.get_listener_status()
+            if listener_status is not None:
+                return _feishu_debug_payload(
+                    status="ok" if listener_status.ok else "error",
+                    action=listener_status.status,
+                    event_id="",
+                    message_id="",
+                    record_path="",
+                    detail=listener_status.detail,
+                    payload=listener_status.payload,
+                )
             return _feishu_debug_payload(
                 status="empty",
                 action="no_event",
@@ -209,6 +241,32 @@ class DutyFlowApp:
             message_id=result.message_id,
             record_path=result.record_path,
             detail=result.detail,
+            payload=result.payload,
+        )
+
+    def get_feishu_doctor_debug(self) -> str:
+        """返回当前飞书监听实例的本地诊断视图。"""
+        service = self._get_or_create_feishu_ingress_service()
+        listener_status = service.client.get_listener_status()
+        latest_result = service.latest_result
+        if listener_status is None:
+            return _feishu_debug_payload(
+                status="empty",
+                action="doctor_no_listener",
+                event_id="",
+                message_id="",
+                record_path="",
+                detail="feishu listener is not running",
+                payload=self._build_feishu_doctor_payload(service, None, latest_result),
+            )
+        return _feishu_debug_payload(
+            status="ok" if listener_status.ok else "error",
+            action="doctor_status",
+            event_id=latest_result.event_id if latest_result is not None else "",
+            message_id=latest_result.message_id if latest_result is not None else "",
+            record_path=latest_result.record_path if latest_result is not None else "",
+            detail=listener_status.detail,
+            payload=self._build_feishu_doctor_payload(service, listener_status, latest_result),
         )
 
     def create_chat_debug_session(self) -> ChatDebugSession:
@@ -260,6 +318,43 @@ class DutyFlowApp:
         """构造当前运行链路可复用的审计日志对象。"""
         markdown_store = MarkdownStore(FileStore(self.project_root))
         return AuditLogger(markdown_store, config.log_dir)
+
+    def _build_feishu_doctor_payload(
+        self,
+        service: FeishuIngressService,
+        listener_status: object,
+        latest_result: object,
+    ) -> dict[str, Any]:
+        """汇总当前监听器、配置占位和最近接入结果，供 doctor 模式查看。"""
+        config = service.config
+        listener_payload = {}
+        listener_ok = False
+        listener_state = ""
+        if listener_status is not None:
+            listener_ok = bool(getattr(listener_status, "ok", False))
+            listener_state = str(getattr(listener_status, "status", "") or "")
+            listener_payload = dict(getattr(listener_status, "payload", {}) or {})
+        latest_payload = {}
+        latest_action = ""
+        if latest_result is not None:
+            latest_action = str(getattr(latest_result, "action", "") or "")
+            latest_payload = dict(getattr(latest_result, "payload", {}) or {})
+        return {
+            "pid": os.getpid(),
+            "app_id": config.feishu_app_id,
+            "event_mode": config.feishu_event_mode,
+            "log_level": config.log_level,
+            "listener_ok": listener_ok,
+            "listener_state": listener_state,
+            "latest_ingress_action": latest_action,
+            "tenant_key_configured": _is_real_env_value(config.feishu_tenant_key),
+            "owner_open_id_configured": _is_real_env_value(config.feishu_owner_open_id),
+            "owner_report_chat_id_configured": _is_real_env_value(
+                config.feishu_owner_report_chat_id
+            ),
+            "listener": listener_payload,
+            "latest_ingress_payload": latest_payload,
+        }
 
     def _get_or_create_feishu_ingress_service(self) -> FeishuIngressService:
         """按当前配置构造并复用飞书接入层服务。"""
@@ -344,6 +439,21 @@ def _feishu_error(error_kind: str, message: str) -> str:
         record_path="",
         detail=message,
     )
+
+
+def _is_real_env_value(value: str) -> bool:
+    """判断配置值是否已脱离示例占位，便于 doctor 模式快速查看。"""
+    normalized = value.strip().lower()
+    return bool(normalized) and not normalized.startswith("replace-with-")
+
+
+def _debug_payload_is_error(text: str) -> bool:
+    """判断本地调试输出是否为 error，供 doctor 启动链路复用。"""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return payload.get("status") == "error"
 
 
 def _self_test() -> None:

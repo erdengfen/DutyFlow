@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import io
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -44,6 +46,7 @@ class TestFeishuEvents(unittest.TestCase):
         self.assertEqual(envelope.event_type, "im.message.receive_v1")
         self.assertTrue(envelope.is_group_at_bot())
         self.assertEqual(envelope.content_preview, "hello")
+        self.assertEqual(envelope.message_text, "hello")
 
     def test_ingress_service_persists_event_and_deduplicates_message_id(self) -> None:
         """接入层应写入事件 Markdown，并对重复 message_id 去重。"""
@@ -79,10 +82,12 @@ class TestFeishuEvents(unittest.TestCase):
                 adapter=adapter,
                 client=_client_with_connector(config, connector),
             )
-            result = service.start_long_connection()
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                result = service.start_long_connection()
             self.assertTrue(result.ok)
             self.assertTrue(connector.connected)
             self.assertEqual(len(list((root / "data" / "events").glob("evt_*.md"))), 1)
+            self.assertIn("[Feishu] event received", stdout.getvalue())
 
     def test_group_message_without_bot_mention_is_ignored(self) -> None:
         """群聊非 @Bot 消息不应进入 Step 5 初版主链。"""
@@ -95,20 +100,71 @@ class TestFeishuEvents(unittest.TestCase):
             result = service.handle_raw_event(raw_event)
             self.assertEqual(result.action, "ignored")
 
+    def test_bootstrap_payload_exposes_owner_candidates_after_p2p_event(self) -> None:
+        """owner 相关字段缺失时，应在 p2p 事件后返回可回填候选值。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, event_mode="long_connection", bootstrap_owner=True)
+            adapter = FeishuEventAdapter()
+            service = FeishuIngressService(root, config, adapter=adapter)
+            raw_event = adapter.create_local_fixture_event(
+                "bootstrap",
+                tenant_key="tenant_from_event",
+                sender_open_id="ou_from_event",
+                chat_id="oc_from_event",
+            )
+            result = service.handle_raw_event(raw_event)
+            self.assertEqual(result.action, "accepted")
+            self.assertEqual(result.payload["tenant_key_candidate"], "tenant_from_event")
+            self.assertEqual(result.payload["owner_open_id_candidate"], "ou_from_event")
+            self.assertEqual(result.payload["owner_report_chat_id_candidate"], "oc_from_event")
+            self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID", result.payload["missing_env_keys"])
 
-def _write_env(root: Path, *, event_mode: str) -> object:
+    def test_bind_command_updates_env_and_sends_confirmation(self) -> None:
+        """收到 /bind 时应保存关键配置，并向当前会话发送绑定成功消息。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, event_mode="long_connection", bootstrap_owner=True)
+            adapter = FeishuEventAdapter()
+            client = FakeBindClient()
+            service = FeishuIngressService(root, config, adapter=adapter, client=client)
+            raw_event = adapter.create_local_fixture_event(
+                "/bind",
+                tenant_key="tenant_bind",
+                sender_open_id="ou_bind",
+                chat_id="oc_bind",
+            )
+            result = service.handle_raw_event(raw_event)
+            self.assertEqual(result.action, "bind_saved")
+            self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY", result.payload["saved_env_keys"])
+            self.assertTrue(result.payload["send_message_ok"])
+            self.assertEqual(client.sent_chat_id, "oc_bind")
+            env_text = (root / ".env").read_text(encoding="utf-8")
+            self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY=tenant_bind", env_text)
+            self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID=ou_bind", env_text)
+            self.assertIn("DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=oc_bind", env_text)
+
+
+def _write_env(root: Path, *, event_mode: str, bootstrap_owner: bool = False) -> object:
     """写入最小可用 .env，并返回解析后的配置对象。"""
+    tenant_key = "replace-with-feishu-tenant-key" if bootstrap_owner else "tenant_demo"
+    owner_open_id = "replace-with-owner-open-id" if bootstrap_owner else "ou_owner"
+    owner_report_chat_id = (
+        "replace-with-owner-report-chat-id" if bootstrap_owner else "oc_owner"
+    )
     content = (
         "DUTYFLOW_MODEL_API_KEY=demo-key\n"
         "DUTYFLOW_MODEL_BASE_URL=https://example.invalid/model\n"
         "DUTYFLOW_MODEL_NAME=demo-model\n"
         "DUTYFLOW_FEISHU_APP_ID=app_demo\n"
         "DUTYFLOW_FEISHU_APP_SECRET=secret_demo\n"
+        "DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN=verify_demo\n"
+        "DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY=encrypt_demo\n"
         "DUTYFLOW_FEISHU_EVENT_MODE="
         f"{event_mode}\n"
-        "DUTYFLOW_FEISHU_TENANT_KEY=tenant_demo\n"
-        "DUTYFLOW_FEISHU_OWNER_OPEN_ID=ou_owner\n"
-        "DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=oc_owner\n"
+        f"DUTYFLOW_FEISHU_TENANT_KEY={tenant_key}\n"
+        f"DUTYFLOW_FEISHU_OWNER_OPEN_ID={owner_open_id}\n"
+        f"DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID={owner_report_chat_id}\n"
         "DUTYFLOW_DATA_DIR=data\n"
         "DUTYFLOW_LOG_DIR=data/logs\n"
     )
@@ -121,6 +177,26 @@ def _client_with_connector(config, connector):
     from dutyflow.feishu.client import FeishuClient  # noqa: WPS433
 
     return FeishuClient(config, connector=connector)
+
+
+class FakeBindClient:
+    """模拟绑定流程里最小可用的发送消息客户端。"""
+
+    def __init__(self) -> None:
+        """记录最近一次发送目标。"""
+        self.sent_chat_id = ""
+        self.sent_content = ""
+
+    def send_message(self, chat_id: str, content: str, *, msg_type: str = "text"):
+        """模拟发送绑定成功消息。"""
+        self.sent_chat_id = chat_id
+        self.sent_content = content
+        return FeishuClientResult(
+            ok=True,
+            status="sent",
+            detail="fake bind confirmation sent",
+            payload={"chat_id": chat_id, "msg_type": msg_type, "message_id": "om_bind_reply"},
+        )
 
 
 def _self_test() -> None:
