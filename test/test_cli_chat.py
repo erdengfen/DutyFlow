@@ -20,6 +20,7 @@ class TestCliChat(unittest.TestCase):
     def test_help_lists_chat_command(self) -> None:
         """help 输出必须包含 /chat。"""
         self.assertIn("/chat", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_calls_app_chat_debug(self) -> None:
         """CLI /chat 应委托给 app 的调试链路。"""
@@ -65,6 +66,18 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("chat_turn_failed", output)
         self.assertIn("DutyFlow CLI started", output)
 
+    def test_feishu_fixture_command_calls_app_debug_entry(self) -> None:
+        """CLI /feishu fixture 应委托给 app 的接入层调试入口。"""
+        output = CliConsole(_FakeApp()).handle_command("/feishu fixture ping")
+        self.assertIn('"action": "fixture"', output)
+        self.assertIn('"detail": "ping"', output)
+
+    def test_feishu_listener_and_latest_commands_are_available(self) -> None:
+        """CLI 应暴露飞书监听和最近结果查看命令。"""
+        cli = CliConsole(_FakeApp())
+        self.assertIn("listener_started", cli.handle_command("/feishu listen"))
+        self.assertIn('"action": "latest"', cli.handle_command("/feishu latest"))
+
 
 class _FakeApp:
     """提供 CLI 测试所需的最小 app 接口。"""
@@ -86,6 +99,18 @@ class _FakeApp:
     def create_chat_debug_session(self) -> object:
         """返回测试 chat 会话。"""
         return _FakeChatSession()
+
+    def run_feishu_fixture_debug(self, user_text: str) -> str:
+        """返回测试飞书 fixture 结果。"""
+        return f'{{"action": "fixture", "detail": "{user_text}"}}'
+
+    def start_feishu_listener_debug(self) -> str:
+        """返回测试飞书监听结果。"""
+        return '{"action": "listener_started"}'
+
+    def get_latest_feishu_debug(self) -> str:
+        """返回测试最近飞书事件。"""
+        return '{"action": "latest", "detail": "none"}'
 
 
 class _FakeChatSession:

@@ -665,6 +665,8 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 5: 飞书接入层与原始事件入口
 
+状态：进行中。已完成 `.env` 字段收敛、`EnvConfig` 扩展、fixture 事件输入、原始事件最小规范化、账号空间归属字段、`event_id/message_id` 去重、事件 Markdown 落盘、官方 `lark_oapi` sample 风格的默认长连接 wiring，以及 CLI `/feishu fixture`、`/feishu listen`、`/feishu latest` 本地调试入口。真实凭证和真实网络环境下的人工接入验证仍待执行。
+
 ### 最终效果
 
 系统通过飞书开放平台应用和 Python SDK 长连接接收原始事件，完成最小接入闭环：建立应用身份、接收 Bot 可见消息事件、按账号空间归属原始事件、做最小去重并落盘，不在本阶段做语义解析、业务判断或 Agent Loop 注入。
@@ -737,6 +739,85 @@ Demo 期最终必须实现以下完整链路：
 - `data/events/`
 - `test/test_feishu_events.py`
 
+### Step 5 新增 `.env` 字段清单
+
+本阶段对飞书接入配置统一收敛为以下类别。除非后续文档明确变更，字段名不再随实现过程临时改动。
+
+- 已有模型与运行配置，继续保留：
+  - `DUTYFLOW_MODEL_API_KEY`
+  - `DUTYFLOW_MODEL_BASE_URL`
+  - `DUTYFLOW_MODEL_NAME`
+  - `DUTYFLOW_DATA_DIR`
+  - `DUTYFLOW_LOG_DIR`
+  - `DUTYFLOW_RUNTIME_ENV`
+  - `DUTYFLOW_LOG_LEVEL`
+  - `DUTYFLOW_PERMISSION_MODE`
+- 飞书应用与事件接入初版必备：
+  - `DUTYFLOW_FEISHU_APP_ID`
+  - `DUTYFLOW_FEISHU_APP_SECRET`
+  - `DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN`
+  - `DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY`
+  - `DUTYFLOW_FEISHU_EVENT_CALLBACK_URL`
+  - `DUTYFLOW_FEISHU_EVENT_MODE`
+  - `DUTYFLOW_FEISHU_TENANT_KEY`
+  - `DUTYFLOW_FEISHU_OWNER_OPEN_ID`
+  - `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID`
+- 为后续“完整用户可见信息”能力预留但本阶段不启用：
+  - `DUTYFLOW_FEISHU_OWNER_USER_ID`
+  - `DUTYFLOW_FEISHU_OWNER_UNION_ID`
+  - `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI`
+  - `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
+  - `DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN`
+  - `DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN`
+  - `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT`
+
+字段约定：
+
+- `DUTYFLOW_FEISHU_EVENT_MODE` 第一版只允许：
+  - `fixture`
+  - `long_connection`
+- `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES` 使用逗号分隔字符串。
+- `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT` 使用 ISO-8601 字符串。
+- 后续即使启用用户 OAuth，也不额外引入散落在其它文件中的显式 Token；显式凭证入口仍集中在 `.env`。
+
+### `EnvConfig` 目标字段表
+
+| `.env` 键 | `EnvConfig` 字段 | Step 5 初版 | 说明 |
+| --- | --- | --- | --- |
+| `DUTYFLOW_MODEL_API_KEY` | `model_api_key` | 保留 | 现有模型调用配置，非飞书专属，但继续由统一配置模块管理。 |
+| `DUTYFLOW_MODEL_BASE_URL` | `model_base_url` | 保留 | 现有模型调用地址。 |
+| `DUTYFLOW_MODEL_NAME` | `model_name` | 保留 | 现有模型名称。 |
+| `DUTYFLOW_FEISHU_APP_ID` | `feishu_app_id` | 必需 | 飞书开放平台应用标识。 |
+| `DUTYFLOW_FEISHU_APP_SECRET` | `feishu_app_secret` | 必需 | 飞书开放平台应用密钥。 |
+| `DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN` | `feishu_event_verify_token` | 必需 | 事件订阅校验字段。 |
+| `DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY` | `feishu_event_encrypt_key` | 必需 | 事件加解密字段。 |
+| `DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` | `feishu_event_callback_url` | 预留 | 为后续 webhook/控制台配置保留；长连接初版不强依赖。 |
+| `DUTYFLOW_FEISHU_EVENT_MODE` | `feishu_event_mode` | 必需 | 接入模式开关，第一版仅允许 `fixture` 或 `long_connection`。 |
+| `DUTYFLOW_FEISHU_TENANT_KEY` | `feishu_tenant_key` | 必需 | 单租户初版的安装空间标识。 |
+| `DUTYFLOW_FEISHU_OWNER_OPEN_ID` | `feishu_owner_open_id` | 必需 | 本地 Agent 服务对象的 owner 标识。 |
+| `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID` | `feishu_owner_report_chat_id` | 必需 | Bot 默认回馈到 owner 的会话标识。 |
+| `DUTYFLOW_FEISHU_OWNER_USER_ID` | `feishu_owner_user_id` | 预留 | 为后续用户 OAuth 与身份对齐保留。 |
+| `DUTYFLOW_FEISHU_OWNER_UNION_ID` | `feishu_owner_union_id` | 预留 | 为后续跨应用/跨标识对齐保留。 |
+| `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` | `feishu_oauth_redirect_uri` | 预留 | 用户 OAuth 跳转地址。 |
+| `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES` | `feishu_oauth_default_scopes` | 预留 | 用户 OAuth 默认 scope，代码内解析成字符串列表。 |
+| `DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN` | `feishu_owner_user_access_token` | 预留 | owner 用户授权 access token，Step 5 不消费。 |
+| `DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN` | `feishu_owner_user_refresh_token` | 预留 | owner 用户授权 refresh token，Step 5 不消费。 |
+| `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT` | `feishu_owner_user_token_expires_at` | 预留 | owner 用户 token 过期时间，代码内保留原始字符串。 |
+| `DUTYFLOW_DATA_DIR` | `data_dir` | 保留 | 本地数据根目录。 |
+| `DUTYFLOW_LOG_DIR` | `log_dir` | 保留 | 本地日志目录。 |
+| `DUTYFLOW_RUNTIME_ENV` | `runtime_env` | 保留 | 本地运行环境标记。 |
+| `DUTYFLOW_LOG_LEVEL` | `log_level` | 保留 | 日志级别。 |
+| `DUTYFLOW_PERMISSION_MODE` | `permission_mode` | 保留 | 现有权限模式。 |
+
+### 配置校验策略
+
+- `EnvConfig` 继续作为唯一配置读取入口。
+- `validate_env_config` 后续按模式分层校验：
+  - 基础层：模型与本地运行目录字段继续保持现有校验。
+  - `feishu_event_mode=fixture`：允许缺失真实飞书凭证，但要求事件模式字段合法。
+  - `feishu_event_mode=long_connection`：要求飞书应用凭证、`tenant_key`、`owner_open_id`、`owner_report_chat_id` 齐全。
+  - 用户 OAuth 相关字段默认不参与 Step 5 初版强校验；只有未来显式启用“完整用户可见信息”能力时再纳入必填。
+
 ### 未敲定问题
 
 - 飞书真实事件 payload 的最终字段差异与第一版白名单事件范围。
@@ -746,23 +827,23 @@ Demo 期最终必须实现以下完整链路：
 
 ### 任务清单
 
-- [ ] 扩展 `.env.example` 与 `EnvConfig`，将飞书接入显式配置统一收口到 `.env`。
-- [ ] 增加 Owner、租户、Bot、用户 OAuth 预留字段的配置校验和读取链路。
-- [ ] 实现基于飞书 SDK 的长连接接入骨架。
-- [ ] 实现原始事件最小规范化，不做业务解析，只抽取接入层 routing 所需字段。
-- [ ] 实现账号空间归属：
+- [x] 扩展 `.env.example` 与 `EnvConfig`，将飞书接入显式配置统一收口到 `.env`。
+- [x] 增加 Owner、租户、Bot、用户 OAuth 预留字段的配置校验和读取链路。
+- [x] 实现基于飞书 SDK 的长连接接入骨架。
+- [x] 实现原始事件最小规范化，不做业务解析，只抽取接入层 routing 所需字段。
+- [x] 实现账号空间归属：
   - `installation_scope`
   - `owner_profile`
   - `sender_subject`
   - `chat_binding`
-- [ ] 实现按 `event_id` 和 `message_id` 的最小去重逻辑。
-- [ ] 实现原始事件 Markdown 落盘。
-- [ ] 实现消息内原始资源获取接口。
-- [ ] 保留 Bot 发消息接口，但不在本阶段承接完整回馈逻辑。
-- [ ] 保留本地 fixture 事件输入，用于无真实飞书环境时测试接入层。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写 `test/test_feishu_events.py`。
-- [ ] 执行本阶段完整链路检查。
+- [x] 实现按 `event_id` 和 `message_id` 的最小去重逻辑。
+- [x] 实现原始事件 Markdown 落盘。
+- [x] 实现消息内原始资源获取接口。
+- [x] 保留 Bot 发消息接口，但不在本阶段承接完整回馈逻辑。
+- [x] 保留本地 fixture 事件输入，用于无真实飞书环境时测试接入层。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写 `test/test_feishu_events.py`。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 

@@ -23,6 +23,7 @@ from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
+from dutyflow.feishu.runtime import FeishuIngressService
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
@@ -63,6 +64,7 @@ class DutyFlowApp:
         """初始化应用根目录和 CLI 控制台。"""
         self.project_root = project_root or Path.cwd()
         self.cli = CliConsole(self)
+        self._feishu_ingress_service: FeishuIngressService | None = None
 
     def health_check(self) -> HealthStatus:
         """返回 Step 1 可验证的占位健康检查结果。"""
@@ -154,6 +156,61 @@ class DutyFlowApp:
             return _chat_error("chat_failed", str(exc))
         return result.to_debug_text()
 
+    def run_feishu_fixture_debug(self, user_text: str) -> str:
+        """使用本地 fixture 事件验证 Step 5 接入链路。"""
+        if not user_text.strip():
+            return _feishu_error("empty_input", "usage: /feishu fixture 文本")
+        service = self._get_or_create_feishu_ingress_service()
+        raw_event = service.adapter.create_local_fixture_event(user_text)
+        result = service.handle_raw_event(raw_event)
+        return _feishu_debug_payload(
+            status="ok",
+            action=result.action,
+            event_id=result.event_id,
+            message_id=result.message_id,
+            record_path=result.record_path,
+            detail=result.detail,
+        )
+
+    def start_feishu_listener_debug(self) -> str:
+        """启动 Step 5 飞书长连接监听调试入口。"""
+        try:
+            service = self._get_or_create_feishu_ingress_service()
+            result = service.start_long_connection()
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("listener_failed", str(exc))
+        return _feishu_debug_payload(
+            status="ok" if result.ok else "error",
+            action=result.status,
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=result.detail,
+            payload=result.payload,
+        )
+
+    def get_latest_feishu_debug(self) -> str:
+        """返回最近一条飞书接入结果，便于本地 CLI 调试查看。"""
+        service = self._get_or_create_feishu_ingress_service()
+        if service.latest_result is None:
+            return _feishu_debug_payload(
+                status="empty",
+                action="no_event",
+                event_id="",
+                message_id="",
+                record_path="",
+                detail="no feishu ingress event has been processed yet",
+            )
+        result = service.latest_result
+        return _feishu_debug_payload(
+            status="ok",
+            action=result.action,
+            event_id=result.event_id,
+            message_id=result.message_id,
+            record_path=result.record_path,
+            detail=result.detail,
+        )
+
     def create_chat_debug_session(self) -> ChatDebugSession:
         """创建可持续复用 Agent State 的 /chat 调试会话。"""
         self._ensure_runtime_layout()
@@ -204,6 +261,15 @@ class DutyFlowApp:
         markdown_store = MarkdownStore(FileStore(self.project_root))
         return AuditLogger(markdown_store, config.log_dir)
 
+    def _get_or_create_feishu_ingress_service(self) -> FeishuIngressService:
+        """按当前配置构造并复用飞书接入层服务。"""
+        self._ensure_runtime_layout()
+        if self._feishu_ingress_service is not None:
+            return self._feishu_ingress_service
+        config = load_env_config(self.project_root)
+        self._feishu_ingress_service = FeishuIngressService(self.project_root, config)
+        return self._feishu_ingress_service
+
     def _prompt_cli_permission(
         self,
         tool_name: str,
@@ -243,6 +309,41 @@ def _chat_error(error_kind: str, message: str) -> str:
         "pending_restart_count": 0,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _feishu_debug_payload(
+    *,
+    status: str,
+    action: str,
+    event_id: str,
+    message_id: str,
+    record_path: str,
+    detail: str,
+    payload: Mapping[str, Any] | None = None,
+) -> str:
+    """格式化飞书接入层本地调试输出。"""
+    body = {
+        "status": status,
+        "action": action,
+        "event_id": event_id,
+        "message_id": message_id,
+        "record_path": record_path,
+        "detail": detail,
+        "payload": dict(payload or {}),
+    }
+    return json.dumps(body, ensure_ascii=False, indent=2)
+
+
+def _feishu_error(error_kind: str, message: str) -> str:
+    """格式化飞书接入层调试错误，保持 CLI 返回稳定 JSON。"""
+    return _feishu_debug_payload(
+        status="error",
+        action=error_kind,
+        event_id="",
+        message_id="",
+        record_path="",
+        detail=message,
+    )
 
 
 def _self_test() -> None:

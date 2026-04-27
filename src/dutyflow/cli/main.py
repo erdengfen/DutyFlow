@@ -20,6 +20,15 @@ class HealthCheckProvider(Protocol):
     def create_chat_debug_session(self) -> object:
         """创建可持续的 /chat 调试会话。"""
 
+    def run_feishu_fixture_debug(self, user_text: str) -> str:
+        """运行本地飞书 fixture 接入调试。"""
+
+    def start_feishu_listener_debug(self) -> str:
+        """启动飞书长连接监听调试入口。"""
+
+    def get_latest_feishu_debug(self) -> str:
+        """返回最近一条飞书接入调试结果。"""
+
 
 class CliConsole:
     """处理 /... 风格的本地开发者调试命令。"""
@@ -42,6 +51,8 @@ class CliConsole:
             return self._format_health()
         if normalized == "/chat" or normalized.startswith("/chat "):
             return self._handle_chat(normalized)
+        if normalized == "/feishu" or normalized.startswith("/feishu "):
+            return self._handle_feishu(normalized)
         if normalized in {"/help", "help", ""}:
             return self._help_text()
         return f"Unsupported command: {normalized}"
@@ -148,6 +159,24 @@ class CliConsole:
         user_text = command.removeprefix("/chat").strip()
         return self.app.run_chat_debug(user_text)
 
+    def _handle_feishu(self, command: str) -> str:
+        """执行飞书接入层本地调试命令。"""
+        normalized = command.strip()
+        if normalized in {"/feishu", "/feishu help"}:
+            return _feishu_help_text()
+        if normalized == "/feishu listen":
+            return self.app.start_feishu_listener_debug()
+        if normalized == "/feishu latest":
+            return self.app.get_latest_feishu_debug()
+        if normalized.startswith("/feishu fixture "):
+            user_text = normalized.removeprefix("/feishu fixture").strip()
+            return self.app.run_feishu_fixture_debug(user_text)
+        return (
+            "Unsupported feishu command: "
+            f"{normalized}\n"
+            f"{_feishu_help_text()}"
+        )
+
     def _help_text(self) -> str:
         """返回当前 CLI 命令说明。"""
         return (
@@ -156,6 +185,10 @@ class CliConsole:
             "/health - 查看健康状态\n"
             "/chat - 进入多轮对话调试，使用 /back 返回主 CLI\n"
             "/chat 用户输入 - 以首条消息进入调试，并持续复用 Agent State\n"
+            "/feishu - 查看飞书接入层调试命令\n"
+            "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
+            "/feishu listen - 启动飞书长连接监听调试入口\n"
+            "/feishu latest - 查看最近一条飞书接入结果\n"
             "/exit - 退出交互控制台"
         )
 
@@ -186,6 +219,17 @@ def _chat_error_text(message: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _feishu_help_text() -> str:
+    """返回飞书接入层调试命令说明。"""
+    return (
+        "Feishu commands:\n"
+        "/feishu help - 查看飞书接入层调试命令\n"
+        "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
+        "/feishu listen - 启动飞书长连接监听调试入口\n"
+        "/feishu latest - 查看最近一条飞书接入结果"
+    )
+
+
 class _SelfTestApp:
     """为 CLI 自测提供最小健康检查对象。"""
 
@@ -200,6 +244,18 @@ class _SelfTestApp:
     def create_chat_debug_session(self) -> object:
         """返回自测 chat 会话。"""
         return _SelfTestChatSession()
+
+    def run_feishu_fixture_debug(self, user_text: str) -> str:
+        """返回自测飞书 fixture 结果。"""
+        return f'{{"action": "fixture", "detail": "{user_text}"}}'
+
+    def start_feishu_listener_debug(self) -> str:
+        """返回自测飞书监听结果。"""
+        return '{"action": "listener_started"}'
+
+    def get_latest_feishu_debug(self) -> str:
+        """返回自测最近飞书事件。"""
+        return '{"action": "latest", "detail": "none"}'
 
 
 class _SelfTestChatSession:
@@ -228,6 +284,7 @@ def _self_test() -> None:
     assert "status=ok" in cli.handle_command("/health")
     assert "Supported commands" in cli.handle_command("/help")
     assert "chat=ping" in cli.handle_command("/chat ping")
+    assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
 
 
 if __name__ == "__main__":

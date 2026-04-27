@@ -10,7 +10,11 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.config.env import load_env_config, validate_env_config
+from dutyflow.config.env import (  # noqa: E402
+    load_env_config,
+    validate_env_config,
+    validate_feishu_ingress_config,
+)
 
 
 class TestEnvConfig(unittest.TestCase):
@@ -29,12 +33,43 @@ class TestEnvConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / ".env").write_text(
-                "DUTYFLOW_MODEL_NAME=demo\nDUTYFLOW_PERMISSION_MODE=plan\n",
+                "DUTYFLOW_MODEL_NAME=demo\n"
+                "DUTYFLOW_PERMISSION_MODE=plan\n"
+                "DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES=im:message,drive:file\n",
                 encoding="utf-8",
             )
             config = load_env_config(root)
         self.assertEqual(config.model_name, "demo")
         self.assertEqual(config.permission_mode, "plan")
+        self.assertEqual(config.feishu_oauth_default_scopes, ["im:message", "drive:file"])
+
+    def test_fixture_mode_allows_missing_real_feishu_credentials(self) -> None:
+        """fixture 模式下不应强制要求真实飞书凭证。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "DUTYFLOW_FEISHU_EVENT_MODE=fixture\n",
+                encoding="utf-8",
+            )
+            config = load_env_config(root)
+            result = validate_feishu_ingress_config(config)
+        self.assertTrue(result.ok)
+
+    def test_long_connection_mode_requires_owner_and_tenant(self) -> None:
+        """长连接模式应要求应用与 owner 相关关键字段齐全。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "DUTYFLOW_FEISHU_EVENT_MODE=long_connection\n"
+                "DUTYFLOW_FEISHU_APP_ID=app_demo\n"
+                "DUTYFLOW_FEISHU_APP_SECRET=secret_demo\n",
+                encoding="utf-8",
+            )
+            config = load_env_config(root)
+            result = validate_feishu_ingress_config(config)
+        self.assertFalse(result.ok)
+        self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY", result.missing_keys)
+        self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID", result.missing_keys)
 
 
 def _self_test() -> None:
