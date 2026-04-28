@@ -726,54 +726,162 @@ Demo 期最终必须实现以下完整链路：
 - `owner_report_chat_id` 可长期保存使用，但更适合作为可重新 `/bind` 刷新的会话标识。
 - Step 5 当前只覆盖 Bot 可见输入；后续若要拿到完整“用户可见信息”，需要单独接入用户 OAuth 能力。
 
-## Step 6: 权重决策、硬规则与决策留痕
+## Step 6: 正式 Agent Loop 与常驻运行编排
+
+状态：未开始。Step 6 的目标不再是单独实现“权重判断模块”，而是把当前调试期能力收束为正式常驻运行的 Agent 主循环。权重判断、硬规则和决策留痕将作为正式 loop 的内部子环节实现，而不是单独脱离 runtime 编排。
 
 ### 最终效果
 
-系统可以基于事件、身份、来源、责任、上下文摘要、权重 skill 和 Agent State 硬规则，形成可解释决策，并写入决策留痕。
+应用启动后即进入正式运行态：
+
+- 飞书长连接自动启动并持续监听。
+- CLI 与正式 runtime 并存，不再依赖 `/feishu listen` 临时拉起监听。
+- 飞书感知记录进入正式 runtime queue，由独立 worker 串行消费。
+- 正式 loop 默认只读取 `data/perception/`，不直接读取原始事件文件。
+- 私聊 Bot 和群聊 `@Bot` 的关键输入可触发完整 agent 执行链，而不是只做 `/chat` 调试。
+- 长任务先即时回复用户，再由后台任务继续推进并在后续回传结果。
+
+### 核心设计边界
+
+- 当前正式 loop 触发范围只包括：
+  - 用户私聊 Bot
+  - 群聊中 `@Bot`
+- 后续“用户与用户聊天中的重点/紧急信息感知”属于后续扩展，本阶段只在文档中保留，不进入实现范围。
+- 正式 loop 复用 Step 5 已完成的飞书长连接与心跳保活，不重复创建第二套监听主链。
+- 旧的 `src/dutyflow/agent/loop.py` 保留，用于 `/chat` 调试；在正式 runtime 完成前不删除。
+- 正式 loop 新增独立模块，不与当前 `/chat` 调试 loop 混写。
+
+### 线程与运行模型
+
+- 主线程：
+  - `DutyFlowApp`
+  - CLI 控制台
+- 飞书监听线程：
+  - 复用当前 Step 5 的长连接线程
+- 正式 runtime worker：
+  - 单消费者线程
+  - 串行消费感知记录，避免过早引入并发状态竞争
+- 可选 debug chat worker：
+  - 服务 `/chat` 调试任务
+  - 不再抢占主 CLI 的 `stdin`
+
+约束：
+
+- 回调线程不直接跑模型和工具，只负责接收、落盘、感知和入队。
+- 当前阶段不做多 worker 并发消费。
+- CLI 不再通过后台线程抢 `input()` 做审批或多轮对话。
+
+### 正式 Loop 输入与输出
+
+- 输入：
+  - 统一来自 `PerceptionRecordService.build_loop_input(...)`
+  - raw event 文件仅作为审计、调试和解析工具兜底输入
+- 输出：
+  - 一切面向用户的发送能力统一收束为单独反馈接口
+  - 不通过模型自由调用“发消息工具”
+
+当前设计要求：
+
+- 新增统一 `FeedbackService` 或 `FeishuFeedbackGateway`
+- 正式 loop、审批流、任务状态层统一通过该接口给用户发消息
+- 该接口后续需支持文本、回复、卡片、状态更新、审批请求等动作
+
+### 权限与审批边界
+
+- 正式 runtime 不再沿用 CLI `input()` 作为审批方式。
+- 敏感动作在正式 loop 中只能进入“等待审批/等待确认”状态。
+- 具体审批记录、恢复链路和飞书端确认闭环在 Step 7 完整实现。
+- Step 6 先明确：
+  - 正式 loop 不允许直接阻塞当前 CLI 等待人工输入
+  - 审批请求只能通过统一反馈接口发送给用户
+
+说明：
+
+- 飞书 Bot 后续可通过消息卡片和交互回调承接审批确认。
+- Step 6 先把正式 loop 的中断边界和反馈接口收束好。
+- Step 7 再接审批回调、恢复和状态流转。
+
+### CLI 调整方向
+
+- `/feishu` 相关命令从“启动监听”改为“查看状态 / 控制状态”：
+  - 查看当前连接状态
+  - 查看最近事件
+  - 查看诊断快照
+  - 手动重连、暂停、恢复等
+- `/chat` 从当前阻塞式子会话，迁移为非阻塞调试任务入口：
+  - 提交 debug 任务
+  - 查看 debug 结果
+  - 不再在同一终端内开启第二条抢占式交互输入线程
 
 ### 验收标准
 
-- 权重 skill 只作为提示词补充。
-- Agent State 和硬规则负责最终控制决策。
-- 高权重任务不得直接忽略。
-- 尝试轮数过多进入审批、重试或降级。
-- 决策 trace 写入 `data/reports/trace_<id>.md`。
+- `app.py` 启动后，飞书监听和正式 runtime 自动进入运行态。
+- CLI 在正式 runtime 运行期间保持可用。
+- 正式 loop 只读取感知记录，不直接读取 raw event。
+- 私聊 Bot 和群聊 `@Bot` 的感知记录可触发完整 agent 执行链。
+- 正式 loop 可复用现有 Agent 基架能力：
+  - 多轮模型调用
+  - 多轮 tool call
+  - 权限判断
+  - 恢复/中断
+- 长任务可先即时回复，再进入后台继续推进。
+- 正式 runtime 不再通过 CLI `input()` 做审批。
+- 用户发送能力统一经过独立反馈接口，而不是模型自由调用工具。
+- 旧 `loop.py` 仍可服务 `/chat` 调试，不影响正式 runtime。
+- 决策结果可写入 `data/reports/trace_<id>.md`。
 
 ### 涉及文件、类、方法、模块
 
-- `src/dutyflow/decision/weighting.py`
-  - `WeightingDecision`
-  - `evaluate_weight`
-- `src/dutyflow/decision/rules.py`
-  - `DecisionRuleEngine`
-  - `apply_hard_rules`
-- `src/dutyflow/agent/tools/decision_trace.py`
-  - `record_decision_trace`
-- `src/dutyflow/agent/state.py`
+- `src/dutyflow/app.py`
+- `src/dutyflow/cli/main.py`
+- `src/dutyflow/feishu/runtime.py`
+- `src/dutyflow/perception/store.py`
+- `src/dutyflow/agent/loop.py`
+  - 保留为 `/chat` 调试链路
+- 预期新增：
+  - `src/dutyflow/agent/runtime_loop.py`
+  - `src/dutyflow/agent/runtime_service.py`
+  - `src/dutyflow/feedback/gateway.py`
+  - `src/dutyflow/decision/weighting.py`
+  - `src/dutyflow/decision/rules.py`
+  - `src/dutyflow/agent/tools/decision_trace.py`
 - `data/reports/`
+- `test/test_runtime_loop.py`
+- `test/test_runtime_service.py`
 - `test/test_decision_weighting.py`
 - `test/test_decision_rules.py`
 
 ### 未敲定问题
 
+- `/chat` 最终调试命令形态，是 `run/status/latest` 风格还是其它形式。
+- runtime queue 是否只保留内存队列，还是提前落轻量待消费记录。
+- 长任务“先回复、后完成”的第一版用户文案和状态对象形式。
 - `weight_level` 到提醒策略的具体映射。
 - 权重 skill 输出格式。
 - 硬规则阈值，如尝试轮数上限。
 
+### 分点开发顺序
+
+本阶段必须按单功能点推进，一次只开发一个主功能点，不在一轮内同时改动多块主链文件。
+
 ### 任务清单
 
-- [ ] 实现权重判断结构。
-- [ ] 实现硬规则引擎。
-- [ ] 接入 Agent State。
-- [ ] 实现决策留痕工具。
-- [ ] 写入 trace Markdown。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写对应测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [ ] 第 1 点：新增正式 runtime service 骨架，只建立 queue、worker 和最小状态对象，不接业务判断。
+- [ ] 第 2 点：让 `app.py` 启动后自动拉起飞书监听和正式 runtime worker。
+- [ ] 第 3 点：把感知记录接入 runtime queue，只做入队与消费占位，不接完整 agent 执行。
+- [ ] 第 4 点：新增统一反馈接口，收口文本回复和状态回馈，不让模型自由调用发消息工具。
+- [ ] 第 5 点：把正式 loop 接到现有 Agent 基架能力上，支持多轮模型调用和多轮 tool call。
+- [ ] 第 6 点：迁移 `/feishu` 命令为状态查看/控制类命令，不再承担启动监听语义。
+- [ ] 第 7 点：迁移 `/chat` 为非阻塞 debug 任务入口，旧 `loop.py` 保留但不再作为正式主循环。
+- [ ] 第 8 点：在正式 loop 中接入第一版权重判断、硬规则和决策留痕。
+- [ ] 第 9 点：为新增 `.py` 文件添加自测入口。
+- [ ] 第 10 点：编写对应测试文件。
+- [ ] 第 11 点：执行本阶段完整链路检查。
 
 ### 人工确认
 
+- [ ] 确认 `/chat` 调试入口最终命令形态。
+- [ ] 确认第一版长任务即时回复文案。
 - [ ] 确认高权重、紧急、责任三类规则的第一版阈值。
 
 ## Step 7: 任务状态、审批中断与恢复
