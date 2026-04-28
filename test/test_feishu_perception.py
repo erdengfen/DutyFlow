@@ -70,6 +70,19 @@ class TestFeishuPerception(unittest.TestCase):
             self.assertTrue(record.mentions_bot)
             self.assertEqual(record.entities[-1].kind, "mention")
 
+    def test_multiline_text_roundtrip_preserves_full_raw_text(self) -> None:
+        """多行飞书文本写入感知记录后，回读给 loop 时不应只剩第一行。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            text = "场景：\n核心项目群有人发消息\n请判断这是不是高优先级"
+            envelope, raw_event_path = _create_source_record(root, text)
+            record = service.create_record(envelope, raw_event_path)
+            loop_input = service.build_loop_input(record_id=record.record_id)
+            self.assertIsNotNone(loop_input)
+            self.assertEqual(loop_input["raw_text"], text)
+            self.assertIn("请判断这是不是高优先级", loop_input["content_preview"])
+
 
 def _create_source_record(
     root: Path,

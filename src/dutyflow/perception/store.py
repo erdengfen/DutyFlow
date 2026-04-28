@@ -270,9 +270,9 @@ def _build_body(record: PerceivedEventRecord) -> str:
         "## Summary\n\n"
         f"{_build_summary(record)}\n\n"
         "## Extracted Text\n\n"
-        f"- raw_text: {record.raw_text}\n"
-        f"- content_preview: {record.content_preview}\n"
-        f"- mention_text: {record.mention_text}\n\n"
+        f"{_render_key_value_item('raw_text', record.raw_text)}\n"
+        f"{_render_key_value_item('content_preview', record.content_preview)}\n"
+        f"{_render_key_value_item('mention_text', record.mention_text)}\n\n"
         "## Entities\n\n"
         f"{_render_entities_table(record.entities)}\n\n"
         "## Parse Targets\n\n"
@@ -471,6 +471,13 @@ def _render_targets_table(targets: tuple[PerceptionParseTarget, ...]) -> str:
     return "\n".join([header, *rows]) if rows else header
 
 
+def _render_key_value_item(key: str, value: str) -> str:
+    """把稳定键值渲染为可回读的 Markdown 片段。"""
+    if "\n" not in value:
+        return f"- {key}: {value}"
+    return f"- {key}:\n```text\n{value}\n```"
+
+
 def _parse_entities(section_text: str) -> tuple[PerceptionEntity, ...]:
     """从实体表格 section 读取实体数组。"""
     rows = _parse_table(section_text)
@@ -505,13 +512,57 @@ def _parse_targets(section_text: str) -> tuple[PerceptionParseTarget, ...]:
 def _parse_key_value_section(section_text: str) -> dict[str, str]:
     """解析 `- key: value` 形式的稳定 section。"""
     payload: dict[str, str] = {}
-    for line in section_text.splitlines():
-        text = line.strip()
+    lines = section_text.splitlines()
+    index = 0
+    while index < len(lines):
+        text = lines[index].strip()
         if not text.startswith("- ") or ":" not in text:
+            index += 1
             continue
         key, value = text[2:].split(":", 1)
-        payload[key.strip()] = value.strip()
+        key = key.strip()
+        value = value.lstrip()
+        if value:
+            payload[key] = value
+            index += 1
+            continue
+        index += 1
+        payload[key], index = _read_multiline_value(lines, index)
     return payload
+
+
+def _read_multiline_value(lines: list[str], start_index: int) -> tuple[str, int]:
+    """读取 `- key:` 后面的多行值，支持 fenced block。"""
+    if start_index >= len(lines):
+        return "", start_index
+    if lines[start_index].strip().startswith("```"):
+        return _read_fenced_multiline_value(lines, start_index + 1)
+    return _read_plain_multiline_value(lines, start_index)
+
+
+def _read_fenced_multiline_value(lines: list[str], start_index: int) -> tuple[str, int]:
+    """读取 fenced code block 中的多行文本。"""
+    collected: list[str] = []
+    index = start_index
+    while index < len(lines):
+        if lines[index].strip().startswith("```"):
+            return "\n".join(collected).strip("\n"), index + 1
+        collected.append(lines[index])
+        index += 1
+    return "\n".join(collected).strip("\n"), index
+
+
+def _read_plain_multiline_value(lines: list[str], start_index: int) -> tuple[str, int]:
+    """读取直到下一条 `- key:` 为止的普通多行值。"""
+    collected: list[str] = []
+    index = start_index
+    while index < len(lines):
+        text = lines[index].strip()
+        if text.startswith("- ") and ":" in text:
+            break
+        collected.append(lines[index])
+        index += 1
+    return "\n".join(collected).strip("\n").strip(), index
 
 
 def _parse_table(section_text: str) -> tuple[dict[str, str], ...]:

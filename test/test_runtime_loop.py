@@ -82,6 +82,28 @@ class TestRuntimeLoop(unittest.TestCase):
             self.assertEqual(loop.latest_result.tool_result_count, 1)
             self.assertEqual(feedback.sent_texts, [("oc_fixture_chat", "done")])
 
+    def test_runtime_loop_receives_full_multiline_perception_text(self) -> None:
+        """正式 runtime loop 读取 perception 时应拿到完整多行消息，而不是只剩第一行。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root)
+            perception = PerceptionRecordService(root)
+            text = "场景：\n核心项目群（source_chat_001）里有人发消息\n发消息的人叫张三"
+            record = _create_perception_record(perception, text, message_id="msg_multiline")
+            feedback = _FakeFeedbackGateway()
+            model = _CapturingModelClient()
+            loop = RuntimeAgentLoop(
+                root,
+                config,
+                model_client=model,
+                registry=ToolRegistry(),
+                feedback_gateway=feedback,
+                perception_service=perception,
+            )
+            loop.handle_work_item(_work_item(record))
+            self.assertIn("核心项目群（source_chat_001）里有人发消息", model.last_user_text)
+            self.assertIn("发消息的人叫张三", model.last_user_text)
+
 
 class _FakeModelClient:
     """按顺序返回预设响应的测试模型。"""
@@ -122,6 +144,26 @@ class _FakeFeedbackGateway:
 
         self.sent_status_updates.append((chat_id, title, summary))
         return FeedbackResult(ok=True, status="sent", detail="fake", payload={"chat_id": chat_id})
+
+
+class _CapturingModelClient:
+    """记录正式 runtime 最终喂给模型的用户消息。"""
+
+    def __init__(self) -> None:
+        """初始化最近一次用户消息文本。"""
+        self.last_user_text = ""
+
+    def call_model(self, state, tools) -> ModelResponse:
+        """记录最近一条用户消息，并返回最小文本响应。"""
+        del tools
+        for message in reversed(state.messages):
+            if message.role != "user":
+                continue
+            self.last_user_text = "\n".join(
+                block.text for block in message.content if block.type == "text" and block.text
+            )
+            break
+        return _text_response("ok")
 
 
 def _write_env(root: Path) -> object:
