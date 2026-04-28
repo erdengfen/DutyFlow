@@ -663,429 +663,68 @@ Demo 期最终必须实现以下完整链路：
 - [ ] 提供 Demo 来源样例，如群、文档、文件或私聊。
 - [ ] 确认第一版联系人补充知识 topic 范围，例如偏好、风险、协作习惯。
 
-## Step 5: 飞书接入层与原始事件入口
+## Step 5: 飞书接入与感知记录层
 
-状态：进行中。已完成 `.env` 字段收敛、`EnvConfig` 扩展、fixture 事件输入、原始事件最小规范化、账号空间归属字段、`event_id/message_id` 去重、事件 Markdown 落盘、官方 `lark_oapi` sample 风格的默认长连接 wiring，以及 CLI `/feishu fixture`、`/feishu listen`、`/feishu latest`、`/feishu doctor` 本地调试入口。当前已支持 bootstrap 模式：收到私聊 `/bind` 后，会从 `im.message.receive_v1` 中提取 `tenant_key`、`sender open_id` 和 `chat_id`，回填 `.env` 对应字段，并由 Bot 回一条绑定成功消息。真实飞书人工验证已完成 p2p 私聊链路：长连接接入、原始事件打印、事件 Markdown 落盘、`/bind` 回填 `.env`、Bot 回信均已跑通；群聊 `@Bot` 和消息资源获取仍待补测。
+状态：进行中。当前已完成真实飞书 p2p 链路、群聊 `@Bot` 链路、原始事件落盘、`/bind` bootstrap、CLI `/feishu` 调试入口，以及第一版感知记录层。Step 5 的目标是把飞书可见输入稳定接进本地，并整理成后续 loop 可直接消费的标准输入，不在本阶段做身份推理、权重判断、任务生成或正式 loop 编排。
 
-### 最终效果
+### 核心边界
 
-系统通过飞书开放平台应用和 Python SDK 长连接接收原始事件，完成最小接入闭环：建立应用身份、接收 Bot 可见消息事件、按账号空间归属原始事件、做最小去重并落盘，不在本阶段做语义解析、业务判断或 Agent Loop 注入。
-
-本阶段初版边界固定为：
-
-- 单 `app_id`
-- 单 `tenant_key`
-- 单 `owner_open_id`
-- 单 Bot 汇报目标
-- 只接收：
-  - 用户与 Bot 的私聊消息
-  - 群聊中 `@Bot` 的消息
-
-本阶段必须显式预留后续扩展方向：
-
-- 后续项目需要获取完整的“用户可见信息”，而不只是当前 Bot 可见信息。
-- 该扩展不在本阶段实现，但账号空间、配置入口和接入抽象必须允许后续接入用户 OAuth 链路。
-
-本阶段不允许按“读取本机飞书客户端登录态”设计；所有接入必须基于飞书开放平台应用、凭证、Token 和事件订阅。
-
-### 验收标准
-
-- 本地 Agent 可使用飞书 SDK 长连接接收原始事件，不依赖本机飞书客户端是否打开。
-- 事件回调只做最小归属、去重、落盘和快速确认；不在回调中执行重逻辑。
-- 初版只接收：
-  - 用户与 Bot 的私聊消息
-  - 群聊中 `@Bot` 的消息
-- 原始事件记录落盘到 `data/events/`，保留最小接入字段和完整原始 payload。
-- 接入层必须区分以下空间，不得混用：
-  - `installation_scope = app_id + tenant_key`
-  - `owner_profile = app_id + tenant_key + owner_open_id`
-  - `sender_subject = app_id + tenant_key + sender_open_id`
-  - `chat_binding = app_id + tenant_key + chat_id`
-- 接入层必须至少实现两层去重：
-  - `event_dedup_key = event_id`
-  - `message_dedup_key = message_id`
-- 如涉及消息资源拉取，必须以消息内原始资源标识做补充去重，例如 `message_id + file_key`。
-- 所有显式配置项，包括飞书 Bot 和后续用户权限相关的 `app_id`、`secret`、验证字段、加密字段、Owner 标识、OAuth 配置、显式 Token/Refresh Token 占位，必须统一来自 `.env`，并通过 `config` 模块读取。
-- 本阶段即使未接入完整用户 OAuth，也必须为后续“用户可见信息”能力预留配置链路和抽象边界。
-- 接入层不做：
-  - 身份解析
+- 接入范围当前只覆盖 Bot 可见输入：
+  - 用户私聊 Bot
+  - 群聊中 `@Bot`
+- 所有飞书显式配置统一来自 `.env` 和 `config` 模块。
+- 飞书接入必须基于开放平台应用、凭证、长连接事件订阅和 Bot 回馈，不读取本机飞书客户端登录态。
+- 本阶段只做：
+  - 原始事件接收
+  - 最小归属与去重
+  - 原始事件落盘
+  - 感知记录生成
+  - `/bind` 初始化
+- 本阶段不做：
   - 联系人关系判断
-  - 权重判断
+  - 责任归属判断
+  - 高低优先级判断
   - 任务生成
-  - Agent Loop 注入
+  - 正式 Agent Loop 注入
 
-### Step 5.1: 感知记录层设计
+### 当前已完成
 
-本小节定义 Step 5 之后、正式 Agent Loop 之前的“感知记录层”规划。该层的职责不是做业务判断，而是把飞书原始事件整理成后续 loop、责任工具和内容解析工具更容易消费的标准输入。
+- [x] 扩展 `EnvConfig` 和 `.env.example`，收敛飞书接入配置，并为后续完整用户可见信息/OAuth 预留字段。
+- [x] 落地 `FeishuEventAdapter`、`FeishuClient`、`FeishuIngressService`，支持 fixture 和真实 `lark_oapi` 长连接。
+- [x] 完成账号空间归属和 `event_id / message_id` 两层去重。
+- [x] 支持原始事件落盘到 `data/events/`，保留最小路由字段和原始 payload。
+- [x] 提供 `/feishu fixture`、`/feishu listen`、`/feishu latest`、`/feishu doctor` 本地调试入口。
+- [x] 完成 `/bind` bootstrap：从私聊事件提取 `tenant_key / owner_open_id / owner_report_chat_id`，回填 `.env` 并由 Bot 回复绑定成功。
+- [x] 已完成真实 p2p 私聊链路人工验证。
+- [x] 已完成群聊 `@Bot` 链路人工验证。
+- [x] 第一版感知记录层已落地：
+  - 原始事件落盘后同步生成 `data/perception/YYYY-MM-DD/per_<message_id>.md`
+  - 感知层只做确定性提取和改写
+  - 已向后续 loop 暴露 `build_loop_input(record_id / message_id)` 标准读取接口
+- [x] `docs/DATA_MODEL.md` 已同步 `dutyflow.perceived_event.v1`。
+- [x] 接入层和感知层测试已覆盖文本、文件、群聊 `@Bot` 等主场景。
 
-状态：已完成第一版实现。当前 `FeishuIngressService` 会在原始事件落盘后同步生成 `data/perception/` 感知记录，并通过 `PerceptionRecordService.build_loop_input(...)` 向后续 loop 暴露标准读取接口。
+### 设计结果
 
-#### 当前完成项
+- 原始事件和感知记录分层存储：
+  - `data/events/` 保存原始事实和审计依据
+  - `data/perception/` 保存后续 loop 可直接消费的标准输入
+- 感知记录按“一条有意义事件一个文件”组织，不按天/用户/群聊聚合；日期只用于目录分片。
+- 后续正式 Agent Loop 默认读取感知记录，不直接读取原始事件文件。
+- 文件、图片、链接等解析目标当前只保留在线索层，后续再由内容解析工具按需消费。
 
-- [x] 新增 `src/dutyflow/perception/store.py`，落地 `PerceptionRecordService` 和 `PerceivedEventRecord`。
-- [x] 感知记录按“一条有意义事件一个 Markdown 文件”落盘到 `data/perception/YYYY-MM-DD/per_<message_id>.md`。
-- [x] 飞书接入层在写入 `data/events/` 原始事件后，会同步生成对应感知记录。
-- [x] 感知记录已落地第一版 frontmatter：`schema / source_event_id / message_id / trigger_kind / chat_id / sender_open_id / message_type / raw_event_file`。
-- [x] 感知记录已落地第一版正文 sections：`Summary / Extracted Text / Entities / Parse Targets / Lookup Hints / Raw Reference`。
-- [x] 当前感知层已提取 `message_type`、`raw_text`、`content_preview`、`mentions_bot`、`mentioned_open_ids`。
-- [x] 当前感知层已提取第一版 `parse_targets`，覆盖文件、图片、链接三类稳定线索。
-- [x] 当前感知层已输出第一版确定性查询提示：`contact_lookup_hint`、`source_lookup_hint`、`responsibility_lookup_hint`。
-- [x] 当前感知层已向后续 loop 暴露 `build_loop_input(record_id / message_id)` 标准读取接口。
-- [x] `docs/DATA_MODEL.md` 已同步 `dutyflow.perceived_event.v1` 结构。
-- [x] `test/test_feishu_perception.py` 已覆盖文本、文件、群聊 `@Bot` 三类感知记录场景。
-
-#### 后续未完成项
+### 当前未完成
 
 - [ ] 正式 Step 6 事件驱动 loop 仍未接入感知记录读取接口。
-- [ ] `im.chat.member.bot.added_v1` 等系统事件是否生成感知记录，仍待单独定规。
-- [ ] 文档、飞书文档链接、更多消息类型的 `parse_targets` 细化规则仍待补充。
+- [ ] 消息资源本体下载和本地资源存储仍未实现；当前只保存资源线索和原始事件。
+- [ ] 文档、飞书文档链接、更多消息类型的解析目标细化规则仍待补充。
 - [ ] 感知记录到任务层、上下文层的衔接尚未开始。
 
-#### 设计目标
+### 风险与待收口问题
 
-- 感知层只处理“已进入主链的有意义事件”，不把全部飞书事件都变成长期上下文。
-- 感知层结果不能只保留在内存中，必须持久化为独立 Markdown 记录，便于后续 loop、任务层和人工检查复用。
-- 后续 Agent Loop 默认读取感知记录，不直接读取飞书原始事件文件；原始事件文件只作为审计事实源、调试回溯和解析工具兜底输入。
-- 感知层只做确定性结构提取和确定性改写，不做联系人关系推理、责任判断、权重判断、任务判断。
-
-#### 层级边界
-
-- 飞书接入层：
-  - 负责 SDK、长连接、消息收发、原始事件落盘、资源下载接口占位。
-  - 输出 `data/events/` 下的原始事件记录。
-- 感知记录层：
-  - 负责从原始事件中抽取稳定字段、触发类型、附件线索、mentions 和后续查询提示。
-  - 输出 `data/perception/` 下的标准化感知记录。
-- 内容解析层：
-  - 负责按需下载和解析图片、文件、网页、飞书文档。
-  - 不在感知层自动执行；后续按工具调用。
-- Agent Loop：
-  - 默认以感知记录为输入，再按需调用身份、责任、内容解析等工具。
-
-#### 哪些事件生成感知记录
-
-- 第一版只为“进入主链的关键输入”生成感知记录：
-  - 用户私聊 Bot
-  - 群聊 `@Bot`
-  - 包含文件、图片、文档、链接等明确后续解析目标的 Bot 可见消息
-- 纯噪声或当前不进入主链的事件可以只保留原始事件记录，不生成感知记录。
-- `im.chat.member.bot.added_v1` 这类系统事件后续可决定是否生成独立感知记录；当前先不纳入第一版必需范围。
-
-#### 文件划分方式
-
-感知记录不按“每天一个文件”“每个联系人一个文件”或“每个群一个文件”聚合，而是：
-
-- 一条有意义事件对应一个感知记录文件
-- 日期仅用于目录分片，不承担语义聚合
-
-建议路径：
-
-```text
-data/perception/YYYY-MM-DD/per_<message_id>.md
-```
-
-原因：
-
-- 便于用 `message_id` 做稳定去重和稳定追溯。
-- 便于后续 loop 只读取当前事件的最小上下文。
-- 便于后续对单条感知记录重算、覆盖或补齐，而不污染其它事件。
-
-#### 感知记录与原始事件记录的关系
-
-- 原始事件文件：
-  - 路径：`data/events/...`
-  - 用途：保存完整原始 payload、最小 routing 字段、审计事实源
-- 感知记录文件：
-  - 路径：`data/perception/...`
-  - 用途：保存后续 loop 和工具要消费的标准事件视图
-
-约束：
-
-- 感知记录必须保留指向原始事件文件的稳定引用。
-- loop 默认读取感知记录；只有内容解析工具、调试工具或审计链路才回看原始事件文件。
-
-#### 感知记录建议结构
-
-建议 frontmatter：
-
-```yaml
-schema: dutyflow.perceived_event.v1
-id: per_<message_id>
-source_event_id: evt_<message_id>
-message_id: <message_id>
-received_at: <ISO-8601>
-event_type: im.message.receive_v1
-trigger_kind: p2p_text
-chat_type: p2p
-chat_id: <chat_id>
-sender_open_id: <sender_open_id>
-message_type: text
-mentions_bot: true
-has_attachment: false
-attachment_kinds: ""
-raw_event_file: data/events/YYYY-MM-DD/evt_<message_id>.md
-status: perceived
-updated_at: <ISO-8601>
-```
-
-第一版 `trigger_kind` 建议枚举：
-
-- `p2p_text`
-- `p2p_file`
-- `p2p_image`
-- `p2p_link`
-- `group_at_bot_text`
-- `group_at_bot_file`
-- `group_at_bot_image`
-- `group_at_bot_link`
-
-正文建议：
-
-```md
-# Perceived Event per_<message_id>
-
-## Summary
-
-一句话说明这条输入是什么。
-
-## Extracted Text
-
-- raw_text:
-- content_preview:
-- mention_text:
-
-## Entities
-
-| kind | value | source |
-|---|---|---|
-| sender | <sender_open_id> | sender_open_id |
-| chat | <chat_id> | chat_id |
-| mention | <mentioned_open_id> | mentions |
-
-## Parse Targets
-
-| target_id | target_type | file_key | file_name | url | required_tool |
-|---|---|---|---|---|---|
-
-## Lookup Hints
-
-- contact_lookup_hint:
-- source_lookup_hint:
-- responsibility_lookup_hint:
-- followup_needed:
-
-## Raw Reference
-
-- event_record: data/events/.../evt_<message_id>.md
-```
-
-#### 感知层必须提取的字段
-
-- 事件路由字段：
-  - `event_id`
-  - `message_id`
-  - `chat_id`
-  - `chat_type`
-  - `sender_open_id`
-  - `event_type`
-- 消息基础字段：
-  - `message_type`
-  - `raw_text`
-  - `content_preview`
-  - `mentions_bot`
-- 附件与解析线索：
-  - `has_attachment`
-  - `attachment_kinds`
-  - `file_key`
-  - `file_name`
-  - `doc token`
-  - `url`
-- 后续查询提示：
-  - `contact_lookup_hint`
-  - `source_lookup_hint`
-  - `responsibility_lookup_hint`
-  - `parse_targets`
-
-#### 感知层允许做的改写
-
-- 把 `sender_open_id` 改写成稳定的 `contact_lookup_hint`
-- 把 `chat_id + chat_type` 改写成稳定的 `source_lookup_hint`
-- 把文件、图片、链接、文档线索改写成 `parse_targets`
-- 把 `mentions` 改写成 `mentions_bot` 和 `Entities` 表格
-
-#### 感知层明确不做的事情
-
-- 不做联系人关系推理
-- 不做责任归属判断
-- 不做高低优先级判断
-- 不做任务生成
-- 不直接下载或解析附件本体
-- 不把自由文本直接压成主观摘要
-
-#### 后续 Loop 读取约束
-
-- 正式 Agent Loop 默认只从感知记录层读取输入。
-- raw event 文件不作为默认主输入。
-- 内容解析工具、调试工具、审计链路允许按 `raw_event_file` 引用回看原始事件。
-- 感知记录层一旦落成，应作为 Step 6 以后事件驱动 loop 的标准输入接口。
-
-### 涉及文件、类、方法、模块
-
-- `src/dutyflow/config/env.py`
-  - `EnvConfig`
-  - `load_env_config`
-  - `validate_env_config`
-- `.env.example`
-- `src/dutyflow/feishu/events.py`
-  - `FeishuEventAdapter`
-  - `normalize_raw_event`
-  - `build_event_envelope`
-  - `create_local_fixture_event`
-- `src/dutyflow/feishu/client.py`
-  - `FeishuClient`
-  - `connect_long_connection`
-  - `fetch_message_resource`
-  - `send_message`
-- `src/dutyflow/feishu/runtime.py`
-  - `FeishuIngressService`
-  - `handle_raw_event`
-  - `ack_event`
-- `src/dutyflow/perception/store.py`
-  - `PerceptionRecordService`
-  - `PerceivedEventRecord`
-  - `create_record`
-  - `read_by_message_id`
-  - `build_loop_input`
-- `src/dutyflow/cli/main.py`
-  - `/feishu fixture`
-  - `/feishu listen`
-  - `/feishu latest`
-  - `/feishu doctor`
-- `src/dutyflow/app.py`
-  - `run_feishu_fixture_debug`
-  - `start_feishu_listener_debug`
-  - `get_latest_feishu_debug`
-  - `start_feishu_doctor_debug`
-  - `get_feishu_doctor_debug`
-- `src/dutyflow/storage/markdown_store.py`
-- `data/events/`
-- `data/perception/`
-- `test/test_feishu_events.py`
-- `test/test_feishu_perception.py`
-
-### 新增 `.env` 字段清单
-
-本阶段对飞书接入配置统一收敛为以下类别。除非后续文档明确变更，字段名不再随实现过程临时改动。
-
-- 已有模型与运行配置，继续保留：
-  - `DUTYFLOW_MODEL_API_KEY`
-  - `DUTYFLOW_MODEL_BASE_URL`
-  - `DUTYFLOW_MODEL_NAME`
-  - `DUTYFLOW_DATA_DIR`
-  - `DUTYFLOW_LOG_DIR`
-  - `DUTYFLOW_RUNTIME_ENV`
-  - `DUTYFLOW_LOG_LEVEL`
-  - `DUTYFLOW_PERMISSION_MODE`
-- 飞书应用与事件接入初版必备：
-  - `DUTYFLOW_FEISHU_APP_ID`
-  - `DUTYFLOW_FEISHU_APP_SECRET`
-  - `DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN`
-  - `DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY`
-  - `DUTYFLOW_FEISHU_EVENT_CALLBACK_URL`
-  - `DUTYFLOW_FEISHU_EVENT_MODE`
-  - `DUTYFLOW_FEISHU_TENANT_KEY`
-  - `DUTYFLOW_FEISHU_OWNER_OPEN_ID`
-  - `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID`
-- 为后续“完整用户可见信息”能力预留但本阶段不启用：
-  - `DUTYFLOW_FEISHU_OWNER_USER_ID`
-  - `DUTYFLOW_FEISHU_OWNER_UNION_ID`
-  - `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI`
-  - `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
-  - `DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN`
-  - `DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN`
-  - `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT`
-
-字段约定：
-
-- `DUTYFLOW_FEISHU_EVENT_MODE` 第一版只允许：
-  - `fixture`
-  - `long_connection`
-- `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES` 使用逗号分隔字符串。
-- `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT` 使用 ISO-8601 字符串。
-- 后续即使启用用户 OAuth，也不额外引入散落在其它文件中的显式 Token；显式凭证入口仍集中在 `.env`。
-
-### `EnvConfig` 目标字段表
-
-| `.env` 键 | `EnvConfig` 字段 | Step 5 初版 | 说明 |
-| --- | --- | --- | --- |
-| `DUTYFLOW_MODEL_API_KEY` | `model_api_key` | 保留 | 现有模型调用配置，非飞书专属，但继续由统一配置模块管理。 |
-| `DUTYFLOW_MODEL_BASE_URL` | `model_base_url` | 保留 | 现有模型调用地址。 |
-| `DUTYFLOW_MODEL_NAME` | `model_name` | 保留 | 现有模型名称。 |
-| `DUTYFLOW_FEISHU_APP_ID` | `feishu_app_id` | 必需 | 飞书开放平台应用标识。 |
-| `DUTYFLOW_FEISHU_APP_SECRET` | `feishu_app_secret` | 必需 | 飞书开放平台应用密钥。 |
-| `DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN` | `feishu_event_verify_token` | 必需 | 事件订阅校验字段。 |
-| `DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY` | `feishu_event_encrypt_key` | 必需 | 事件加解密字段。 |
-| `DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` | `feishu_event_callback_url` | 预留 | 为后续 webhook/控制台配置保留；长连接初版不强依赖。 |
-| `DUTYFLOW_FEISHU_EVENT_MODE` | `feishu_event_mode` | 必需 | 接入模式开关，第一版仅允许 `fixture` 或 `long_connection`。 |
-| `DUTYFLOW_FEISHU_TENANT_KEY` | `feishu_tenant_key` | 必需 | 单租户初版的安装空间标识。 |
-| `DUTYFLOW_FEISHU_OWNER_OPEN_ID` | `feishu_owner_open_id` | 必需 | 本地 Agent 服务对象的 owner 标识。 |
-| `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID` | `feishu_owner_report_chat_id` | 必需 | Bot 默认回馈到 owner 的会话标识。 |
-| `DUTYFLOW_FEISHU_OWNER_USER_ID` | `feishu_owner_user_id` | 预留 | 为后续用户 OAuth 与身份对齐保留。 |
-| `DUTYFLOW_FEISHU_OWNER_UNION_ID` | `feishu_owner_union_id` | 预留 | 为后续跨应用/跨标识对齐保留。 |
-| `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` | `feishu_oauth_redirect_uri` | 预留 | 用户 OAuth 跳转地址。 |
-| `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES` | `feishu_oauth_default_scopes` | 预留 | 用户 OAuth 默认 scope，代码内解析成字符串列表。 |
-| `DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN` | `feishu_owner_user_access_token` | 预留 | owner 用户授权 access token，Step 5 不消费。 |
-| `DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN` | `feishu_owner_user_refresh_token` | 预留 | owner 用户授权 refresh token，Step 5 不消费。 |
-| `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT` | `feishu_owner_user_token_expires_at` | 预留 | owner 用户 token 过期时间，代码内保留原始字符串。 |
-| `DUTYFLOW_DATA_DIR` | `data_dir` | 保留 | 本地数据根目录。 |
-| `DUTYFLOW_LOG_DIR` | `log_dir` | 保留 | 本地日志目录。 |
-| `DUTYFLOW_RUNTIME_ENV` | `runtime_env` | 保留 | 本地运行环境标记。 |
-| `DUTYFLOW_LOG_LEVEL` | `log_level` | 保留 | 日志级别。 |
-| `DUTYFLOW_PERMISSION_MODE` | `permission_mode` | 保留 | 现有权限模式。 |
-
-### 配置校验策略
-
-- `EnvConfig` 继续作为唯一配置读取入口。
-- `validate_env_config` 后续按模式分层校验：
-  - 基础层：模型与本地运行目录字段继续保持现有校验。
-  - `feishu_event_mode=fixture`：允许缺失真实飞书凭证，但要求事件模式字段合法。
-  - `feishu_event_mode=long_connection`：要求飞书应用凭证、`tenant_key`、`owner_open_id`、`owner_report_chat_id` 齐全。
-  - 用户 OAuth 相关字段默认不参与 Step 5 初版强校验；只有未来显式启用“完整用户可见信息”能力时再纳入必填。
-
-### 未敲定问题
-
-- 群聊 `@Bot` 事件的真实样例与第一版白名单范围补测。
-- `im.chat.member.bot.added_v1` 当前已能在真实长连接中收到原始事件帧，但接入层尚未注册处理器；拉机器人入群时会出现 `processor not found` 错误日志，后续需决定是显式接入还是稳定忽略。
-- Bot 拉取消息内图片、文件、音视频资源时所需的最小权限集合与真实响应结构。
-- 后续从“Bot 可见信息”扩展到“完整用户可见信息”时，用户 OAuth 的落地边界和授权流程。
-
-### 任务清单
-
-- [x] 扩展 `.env.example` 与 `EnvConfig`，将飞书接入显式配置统一收口到 `.env`。
-- [x] 增加 Owner、租户、Bot、用户 OAuth 预留字段的配置校验和读取链路。
-- [x] 实现基于飞书 SDK 的长连接接入骨架。
-- [x] 实现原始事件最小规范化，不做业务解析，只抽取接入层 routing 所需字段。
-- [x] 实现账号空间归属：
-  - `installation_scope`
-  - `owner_profile`
-  - `sender_subject`
-  - `chat_binding`
-- [x] 实现按 `event_id` 和 `message_id` 的最小去重逻辑。
-- [x] 实现原始事件 Markdown 落盘。
-- [x] 实现消息内原始资源获取接口。
-- [x] 保留 Bot 发消息接口，但不在本阶段承接完整回馈逻辑。
-- [x] 保留本地 fixture 事件输入，用于无真实飞书环境时测试接入层。
-- [x] 为新增 `.py` 文件添加自测入口。
-- [x] 编写 `test/test_feishu_events.py`。
-- [x] 执行本阶段完整链路检查。
-
-### 人工确认
-
-- [x] 已提供飞书应用凭证，并确认事件订阅采用长连接模式完成真实 API 接入。
-- [x] 已确认初版只接收 Bot 私聊和群聊 `@Bot` 消息，不纳入“别人私聊用户”的事件面。
-- [x] 已通过私聊 `/bind` 回填 `tenant_key`、`owner_open_id` 和默认汇报目标。
-- [x] 已获取真实 `im.message.receive_v1` 事件样例，并完成 p2p 私聊链路人工验证。
-- [ ] 仍需补测群聊 `@Bot` 事件和消息资源获取场景。
+- `im.chat.member.bot.added_v1` 已可收到，但当前没有对应处理器；拉机器人入群时会出现 `processor not found` 日志。
+- `owner_report_chat_id` 可长期保存使用，但更适合作为可重新 `/bind` 刷新的会话标识。
+- Step 5 当前只覆盖 Bot 可见输入；后续若要拿到完整“用户可见信息”，需要单独接入用户 OAuth 能力。
 
 ## Step 6: 权重决策、硬规则与决策留痕
 
