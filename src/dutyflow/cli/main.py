@@ -23,8 +23,11 @@ class HealthCheckProvider(Protocol):
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """运行本地飞书 fixture 接入调试。"""
 
+    def get_feishu_status_debug(self) -> str:
+        """返回当前飞书监听状态。"""
+
     def start_feishu_listener_debug(self) -> str:
-        """启动飞书长连接监听调试入口。"""
+        """保留兼容；当前只返回监听状态。"""
 
     def get_latest_feishu_debug(self) -> str:
         """返回最近一条飞书接入调试结果。"""
@@ -80,10 +83,6 @@ class CliConsole:
                 continue
             if command.strip() in {"/feishu doctor", "/feishu doctor listen"}:
                 if self._feishu_doctor_loop():
-                    return 0
-                continue
-            if command.strip() == "/feishu listen":
-                if self._feishu_listen_loop():
                     return 0
                 continue
             print(self.handle_command(command))
@@ -173,49 +172,13 @@ class CliConsole:
         user_text = command.removeprefix("/chat").strip()
         return self.app.run_chat_debug(user_text)
 
-    def _feishu_listen_loop(self) -> bool:
-        """启动飞书监听后进入专用观察子会话。"""
-        result_text = self.app.start_feishu_listener_debug()
-        print(result_text)
-        if _is_error_json_payload(result_text):
-            return False
-        print("Feishu listen started. Type /latest to inspect, /back to return, /exit to quit.")
-        print("Send /bind to the bot in a p2p chat and watch this terminal for realtime logs.")
-        return self._feishu_input_loop()
-
     def _feishu_doctor_loop(self) -> bool:
-        """启动飞书监听诊断模式并进入 doctor 子会话。"""
-        result_text = self.app.start_feishu_doctor_debug()
+        """进入飞书 doctor 诊断子会话，不承担启动监听语义。"""
+        result_text = self.app.get_feishu_doctor_debug()
         print(result_text)
-        if _is_error_json_payload(result_text):
-            return False
-        print("Feishu doctor started. Type /status to inspect, /back to return, /exit to quit.")
+        print("Feishu doctor opened. Type /status to inspect, /back to return, /exit to quit.")
         print("Watch listener/raw_event_count while sending real messages to the bot in Feishu.")
         return self._feishu_doctor_input_loop()
-
-    def _feishu_input_loop(self) -> bool:
-        """在飞书监听子会话中读取调试命令。"""
-        while True:
-            try:
-                command = input("Feishu> ")
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return False
-            normalized = command.strip()
-            if normalized == "/exit":
-                return True
-            if normalized in {"", "/back"}:
-                return False
-            if normalized in {"/help", "/feishu help"}:
-                print(_feishu_session_help_text())
-                continue
-            if normalized in {"/latest", "/feishu latest"}:
-                print(self.app.get_latest_feishu_debug())
-                continue
-            if normalized in {"/listen", "/feishu listen"}:
-                print(self.app.start_feishu_listener_debug())
-                continue
-            print(f"Unsupported feishu session command: {normalized}")
 
     def _feishu_doctor_input_loop(self) -> bool:
         """在飞书 doctor 子会话中读取诊断命令。"""
@@ -236,8 +199,8 @@ class CliConsole:
             if normalized in {"/status", "/doctor", "/feishu doctor status"}:
                 print(self.app.get_feishu_doctor_debug())
                 continue
-            if normalized in {"/listen", "/feishu listen"}:
-                print(self.app.start_feishu_listener_debug())
+            if normalized in {"/listener", "/feishu status"}:
+                print(self.app.get_feishu_status_debug())
                 continue
             if normalized in {"/latest", "/feishu latest"}:
                 print(self.app.get_latest_feishu_debug())
@@ -247,14 +210,16 @@ class CliConsole:
     def _handle_feishu(self, command: str) -> str:
         """执行飞书接入层本地调试命令。"""
         normalized = command.strip()
-        if normalized in {"/feishu", "/feishu help"}:
+        if normalized in {"/feishu", "/feishu status"}:
+            return self.app.get_feishu_status_debug()
+        if normalized == "/feishu help":
             return _feishu_help_text()
         if normalized in {"/feishu doctor", "/feishu doctor listen"}:
-            return self.app.start_feishu_doctor_debug()
+            return self.app.get_feishu_doctor_debug()
         if normalized == "/feishu doctor status":
             return self.app.get_feishu_doctor_debug()
         if normalized == "/feishu listen":
-            return self.app.start_feishu_listener_debug()
+            return _feishu_listen_deprecated_text(self.app.get_feishu_status_debug())
         if normalized == "/feishu latest":
             return self.app.get_latest_feishu_debug()
         if normalized.startswith("/feishu fixture "):
@@ -274,9 +239,9 @@ class CliConsole:
             "/health - 查看健康状态\n"
             "/chat - 进入多轮对话调试，使用 /back 返回主 CLI\n"
             "/chat 用户输入 - 以首条消息进入调试，并持续复用 Agent State\n"
-            "/feishu - 查看飞书接入层调试命令\n"
+            "/feishu - 查看当前飞书监听状态\n"
+            "/feishu status - 查看当前飞书监听状态\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
-            "/feishu listen - 启动飞书长连接监听调试入口\n"
             "/feishu doctor - 进入飞书长连接诊断模式\n"
             "/feishu latest - 查看最近一条飞书接入结果\n"
             "/exit - 退出交互控制台"
@@ -313,24 +278,14 @@ def _feishu_help_text() -> str:
     """返回飞书接入层调试命令说明。"""
     return (
         "Feishu commands:\n"
+        "/feishu - 查看当前飞书监听状态\n"
+        "/feishu status - 查看当前飞书监听状态\n"
         "/feishu help - 查看飞书接入层调试命令\n"
         "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
-        "/feishu listen - 启动飞书长连接监听调试入口\n"
         "/feishu doctor - 进入飞书长连接诊断模式\n"
         "/feishu doctor status - 查看当前 doctor 诊断快照\n"
-        "/feishu latest - 查看最近一条飞书接入结果"
-    )
-
-
-def _feishu_session_help_text() -> str:
-    """返回飞书监听子会话命令说明。"""
-    return (
-        "Feishu session commands:\n"
-        "/help - 查看飞书监听子会话命令\n"
-        "/latest - 查看最近一条飞书接入结果\n"
-        "/listen - 再次检查监听器状态\n"
-        "/back - 返回主 CLI\n"
-        "/exit - 退出程序"
+        "/feishu latest - 查看最近一条飞书接入结果\n"
+        "/feishu listen - 已废弃；当前等同于查看监听状态"
     )
 
 
@@ -340,11 +295,16 @@ def _feishu_doctor_help_text() -> str:
         "Feishu doctor commands:\n"
         "/help - 查看飞书 doctor 子会话命令\n"
         "/status - 查看当前监听器诊断快照\n"
+        "/listener - 查看当前飞书监听状态\n"
         "/latest - 查看最近一条飞书接入结果\n"
-        "/listen - 再次检查监听器状态\n"
         "/back - 返回主 CLI\n"
         "/exit - 退出程序"
     )
+
+
+def _feishu_listen_deprecated_text(status_text: str) -> str:
+    """为旧的 `/feishu listen` 命令返回明确兼容提示。"""
+    return "`/feishu listen` 已废弃；监听会在 app 启动时自动拉起。以下返回当前监听状态：\n" + status_text
 
 
 def _is_error_json_payload(text: str) -> bool:
@@ -375,17 +335,21 @@ class _SelfTestApp:
         """返回自测飞书 fixture 结果。"""
         return f'{{"action": "fixture", "detail": "{user_text}"}}'
 
+    def get_feishu_status_debug(self) -> str:
+        """返回自测飞书状态。"""
+        return '{"action": "listener_status", "detail": "running"}'
+
     def start_feishu_listener_debug(self) -> str:
-        """返回自测飞书监听结果。"""
-        return '{"action": "listener_started"}'
+        """保留兼容；返回自测飞书状态。"""
+        return self.get_feishu_status_debug()
 
     def get_latest_feishu_debug(self) -> str:
         """返回自测最近飞书事件。"""
         return '{"action": "latest", "detail": "none"}'
 
     def start_feishu_doctor_debug(self) -> str:
-        """返回自测飞书诊断结果。"""
-        return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
+        """保留兼容；返回自测飞书诊断结果。"""
+        return self.get_feishu_doctor_debug()
 
     def get_feishu_doctor_debug(self) -> str:
         """返回自测飞书诊断快照。"""
@@ -418,6 +382,7 @@ def _self_test() -> None:
     assert "status=ok" in cli.handle_command("/health")
     assert "Supported commands" in cli.handle_command("/help")
     assert "chat=ping" in cli.handle_command("/chat ping")
+    assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
 
 

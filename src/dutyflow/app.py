@@ -179,22 +179,25 @@ class DutyFlowApp:
             payload=result.payload,
         )
 
-    def start_feishu_listener_debug(self) -> str:
-        """启动 Step 5 飞书长连接监听调试入口。"""
-        try:
-            service = self._get_or_create_feishu_ingress_service()
-            result = service.start_long_connection()
-        except Exception as exc:  # noqa: BLE001
-            return _feishu_error("listener_failed", str(exc))
-        detail = result.detail
-        if result.ok and result.status in {"listener_started", "already_running"}:
-            detail = (
-                f"{result.detail}. send /bind to the bot in a p2p chat and watch this terminal "
-                "for realtime Feishu event logs."
+    def get_feishu_status_debug(self) -> str:
+        """返回当前飞书监听状态，不再承担启动监听的语义。"""
+        service = self._get_or_create_feishu_ingress_service()
+        result = service.client.get_listener_status()
+        if result is None:
+            return _feishu_debug_payload(
+                status="empty",
+                action="no_listener",
+                event_id="",
+                message_id="",
+                record_path="",
+                detail="feishu listener status is unavailable; listener should auto-start with app bootstrap",
             )
+        detail = result.detail
+        if result.ok:
+            detail = f"{result.detail}. listener auto-starts with app bootstrap."
         return _feishu_debug_payload(
             status="ok" if result.ok else "error",
-            action=result.status,
+            action="listener_status",
             event_id="",
             message_id="",
             record_path="",
@@ -202,17 +205,12 @@ class DutyFlowApp:
             payload=result.payload,
         )
 
+    def start_feishu_listener_debug(self) -> str:
+        """兼容旧接口，现仅返回当前飞书监听状态。"""
+        return self.get_feishu_status_debug()
+
     def start_feishu_doctor_debug(self) -> str:
-        """启动飞书长连接并返回 doctor 诊断快照。"""
-        service = self._get_or_create_feishu_ingress_service()
-        listener_status = service.client.get_listener_status()
-        if listener_status is None or listener_status.status not in {
-            "listener_started",
-            "already_running",
-        }:
-            start_payload = self.start_feishu_listener_debug()
-            if _debug_payload_is_error(start_payload):
-                return start_payload
+        """兼容旧接口，现仅返回 doctor 诊断快照。"""
         return self.get_feishu_doctor_debug()
 
     def get_latest_feishu_debug(self) -> str:

@@ -20,7 +20,7 @@ class TestCliChat(unittest.TestCase):
     def test_help_lists_chat_command(self) -> None:
         """help 输出必须包含 /chat。"""
         self.assertIn("/chat", CliConsole(_FakeApp()).handle_command("/help"))
-        self.assertIn("/feishu", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu status", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_calls_app_chat_debug(self) -> None:
@@ -73,36 +73,27 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"action": "fixture"', output)
         self.assertIn('"detail": "ping"', output)
 
-    def test_feishu_listener_and_latest_commands_are_available(self) -> None:
-        """CLI 应暴露飞书监听和最近结果查看命令。"""
+    def test_feishu_status_and_latest_commands_are_available(self) -> None:
+        """CLI 应暴露飞书状态和最近结果查看命令。"""
         cli = CliConsole(_FakeApp())
-        self.assertIn("listener_started", cli.handle_command("/feishu listen"))
+        self.assertIn("listener_status", cli.handle_command("/feishu"))
+        self.assertIn("listener_status", cli.handle_command("/feishu status"))
+        self.assertIn("已废弃", cli.handle_command("/feishu listen"))
         self.assertIn('"action": "latest"', cli.handle_command("/feishu latest"))
         self.assertIn('"action": "doctor_status"', cli.handle_command("/feishu doctor"))
-
-    def test_interactive_feishu_listen_session_keeps_running(self) -> None:
-        """交互式 /feishu listen 应进入监听子会话，直到 /back。"""
-        cli = CliConsole(_FakeApp())
-        inputs = iter(("/feishu listen", "/latest", "/back", "/exit"))
-        with patch("builtins.input", lambda prompt="": next(inputs)):
-            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                self.assertEqual(cli.start(), 0)
-        output = stdout.getvalue()
-        self.assertIn("Feishu listen started", output)
-        self.assertIn('"action": "listener_started"', output)
-        self.assertIn('"action": "latest"', output)
 
     def test_interactive_feishu_doctor_session_keeps_running(self) -> None:
         """交互式 /feishu doctor 应进入诊断子会话，直到 /back。"""
         cli = CliConsole(_FakeApp())
-        inputs = iter(("/feishu doctor", "/status", "/back", "/exit"))
+        inputs = iter(("/feishu doctor", "/status", "/listener", "/back", "/exit"))
         with patch("builtins.input", lambda prompt="": next(inputs)):
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 self.assertEqual(cli.start(), 0)
         output = stdout.getvalue()
-        self.assertIn("Feishu doctor started", output)
+        self.assertIn("Feishu doctor opened", output)
         self.assertIn('"action": "doctor_status"', output)
         self.assertIn('"raw_event_count": 0', output)
+        self.assertIn('"action": "listener_status"', output)
 
 
 class _FakeApp:
@@ -130,17 +121,21 @@ class _FakeApp:
         """返回测试飞书 fixture 结果。"""
         return f'{{"action": "fixture", "detail": "{user_text}"}}'
 
+    def get_feishu_status_debug(self) -> str:
+        """返回测试飞书监听状态。"""
+        return '{"action": "listener_status", "detail": "running"}'
+
     def start_feishu_listener_debug(self) -> str:
-        """返回测试飞书监听结果。"""
-        return '{"action": "listener_started"}'
+        """保留兼容；返回测试飞书监听状态。"""
+        return self.get_feishu_status_debug()
 
     def get_latest_feishu_debug(self) -> str:
         """返回测试最近飞书事件。"""
         return '{"action": "latest", "detail": "none"}'
 
     def start_feishu_doctor_debug(self) -> str:
-        """返回测试飞书 doctor 结果。"""
-        return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
+        """保留兼容；返回测试飞书 doctor 结果。"""
+        return self.get_feishu_doctor_debug()
 
     def get_feishu_doctor_debug(self) -> str:
         """返回测试飞书 doctor 快照。"""
