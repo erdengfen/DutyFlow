@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import select
-import sys
 from typing import Protocol
 
 
@@ -14,11 +11,14 @@ class HealthCheckProvider(Protocol):
     def health_check(self) -> object:
         """返回应用健康检查结果。"""
 
-    def run_chat_debug(self, user_text: str) -> str:
-        """运行 /chat 调试链路并返回可打印结果。"""
+    def submit_chat_debug_task(self, user_text: str) -> str:
+        """提交一条非阻塞 /chat 调试任务。"""
 
-    def create_chat_debug_session(self) -> object:
-        """创建可持续的 /chat 调试会话。"""
+    def get_chat_debug_status(self) -> str:
+        """查看 /chat 调试 worker 状态。"""
+
+    def get_latest_chat_debug(self) -> str:
+        """查看最近一条 /chat 调试任务结果。"""
 
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """运行本地飞书 fixture 接入调试。"""
@@ -77,87 +77,11 @@ class CliConsole:
                 return 0
             if command.strip() == "/exit":
                 return 0
-            if command.strip() == "/chat" or command.strip().startswith("/chat "):
-                if self._chat_loop(command):
-                    return 0
-                continue
             if command.strip() in {"/feishu doctor", "/feishu doctor listen"}:
                 if self._feishu_doctor_loop():
                     return 0
                 continue
             print(self.handle_command(command))
-
-    def _chat_loop(self, command: str) -> bool:
-        """进入持续 /chat 调试子会话，返回是否退出主程序。"""
-        try:
-            session = self.app.create_chat_debug_session()
-        except Exception as exc:  # noqa: BLE001
-            print(f"Chat session failed: {exc}")
-            return False
-        initial_text = command.strip().removeprefix("/chat").strip()
-        print("Chat debug started. Type /back to return, /exit to quit.")
-        if initial_text:
-            self._run_chat_turn(session, initial_text)
-        return self._chat_input_loop(session)
-
-    def _chat_input_loop(self, session: object) -> bool:
-        """读取 chat 子会话输入，直到返回主 CLI 或退出。"""
-        while True:
-            try:
-                user_text = input("Chat> ")
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return False
-            normalized = user_text.strip()
-            if normalized == "/exit":
-                return True
-            if normalized in {"/back", ""}:
-                return False
-            if normalized == "/help":
-                print(_chat_help_text())
-                continue
-            if normalized.startswith("/chat "):
-                user_text = normalized.removeprefix("/chat").strip()
-            if normalized.startswith("/") and not normalized.startswith("/chat "):
-                print(f"Unsupported chat command: {normalized}")
-                continue
-            self._run_chat_turn(session, self._collect_chat_message(user_text))
-
-    def _collect_chat_message(self, first_line: str) -> str:
-        """把当前行和已缓冲的多行粘贴内容合并成一次 chat 输入。"""
-        lines = [first_line]
-        lines.extend(self._read_immediate_chat_lines())
-        return "\n".join(lines)
-
-    def _read_immediate_chat_lines(self) -> tuple[str, ...]:
-        """读取终端中已缓冲但尚未消费的多行粘贴内容。"""
-        buffered: list[str] = []
-        while self._stdin_has_buffered_line():
-            try:
-                buffered.append(input(""))
-            except (EOFError, KeyboardInterrupt):
-                break
-        return tuple(buffered)
-
-    def _stdin_has_buffered_line(self) -> bool:
-        """判断标准输入当前是否还有可立即读取的一整行内容。"""
-        stdin = sys.stdin
-        if not getattr(stdin, "isatty", lambda: False)():
-            return False
-        try:
-            ready, _, _ = select.select((stdin,), (), (), 0.03)
-        except (OSError, ValueError):
-            return False
-        return bool(ready)
-
-    def _run_chat_turn(self, session: object, user_text: str) -> None:
-        """执行 chat 子会话的一轮输入并打印调试结果。"""
-        try:
-            run_turn = getattr(session, "run_turn")
-            result = run_turn(user_text)
-            print(result.to_debug_text())
-        except Exception as exc:  # noqa: BLE001
-            print(_chat_error_text(str(exc)))
 
     def _format_health(self) -> str:
         """格式化应用健康检查结果。"""
@@ -168,9 +92,19 @@ class CliConsole:
         return str(status)
 
     def _handle_chat(self, command: str) -> str:
-        """执行 CLI /chat 调试命令。"""
-        user_text = command.removeprefix("/chat").strip()
-        return self.app.run_chat_debug(user_text)
+        """执行非阻塞 /chat 调试任务命令。"""
+        normalized = command.strip()
+        if normalized in {"/chat", "/chat help"}:
+            return _chat_help_text()
+        if normalized == "/chat status":
+            return self.app.get_chat_debug_status()
+        if normalized == "/chat latest":
+            return self.app.get_latest_chat_debug()
+        if normalized.startswith("/chat run "):
+            user_text = normalized.removeprefix("/chat run").strip()
+            return self.app.submit_chat_debug_task(user_text)
+        user_text = normalized.removeprefix("/chat").strip()
+        return self.app.submit_chat_debug_task(user_text)
 
     def _feishu_doctor_loop(self) -> bool:
         """进入飞书 doctor 诊断子会话，不承担启动监听语义。"""
@@ -237,8 +171,10 @@ class CliConsole:
             "Supported commands:\n"
             "/help - 查看命令\n"
             "/health - 查看健康状态\n"
-            "/chat - 进入多轮对话调试，使用 /back 返回主 CLI\n"
-            "/chat 用户输入 - 以首条消息进入调试，并持续复用 Agent State\n"
+            "/chat - 查看 /chat 调试命令说明\n"
+            "/chat run 用户输入 - 提交一条非阻塞调试任务\n"
+            "/chat status - 查看 /chat 调试 worker 状态\n"
+            "/chat latest - 查看最近一条 /chat 调试结果\n"
             "/feishu - 查看当前飞书监听状态\n"
             "/feishu status - 查看当前飞书监听状态\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -249,29 +185,15 @@ class CliConsole:
 
 
 def _chat_help_text() -> str:
-    """返回 Chat 子会话命令说明。"""
+    """返回非阻塞 /chat 调试命令说明。"""
     return (
         "Chat commands:\n"
-        "/help - 查看 Chat 子会话命令\n"
-        "/chat 用户输入 - 在当前 Chat State 中继续一轮\n"
-        "/back - 返回主 CLI\n"
-        "/exit - 退出程序"
+        "/chat run 用户输入 - 提交一条非阻塞调试任务\n"
+        "/chat 用户输入 - `/chat run` 的简写形式\n"
+        "/chat status - 查看调试 worker 状态\n"
+        "/chat latest - 查看最近一条调试结果\n"
+        "/chat help - 查看本说明"
     )
-
-
-def _chat_error_text(message: str) -> str:
-    """格式化 Chat 子会话错误，保持 CLI 不被异常打断。"""
-    payload = {
-        "error": "chat_turn_failed",
-        "message": message,
-        "final_text": "",
-        "stop_reason": "failed",
-        "turn_count": 0,
-        "tool_result_count": 0,
-        "tools": [],
-        "pending_restart_count": 0,
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _feishu_help_text() -> str:
@@ -307,15 +229,6 @@ def _feishu_listen_deprecated_text(status_text: str) -> str:
     return "`/feishu listen` 已废弃；监听会在 app 启动时自动拉起。以下返回当前监听状态：\n" + status_text
 
 
-def _is_error_json_payload(text: str) -> bool:
-    """判断调试输出是否为 error 状态，避免失败时误进入子会话。"""
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return False
-    return payload.get("status") == "error"
-
-
 class _SelfTestApp:
     """为 CLI 自测提供最小健康检查对象。"""
 
@@ -323,13 +236,17 @@ class _SelfTestApp:
         """返回自测健康状态。"""
         return "status=ok"
 
-    def run_chat_debug(self, user_text: str) -> str:
-        """返回自测 chat 结果。"""
-        return f"chat={user_text}"
+    def submit_chat_debug_task(self, user_text: str) -> str:
+        """返回自测 chat 入队结果。"""
+        return f'{{"action": "accepted", "payload": {{"user_text": "{user_text}"}}}}'
 
-    def create_chat_debug_session(self) -> object:
-        """返回自测 chat 会话。"""
-        return _SelfTestChatSession()
+    def get_chat_debug_status(self) -> str:
+        """返回自测 chat worker 状态。"""
+        return '{"action": "worker_status", "payload": {"worker_alive": true}}'
+
+    def get_latest_chat_debug(self) -> str:
+        """返回自测最近 chat 结果。"""
+        return '{"action": "completed", "payload": {"result_text": "chat=ok"}}'
 
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """返回自测飞书 fixture 结果。"""
@@ -347,33 +264,9 @@ class _SelfTestApp:
         """返回自测最近飞书事件。"""
         return '{"action": "latest", "detail": "none"}'
 
-    def start_feishu_doctor_debug(self) -> str:
-        """保留兼容；返回自测飞书诊断结果。"""
-        return self.get_feishu_doctor_debug()
-
     def get_feishu_doctor_debug(self) -> str:
         """返回自测飞书诊断快照。"""
         return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
-
-
-class _SelfTestChatSession:
-    """为 CLI 子会话自测提供最小对象。"""
-
-    def run_turn(self, user_text: str) -> object:
-        """返回带 to_debug_text 的结果对象。"""
-        return _SelfTestChatResult(user_text)
-
-
-class _SelfTestChatResult:
-    """提供 CLI 子会话自测输出。"""
-
-    def __init__(self, user_text: str) -> None:
-        """保存用户输入。"""
-        self.user_text = user_text
-
-    def to_debug_text(self) -> str:
-        """返回自测调试文本。"""
-        return f"chat_turn={self.user_text}"
 
 
 def _self_test() -> None:
@@ -381,7 +274,7 @@ def _self_test() -> None:
     cli = CliConsole(_SelfTestApp())
     assert "status=ok" in cli.handle_command("/health")
     assert "Supported commands" in cli.handle_command("/help")
-    assert "chat=ping" in cli.handle_command("/chat ping")
+    assert '"action": "accepted"' in cli.handle_command("/chat ping")
     assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
 

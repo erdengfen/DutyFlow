@@ -2,7 +2,9 @@
 
 from pathlib import Path
 import io
+import json
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -92,6 +94,34 @@ class TestAppEntry(unittest.TestCase):
         with patch("builtins.input", return_value="no"):
             self.assertFalse(app._prompt_cli_permission("send_message", "sensitive tool", {"text": "hello"}))
 
+    def test_chat_debug_status_is_empty_before_worker_start(self) -> None:
+        """未提交任务前，/chat 状态应明确提示 worker 尚未启动。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        payload = json.loads(app.get_chat_debug_status())
+        self.assertEqual(payload["status"], "empty")
+        self.assertEqual(payload["action"], "no_worker")
+
+    def test_submit_chat_debug_task_eventually_produces_latest_result(self) -> None:
+        """提交非阻塞 /chat 任务后，应能轮询拿到最近结果。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch.object(app, "create_chat_debug_session", return_value=_FakeChatSession()):
+            accepted = json.loads(app.submit_chat_debug_task("ping"))
+            latest = self._wait_for_chat_debug_result(app)
+        self.assertEqual(accepted["action"], "accepted")
+        self.assertEqual(latest["status"], "ok")
+        self.assertEqual(latest["action"], "completed")
+        self.assertIn('"final_text": "pong: ping"', latest["payload"]["result_text"])
+
+    def _wait_for_chat_debug_result(self, app: DutyFlowApp) -> dict[str, object]:
+        """轮询等待后台 /chat 任务完成，避免测试直接依赖固定 sleep。"""
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            payload = json.loads(app.get_latest_chat_debug())
+            if payload["action"] == "completed":
+                return payload
+            time.sleep(0.02)
+        raise AssertionError("chat debug worker did not produce latest result in time")
+
 
 class _FakeRuntimeService:
     """模拟可启动的 runtime service。"""
@@ -117,6 +147,26 @@ class _FakeIngressService:
         """模拟长连接启动。"""
         self.started = True
         return object()
+
+
+class _FakeChatSession:
+    """模拟旧 /chat loop 仍可提供的最小调试会话。"""
+
+    def run_turn(self, user_text: str) -> object:
+        """返回具备 to_debug_text 的最小结果对象。"""
+        return _FakeChatResult(user_text)
+
+
+class _FakeChatResult:
+    """为应用测试提供最小 chat 调试结果。"""
+
+    def __init__(self, user_text: str) -> None:
+        """保存本轮用户输入。"""
+        self.user_text = user_text
+
+    def to_debug_text(self) -> str:
+        """返回测试用调试文本。"""
+        return f'{{"final_text": "pong: {self.user_text}"}}'
 
 
 def _self_test() -> None:

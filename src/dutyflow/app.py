@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import os
 from typing import Any, Mapping, Sequence
 
+from dutyflow.agent.debug_chat_service import ChatDebugService, ChatDebugTask
 from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.agent.runtime_loop import RuntimeAgentLoop
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
@@ -67,6 +68,7 @@ class DutyFlowApp:
         """初始化应用根目录和 CLI 控制台。"""
         self.project_root = project_root or Path.cwd()
         self.cli = CliConsole(self)
+        self._chat_debug_service: ChatDebugService | None = None
         self._feishu_ingress_service: FeishuIngressService | None = None
         self._runtime_service: RuntimeService | None = None
         self._runtime_loop: RuntimeAgentLoop | None = None
@@ -161,6 +163,89 @@ class DutyFlowApp:
         except Exception as exc:  # noqa: BLE001
             return _chat_error("chat_failed", str(exc))
         return result.to_debug_text()
+
+    def submit_chat_debug_task(self, user_text: str) -> str:
+        """以非阻塞方式提交一条 /chat 调试任务。"""
+        clean_text = user_text.strip()
+        if not clean_text:
+            return _chat_debug_payload(
+                status="error",
+                action="empty_input",
+                detail="usage: /chat run 用户输入",
+            )
+        service = self._get_or_create_chat_debug_service()
+        service.start()
+        task = service.enqueue(clean_text)
+        return _chat_debug_payload(
+            status="ok",
+            action="accepted",
+            detail="chat debug task accepted",
+            payload={
+                "task_id": task.task_id,
+                "user_text": task.user_text,
+                "enqueued_at": task.enqueued_at,
+            },
+        )
+
+    def get_chat_debug_status(self) -> str:
+        """返回当前非阻塞 /chat 调试服务的状态。"""
+        if self._chat_debug_service is None:
+            return _chat_debug_payload(
+                status="empty",
+                action="no_worker",
+                detail="chat debug worker has not started yet",
+            )
+        state = self._chat_debug_service.get_state()
+        return _chat_debug_payload(
+            status="ok",
+            action="worker_status",
+            detail="chat debug worker status",
+            payload={
+                "status": state.status,
+                "worker_started": state.worker_started,
+                "worker_alive": state.worker_alive,
+                "queue_size": state.queue_size,
+                "accepted_count": state.accepted_count,
+                "processed_count": state.processed_count,
+                "failed_count": state.failed_count,
+                "latest_task_id": state.latest_task_id,
+                "latest_action": state.latest_action,
+                "latest_error": state.latest_error,
+                "updated_at": state.updated_at,
+            },
+        )
+
+    def get_latest_chat_debug(self) -> str:
+        """返回最近一条 /chat 调试任务结果。"""
+        if self._chat_debug_service is None:
+            return _chat_debug_payload(
+                status="empty",
+                action="no_result",
+                detail="no chat debug task has been submitted yet",
+            )
+        result = self._chat_debug_service.get_latest_result()
+        if result is None:
+            return _chat_debug_payload(
+                status="empty",
+                action="no_result",
+                detail="no chat debug task has finished yet",
+            )
+        payload = {
+            "task_id": result.task_id,
+            "user_text": result.user_text,
+            "task_status": result.task_status,
+            "completed_at": result.completed_at,
+        }
+        if result.task_status == "completed":
+            payload["result_text"] = result.result_text
+        else:
+            payload["error_text"] = result.error_text
+        return _chat_debug_payload(
+            status="ok" if result.task_status == "completed" else "error",
+            action=result.task_status,
+            detail="latest chat debug task result",
+            payload=payload,
+        )
 
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """使用本地 fixture 事件验证 Step 5 接入链路。"""
@@ -291,6 +376,17 @@ class DutyFlowApp:
                 skill_registry=skill_registry,
             )
         )
+
+    def _get_or_create_chat_debug_service(self) -> ChatDebugService:
+        """构造并复用非阻塞 /chat 调试服务。"""
+        if self._chat_debug_service is not None:
+            return self._chat_debug_service
+        self._chat_debug_service = ChatDebugService(self._handle_chat_debug_task)
+        return self._chat_debug_service
+
+    def _handle_chat_debug_task(self, task: ChatDebugTask) -> str:
+        """执行单条调试任务，底层仍复用旧的 /chat loop 能力。"""
+        return self.run_chat_debug(task.user_text)
 
     def run(self, args: Sequence[str] | None = None) -> int:
         """根据命令参数启动健康检查或 CLI 控制台。"""
@@ -439,6 +535,23 @@ def _chat_error(error_kind: str, message: str) -> str:
         "pending_restart_count": 0,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _chat_debug_payload(
+    *,
+    status: str,
+    action: str,
+    detail: str,
+    payload: Mapping[str, Any] | None = None,
+) -> str:
+    """格式化非阻塞 /chat 调试服务的标准输出。"""
+    body = {
+        "status": status,
+        "action": action,
+        "detail": detail,
+        "payload": dict(payload or {}),
+    }
+    return json.dumps(body, ensure_ascii=False, indent=2)
 
 
 def _feishu_debug_payload(
