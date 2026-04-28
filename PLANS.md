@@ -889,17 +889,137 @@ Demo 期最终必须实现以下完整链路：
 
 ### 最终效果
 
-系统可以把事项沉淀为任务；敏感动作生成审批请求；任务进入 `waiting_approval`；用户在飞书端确认后，系统恢复原任务链路。
+系统可以把适合即时完成的请求在前台直接处理，把长线任务、定时任务和等待审批的任务沉淀为后台任务；主链路先向用户返回“已开始处理 / 已安排执行”的自然语言确认，再由后台任务系统继续推进，并在完成、等待审批或恢复时通过飞书回馈用户。
 
 ### 验收标准
 
-- 任务 Markdown 文件创建和更新正常。
-- 审批请求写入 `data/approvals/pending/`。
-- 审批完成后移动或写入 `data/approvals/completed/`。
-- `create_approval_request` 不执行原动作，只创建审批。
-- `resume_after_approval` 只有在 approved 时恢复原动作。
-- rejected、deferred、expired 不执行原动作。
-- 主链路不因某个任务等待审批而停止。
+- 可区分“前台即时完成”和“后台挂起任务”两类请求。
+- 任务 Markdown 文件创建、更新和状态流转正常。
+- 到时任务可被后台调度器发现并入后台执行队列。
+- 审批请求写入 `data/approvals/pending/`，审批完成后写入或移动到 `data/approvals/completed/`。
+- 后台任务命中敏感动作时，任务进入 `waiting_approval`，并通过飞书卡片/按钮向用户发起审批。
+- 审批通过后可恢复原任务链路；`rejected`、`deferred`、`expired` 不执行原动作。
+- 主链路不因某个后台任务等待审批、等待时间或长时间执行而停止。
+- 用户在任务创建时收到自然语言确认；后台完成后可再次收到状态更新或结果回推。
+
+### 核心设计边界
+
+- 当前 Step 7 先支持两类后台任务：
+  - 一次性定时任务
+  - 等待审批后恢复的长线任务
+- 当前不实现：
+  - 周期任务
+  - DAG / 多阶段编排
+  - 模型自由拆分多子任务
+  - 开发期 CLI tools 进入后台任务默认能力面
+- “只是回答问题、查资料、几轮 tool call 即可完成”的请求，不创建后台任务，仍由前台正式 loop 直接完成并回信。
+- 后台任务能力面与主 loop 能力面分离；后续后台 profile 可单独白名单接入更强工具，但不默认继承主 loop 的全部能力。
+- 任务、审批和恢复以本地 Markdown 文件为锚点，不允许只存在于内存结构中。
+- 本节如与旧任务状态或旧审批链文案冲突，以当前讨论结果为准；具体字段和枚举在实现前同步更新 `docs/DATA_MODEL.md`。
+
+### 运行模型
+
+- 前台正式 loop：
+  - 判断请求是即时完成还是后台挂起。
+  - 即时完成则继续当前多轮执行链。
+  - 需要后台处理时，创建任务并给用户即时确认。
+- 后台调度器：
+  - 独立于飞书监听和前台 runtime worker。
+  - 周期扫描 `data/tasks/`，发现到时、可恢复、可继续推进的任务后入后台队列。
+- 后台任务 worker：
+  - 串行或低并发消费后台队列。
+  - 按任务携带的 execution profile 执行。
+  - 命中审批则挂起任务并发送审批卡片。
+- 审批恢复链：
+  - 用户在飞书端点击按钮或完成交互回调。
+  - 系统更新审批记录与任务状态。
+  - 任务按 `resume_point + resume_payload` 恢复。
+
+### 任务对象与状态
+
+- 任务主锚点：
+  - `data/tasks/task_<id>.md`
+- 审批锚点：
+  - `data/approvals/pending/approval_<id>.md`
+  - `data/approvals/completed/approval_<id>.md`
+- 第一版任务状态建议以当前讨论为准：
+  - `queued`
+  - `scheduled`
+  - `running`
+  - `waiting_approval`
+  - `blocked`
+  - `completed`
+  - `failed`
+  - `cancelled`
+  - `expired`
+- 第一版任务对象除现有 `task_state.v1` 字段外，预计还需要补充：
+  - `run_mode`
+  - `scheduled_for`
+  - `execution_profile`
+  - `requested_capabilities`
+  - `resolved_skills`
+  - `resolved_tools`
+  - `resume_point`
+  - `resume_payload`
+  - `last_result_summary`
+  - `next_retry_at`
+
+### 后台任务入口
+
+- 后台任务入口应作为高层业务 tool 暴露给模型，而不是裸 `spawn_subagent(...)`。
+- 第一版建议以：
+  - `create_background_task`
+  - `schedule_background_task`
+  作为主要入口。
+- 该类 tool 允许模型表达：
+  - 任务目标
+  - 成功标准
+  - 是否需要后台执行
+  - 何时执行
+  - 希望优先使用哪些能力类别、skills、tools
+- 但系统必须做二次裁决：
+  - 校验 capability / skill / tool 是否在后台 profile 白名单内
+  - 自动解析真正的 execution profile
+  - 拒绝开发期 CLI tools 或不允许的能力面
+- 模型只能“建议能力面”，不能直接操纵 raw registry、raw subagent 或任意工具集。
+
+### 用户回馈与审批方式
+
+- 创建后台任务后，用户应先收到“任务已开始 / 已安排在某时执行”的即时确认。
+- 该确认文案不使用单条硬编码语句：
+  - 系统先把任务创建结果和状态注入上下文
+  - 再由模型生成自然语言回复
+  - 统一反馈接口负责真正发送
+- 同时保留模板 fallback，避免模型失败时用户收不到确认。
+- 第一版后台任务即时确认文案风格固定为：
+  - 简洁
+  - 稳重
+  - 不夸张承诺
+- 后台任务命中敏感动作后，不再走 CLI `input()`：
+  - 创建审批记录
+  - 更新任务为 `waiting_approval`
+  - 通过飞书卡片 / 按钮 / 交互回调向用户发起审批
+- 第一版飞书审批卡片统一使用最基础、简洁的固定样式。
+- 所有审批卡片共用同一套样式约束，不按任务类型自由变化。
+- 审批卡片的结构、按钮动作和恢复入口由系统固定，不交给模型自由生成。
+
+### 恢复边界
+
+- 审批恢复围绕任务执行进行，而不是围绕单次 tool call 直接恢复。
+- 恢复最小锚点包括：
+  - `task_id`
+  - `approval_id`
+  - `resume_point`
+  - `resume_payload`
+  - `execution_profile`
+- 只有 `approved` 可以恢复原任务链路。
+- `rejected`、`deferred`、`expired` 只更新任务状态，不继续执行原动作。
+- 审批超时后：
+  - 审批记录标记为 `expired`
+  - 任务状态和下一步动作必须写回持久化 Markdown
+  - 第一版按“类似定时任务”的方式继续保留在任务系统中
+  - 在用户下一次与系统发生消息交互时，系统发现存在“审批超时但未最终处置”的任务，应再次询问用户是继续执行还是弃用该任务
+  - 在用户重新明确前，不自动恢复原动作
 
 ### 涉及文件、类、方法、模块
 
@@ -908,6 +1028,10 @@ Demo 期最终必须实现以下完整链路：
   - `TaskStore`
   - `create_task`
   - `update_task_status`
+- `src/dutyflow/tasks/task_scheduler.py`
+  - `TaskSchedulerService`
+  - `scan_due_tasks`
+  - `enqueue_due_task`
 - `src/dutyflow/approval/approval_flow.py`
   - `ApprovalRecord`
   - `ApprovalService`
@@ -917,29 +1041,42 @@ Demo 期最终必须实现以下完整链路：
   - `TaskInterrupt`
   - `create_interrupt`
   - `resume_interrupt`
+- `src/dutyflow/agent/background_task_worker.py`
+  - `BackgroundTaskWorker`
+  - `run_task`
+  - `resume_task`
 - `src/dutyflow/agent/tools/approval_tools.py`
   - `create_approval_request`
   - `resume_after_approval`
+- `src/dutyflow/agent/tools/task_tools.py`
+  - `create_background_task`
+  - `schedule_background_task`
+- `src/dutyflow/feedback/gateway.py`
 - `data/tasks/`
 - `data/approvals/pending/`
 - `data/approvals/completed/`
+- `test/test_task_scheduler.py`
 - `test/test_task_state.py`
 - `test/test_approval_flow.py`
 - `test/test_task_interrupt.py`
 
 ### 未敲定问题
 
-- 审批过期时间。
+- 第一版后台任务是否允许低并发，还是继续只保留单 worker。
+- `create_background_task` / `schedule_background_task` 的最终 contract。
 - `resume_token` 的生成方式和生命周期。
-- 飞书端真实确认交互形式。
 
 ### 任务清单
 
 - [ ] 实现任务状态存储。
+- [ ] 实现后台任务调度器。
 - [ ] 实现审批记录存储。
 - [ ] 实现任务中断记录。
+- [ ] 实现后台任务入口工具。
 - [ ] 实现审批创建工具。
 - [ ] 实现审批恢复工具。
+- [ ] 将后台任务 worker 接入正式 runtime 之外的独立执行面。
+- [ ] 将飞书卡片/按钮审批接入反馈与恢复链。
 - [ ] 接入 Agent State。
 - [ ] 为新增 `.py` 文件添加自测入口。
 - [ ] 编写对应测试文件。
@@ -947,8 +1084,12 @@ Demo 期最终必须实现以下完整链路：
 
 ### 人工确认
 
-- [ ] 确认飞书端审批消息形式。
-- [ ] 确认审批超时策略。
+- [x] 确认飞书端审批卡片形式。
+  - 第一版统一使用最基础、简洁的固定卡片样式，所有审批卡片保持同一套样式。
+- [x] 确认审批超时策略。
+  - 审批超时后写入持久化 Markdown，审批记录标记为 `expired`，任务继续保留在任务系统中；下一次模型发送消息时发现存在未最终处置的超时任务，应再次询问用户是继续执行还是弃用。
+- [x] 确认第一版后台任务即时确认文案风格。
+  - 风格为简洁、稳重。
 
 ## Step 8: 上下文摘要、清理与压缩
 
