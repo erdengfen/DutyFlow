@@ -3,108 +3,49 @@
 DutyFlow 是一个面向真实职场协作场景的权限感知型办公 Agent Demo。
 
 它不是通用聊天助手，也不是自动化工具总线。项目目标是让 Agent 在处理办公消息、文件、审批和任务时，先理解“这是谁发来的、与我是什么关系、事情归谁负责、是否值得打断、是否需要审批”，再决定如何提醒、沉淀任务或请求用户确认。
+## 当前状态
 
-## 为什么做这个项目
+项目目前已经具备真实飞书接入和正式 runtime 主链路：
 
-真实职场中的信息流并不只是“内容理解”问题。相同一句话，在不同来源下会产生完全不同的处理方式：
+- `app.py` 启动后会自动拉起飞书长连接监听。
+- 支持飞书 Bot 私聊消息、群聊 `@Bot` 消息进入本地。
+- 支持 `/bind` bootstrap，自动回填 `tenant_key`、`owner_open_id`、`owner_report_chat_id` 到 `.env`。
+- 飞书原始事件会落盘到 `data/events/`。
+- 感知后的标准输入会落盘到 `data/perception/`。
+- 感知记录会进入正式 runtime queue，由正式 Agent Loop 消费。
+- Agent 可通过统一反馈接口向飞书会话回文本消息。
+- CLI 可查看飞书监听状态、最近事件和 doctor 诊断信息。
 
-- 直属负责人发来的紧急变更，可能需要立即提醒。
-- 普通群聊里的泛泛讨论，可能只适合进入摘要。
-- 涉及代表用户表态、转发文件、回复飞书消息的动作，必须先审批。
-- 一个看似简单的文件请求，如果来自关键项目、关键角色或关键阶段，就不能被当作普通通知处理。
+同时，项目已经完成以下本地能力：
 
-DutyFlow 的核心优势在于把 Agent 的判断从“会不会回答”推进到“是否懂身份、责任、权限和打断价值”。
+- `.env` 统一配置读取。
+- 本地 Markdown 存储与审计日志。
+- OpenAI-compatible 模型调用。
+- Agent 执行核心 `core_loop.py`。
+- `ToolRegistry / ToolRouter / PermissionGate / ToolExecutor` 工具控制链。
+- `SkillRegistry + load_skill`。
+- 身份、来源、责任查询工具。
+- 联系人知识查询与写入工具。
+- 后台任务 Markdown 存储。
+- 后台任务调度器。
+- 审批记录存储。
+- 任务中断记录。
+- 后台任务入口工具。
+- 审批创建工具。
 
-## 项目最终雏形
+## 当前边界
 
-Demo 完整闭环目标如下：
+以下能力还没有完整闭环：
 
-```text
-飞书事件输入
-  -> 身份与来源补全
-  -> 事项权重判断
-  -> Agent State 硬规则检查
-  -> 任务状态沉淀
-  -> 必要时发起审批
-  -> 用户在飞书端确认
-  -> 恢复原任务链路
-  -> 飞书回馈
-  -> 本地 Markdown 留痕
-  -> CLI 可观察与调试
-```
+- 飞书审批卡片和按钮回调。
+- 审批通过后的任务恢复执行。
+- 后台任务 worker 的真实执行面。
+- 文件、图片等消息资源的本体下载。
+- 文件、图片、网页、飞书文档的内容解析。
+- 用户视角的完整飞书消息感知。
+- 权重判断、硬规则判断和决策留痕。
 
-长期形态中，飞书是主要用户前端，CLI 只作为本地开发、调试和观察窗口。系统会优先保障可解释、可审批、可追踪，而不是追求静默自动化。
-
-## 当前 Demo 已实现
-
-当前阶段已经完成以下基础能力：
-
-- 本地单进程应用入口：`src/dutyflow/app.py`
-- CLI 调试窗口：`src/dutyflow/cli/main.py`
-- `.env` 统一配置读取，模型 key、base URL、模型名均来自 `.env`
-- 本地 Markdown 存储与基础审计日志
-- `data/state/agent_control_state.md` 运行状态快照初始化
-- 纯内存 `AgentState`，支持多轮消息、工具结果回写、序列化
-- `PermissionGate + ToolExecutor + Recovery + Audit` 的最小控制闭环
-- `/chat` 多轮调试子会话，支持多行输入聚合、持续复用同一 `AgentState`
-- 工具控制层：
-  - `ToolSpec`
-  - `ToolCall`
-  - `ToolResultEnvelope`
-  - `ToolRegistry`
-  - `ToolRouter`
-  - `ToolExecutor`
-  - `ToolUseContext`
-- 工具执行层支持串行与真实并发批次，并封装工具异常
-- OpenAI-compatible 模型调用适配
-- Skill 注册与按需加载：
-  - `SkillRegistry`
-  - `load_skill`
-  - `skill_creator`
-  - `cli_session_operator`
-- 当前内置内部工具：
-  - `load_skill`
-  - `create_skill`
-  - `open_cli_session`
-  - `exec_cli_command`
-  - `close_cli_session`
-  - `lookup_contact_identity`
-  - `lookup_source_context`
-  - `lookup_responsibility_context`
-  - `search_contact_knowledge_headers`
-  - `get_contact_knowledge_detail`
-  - `add_contact_knowledge`
-  - `update_contact_knowledge`
-- Step 4 身份 / 来源 / 责任查询链：
-  - `data/identity/contacts/index.md`
-  - `data/identity/contacts/people/contact_<id>.md`
-  - `data/identity/sources/index.md`
-  - 联系人补充知识 `data/knowledge/contacts/contact_<id>/ckn_<id>.md`
-- 结构化 Markdown 内部解析层：
-  - `SchemaRegistry`
-  - `FrontmatterParser`
-  - `RecordLocator`
-  - `SectionExtractor`
-  - `SnippetBuilder`
-  - `StructuredRecordUpdater`
-
-当前 `/chat` 是开发调试接口，不是最终面向用户的产品入口。它用于验证模型调用、Agent State、多轮上下文、工具调用和工具结果回写是否正确。
-
-## Demo 期暂未完成
-
-以下能力是 Demo 闭环目标的一部分，但当前阶段尚未完成真实接入：
-
-- 飞书事件接收
-- 飞书消息、文件、审批回馈
-- 事件权重判断与硬规则决策层
-- 飞书端审批与审批后恢复原任务链路
-- 用户可查看的任务清单
-- 上下文压缩与摘要落盘
-- 完整任务审计报告
-- 更完整的长期记忆与知识库工具
-- Step 5 之后的真实事件入口、任务沉淀、飞书反馈闭环
-
-这些能力会在后续 step 中逐步实现。当前代码已经完成控制面、权限层、身份/来源/责任查询层和联系人知识查询层，但离完整 Demo 闭环还差事件入口、决策层、任务层和飞书反馈层。
+当前文件消息可以收到事件，也会保存 `file_key`、`file_name` 等线索，但不会下载文件本体。
 
 ## 目录结构
 
@@ -115,8 +56,6 @@ DutyFlow/
   AGENTS.md
   pyproject.toml
   .env.example
-  Dockerfile
-  docker-compose.yml
 
   docs/
     ARCHITECTURE.md
@@ -124,35 +63,46 @@ DutyFlow/
     TESTING.md
     CODE_STYLE.md
 
+  skills/
+    ...
+
   src/
     dutyflow/
       app.py
       cli/
-        main.py
       config/
-        env.py
       storage/
-        file_store.py
-        markdown_store.py
       logging/
-        audit_log.py
+      feishu/
+      feedback/
+      perception/
+      identity/
+      knowledge/
+      approval/
+      tasks/
       agent/
-        state.py
-        loop.py
+        core_loop.py
+        runtime_loop.py
+        runtime_service.py
+        debug_chat_service.py
         model_client.py
-        debug_tools.py
+        skills.py
         tools/
-          types.py
-          registry.py
-          router.py
-          executor.py
-          context.py
+
+  data/
+    events/
+    perception/
+    identity/
+    knowledge/
+    tasks/
+    approvals/
+    logs/
 
   test/
     test_*.py
 ```
 
-运行产生的数据默认写入 `data/`。该目录用于本地日志、状态、任务、审批、上下文和报告留痕，不应提交真实运行数据。
+`data/` 是本地运行数据目录，用于保存事件、感知记录、任务、审批、日志和测试样本。真实运行数据不要提交到远程仓库。
 
 ## 环境配置
 
@@ -162,7 +112,7 @@ DutyFlow/
 cp .env.example .env
 ```
 
-至少需要填写模型配置：
+模型配置：
 
 ```env
 DUTYFLOW_MODEL_API_KEY=replace-with-model-api-key
@@ -170,53 +120,53 @@ DUTYFLOW_MODEL_BASE_URL=https://your-openai-compatible-endpoint
 DUTYFLOW_MODEL_NAME=your-model-name
 ```
 
-模型接口当前按 OpenAI-compatible `/chat/completions` 适配：
+`DUTYFLOW_MODEL_BASE_URL` 需要填写完整接口地址，程序不会自动追加 `/chat/completions`。
 
-- `DUTYFLOW_MODEL_BASE_URL` 必须直接填写完整端点。
-- 程序不会自动追加 `/chat/completions`。
+飞书配置：
 
-飞书配置字段已在 `.env.example` 中预留，真实接入时再按飞书开放平台配置确认。
+```env
+DUTYFLOW_FEISHU_APP_ID=replace-with-feishu-app-id
+DUTYFLOW_FEISHU_APP_SECRET=replace-with-feishu-app-secret
+DUTYFLOW_FEISHU_EVENT_VERIFY_TOKEN=replace-with-feishu-event-token
+DUTYFLOW_FEISHU_EVENT_ENCRYPT_KEY=replace-with-feishu-encrypt-key
+DUTYFLOW_FEISHU_EVENT_MODE=long_connection
+```
+
+首次绑定时可以先保留这些占位：
+
+```env
+DUTYFLOW_FEISHU_TENANT_KEY=replace-with-feishu-tenant-key
+DUTYFLOW_FEISHU_OWNER_OPEN_ID=replace-with-owner-open-id
+DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=replace-with-owner-report-chat-id
+```
+
+启动后，在飞书里私聊当前 Bot 发送：
+
+```text
+/bind
+```
+
+系统会从飞书事件中读取真实值并写回 `.env`。
 
 ## 本地运行
 
-安装依赖并进入 CLI：
+安装依赖：
+
+```bash
+uv sync
+```
+
+启动应用：
 
 ```bash
 uv run src/dutyflow/app.py
 ```
 
-启动后：
+启动后会自动拉起：
 
-```text
-DutyFlow CLI started. Type /help to list commands, /exit to quit.
-DutyFlow>
-```
-
-常用命令：
-
-```text
-/help
-/health
-/chat
-/exit
-```
-
-进入多轮调试：
-
-```text
-DutyFlow> /chat
-Chat> 用一句话回复 ping
-Chat> 继续上一轮，只回复 done
-Chat> /back
-DutyFlow> /exit
-```
-
-也可以带首条消息进入：
-
-```text
-DutyFlow> /chat 用一句话回复 ping
-Chat> 继续上一轮，只回复 done
-```
+- 飞书长连接监听
+- 正式 runtime worker
+- CLI 控制台
 
 健康检查：
 
@@ -224,35 +174,93 @@ Chat> 继续上一轮，只回复 done
 uv run src/dutyflow/app.py --health
 ```
 
-只做启动检查、不进入持续 CLI：
+只做启动检查，不进入持续 CLI：
 
 ```bash
 uv run src/dutyflow/app.py --no-interactive
 ```
+
+## CLI 命令
+
+```text
+/help
+/health
+/feishu
+/feishu status
+/feishu latest
+/feishu doctor
+/feishu fixture 文本
+/chat
+/chat run 用户输入
+/chat status
+/chat latest
+/exit
+```
+
+说明：
+
+- `/feishu` 和 `/feishu status` 只查看当前监听状态。
+- `/feishu listen` 已废弃；监听会在应用启动时自动拉起。
+- `/feishu doctor` 用于查看长连接、事件计数和最近事件。
+- `/chat` 是非阻塞调试入口，不是正式用户入口。
+- `/chat 用户输入` 等同于 `/chat run 用户输入`。
+
+## 飞书人工测试
+
+1. 启动应用。
+2. 在飞书里私聊当前 Bot 发送 `hello`。
+3. 终端应出现飞书事件日志。
+4. `data/events/` 下应出现对应事件文件。
+5. `data/perception/` 下应出现对应感知记录。
+6. Bot 应收到 runtime 回信。
+
+绑定测试：
+
+```text
+/bind
+```
+
+群聊测试：
+
+```text
+@Bot test
+```
+
+文件测试：
+
+- 私聊 Bot 发送文件。
+- 检查事件文件中是否有 `message_type`、`file_key`、`file_name`。
+- 当前不会下载文件本体。
 
 ## 测试
 
 运行完整测试：
 
 ```bash
-UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python -m unittest discover -s test
+PYTHONPATH=src uv run python -m unittest discover -s test
 ```
 
-当前阶段已覆盖：
+也可以直接使用系统 Python：
+
+```bash
+python3 -m unittest discover -s test
+```
+
+当前测试覆盖主要包括：
 
 - 应用入口与健康检查
 - `.env` 配置读取
 - Markdown 存储
 - 审计日志
-- Agent State
-- Tool Registry / Router / Executor
-- Agent Loop
-- CLI `/chat`
-- 模型响应解析
+- 飞书接入与感知记录
+- 正式 runtime loop
+- 非阻塞 `/chat`
+- 工具注册、路由、执行和权限
+- 身份、来源、责任查询
+- 联系人知识工具
+- 后台任务、审批和中断记录
 
-## Docker 部署
-
-项目支持 Docker 方式启动本地 Demo。
+## Docker
 
 构建镜像：
 
@@ -260,7 +268,7 @@ UV_CACHE_DIR=/tmp/dutyflow-uv-cache PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv 
 docker build -t dutyflow-demo .
 ```
 
-运行 CLI：
+运行：
 
 ```bash
 docker run --rm -it \
@@ -284,23 +292,4 @@ docker run --rm \
 docker compose run --rm dutyflow
 ```
 
-说明：
-
-- `.env` 不会被复制进镜像，运行时通过 `--env-file .env` 或 Compose 的 `env_file` 注入。
-- `data/` 建议挂载到宿主机，便于查看日志、状态和后续任务留痕。
-- 当前 Demo 是本地单用户 CLI 调试形态，还不是云端多用户服务。
-
-## 未来扩展方向
-
-DutyFlow 后续扩展会围绕“权限感知办公 Agent”主线推进：
-
-- 飞书事件订阅与消息回馈
-- 联系人身份索引、部门、上下级、飞书 ID 精准匹配
-- 权重 skill 与 Agent State 硬规则协同判断
-- 审批 hook 与任务中断恢复
-- 用户可查看的任务清单和状态流转
-- 上下文摘要和 Markdown 审计报告
-- 安全的外部工具注册、路由、执行和权限闸门
-- 私域知识增强和长期记忆，但不抢占 Demo 主闭环
-
-项目的目标不是让 Agent 自动做一切，而是让它在真实办公关系中知道什么时候该提醒、什么时候该沉淀、什么时候必须停下来请用户确认。
+`.env` 通过运行参数注入，`data/` 建议挂载到宿主机，便于查看事件、任务、审批和日志。
