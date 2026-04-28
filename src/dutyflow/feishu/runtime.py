@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
 from dutyflow.agent.runtime_service import RuntimeService
+from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
 from dutyflow.perception.store import PerceptionRecordService
@@ -42,6 +43,7 @@ class FeishuIngressService:
         markdown_store: MarkdownStore | None = None,
         perception_service: PerceptionRecordService | None = None,
         runtime_service: RuntimeService | None = None,
+        feedback_gateway: FeedbackGateway | None = None,
     ) -> None:
         """绑定配置、适配器和持久化依赖。"""
         self.project_root = project_root
@@ -54,6 +56,7 @@ class FeishuIngressService:
             markdown_store=self.markdown_store,
         )
         self.runtime_service = runtime_service
+        self.feedback_gateway = feedback_gateway or FeedbackGateway(config, client=self.client)
         self.events_dir = config.data_dir / "events"
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
@@ -315,17 +318,26 @@ class FeishuIngressService:
         }
         saved_keys = save_env_values(self.project_root, env_values)
         self._apply_bound_values_to_config(env_values)
-        message_result = self.client.send_message(
+        feedback_result = self.feedback_gateway.send_text(
             envelope.chat_id,
             "绑定成功。已记录 tenant_key、owner_open_id 和 owner_report_chat_id。",
         )
+        return self._build_bind_feedback_payload(saved_keys, env_values, feedback_result)
+
+    def _build_bind_feedback_payload(
+        self,
+        saved_keys: list[str],
+        env_values: Mapping[str, str],
+        feedback_result: FeedbackResult,
+    ) -> dict[str, Any]:
+        """构造 `/bind` 回信阶段的稳定输出字段。"""
         return {
             "bind_command_detected": True,
             "saved_env_keys": saved_keys,
-            "saved_env_values": env_values,
-            "send_message_status": message_result.status,
-            "send_message_ok": message_result.ok,
-            "send_message_payload": message_result.payload,
+            "saved_env_values": dict(env_values),
+            "feedback_status": feedback_result.status,
+            "feedback_ok": feedback_result.ok,
+            "feedback_payload": feedback_result.payload,
         }
 
     def _apply_bound_values_to_config(self, env_values: Mapping[str, str]) -> None:
