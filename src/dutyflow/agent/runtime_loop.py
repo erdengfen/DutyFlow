@@ -53,12 +53,13 @@ class RuntimeAgentLoop:
         self.perception_service = perception_service or PerceptionRecordService(self.project_root)
         self.agent_loop = AgentLoop(
             model_client or OpenAICompatibleModelClient(config),
-            registry or _build_user_facing_runtime_registry(),
+            registry or _build_formal_runtime_registry(),
             self.project_root,
             permission_mode="auto",
             approval_requester=None,
             audit_logger=audit_logger,
-            skill_registry=skill_registry or SkillRegistry.empty(self.project_root / "skills"),
+            skill_registry=skill_registry or SkillRegistry(self.project_root / "skills"),
+            system_prompt_preamble=_RUNTIME_SYSTEM_PROMPT,
         )
         self.latest_result: RuntimeLoopExecutionResult | None = None
 
@@ -165,13 +166,15 @@ def _build_runtime_tool_content(
     }
 
 
-def _build_user_facing_runtime_registry() -> ToolRegistry:
-    """为正式用户态 runtime 构造受限工具集，排除开发期 CLI 和写入能力。"""
+def _build_formal_runtime_registry() -> ToolRegistry:
+    """为正式 runtime 构造默认工具集，仅排除 CLI tools。"""
     base_registry = create_runtime_tool_registry()
-    user_registry = ToolRegistry()
-    for name in _USER_FACING_TOOL_NAMES:
-        user_registry.register(base_registry.get(name), base_registry.get_handler(name))
-    return user_registry
+    registry = ToolRegistry()
+    for spec in base_registry.list_specs():
+        if spec.name in _CLI_TOOL_NAMES:
+            continue
+        registry.register(spec, base_registry.get_handler(spec.name))
+    return registry
 
 
 def _build_empty_reply_summary(loop_result: AgentLoopResult) -> str:
@@ -183,12 +186,18 @@ def _build_empty_reply_summary(loop_result: AgentLoopResult) -> str:
     return "已收到消息，当前未生成直接回复文本。"
 
 
-_USER_FACING_TOOL_NAMES = (
-    "get_contact_knowledge_detail",
-    "lookup_contact_identity",
-    "lookup_responsibility_context",
-    "lookup_source_context",
-    "search_contact_knowledge_headers",
+_RUNTIME_SYSTEM_PROMPT = (
+    "You are a personal assistant designed for workplace scenarios. "
+    "Use the available skills and tools to infer and refine relationship context from the local knowledge base, "
+    "then help the user handle work items or provide practical recommendations. "
+    "Do not use Markdown in user-facing replies. "
+    "Always respond in Chinese with clear meaning and well-structured logic."
+)
+
+_CLI_TOOL_NAMES = (
+    "open_cli_session",
+    "exec_cli_command",
+    "close_cli_session",
 )
 
 

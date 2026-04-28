@@ -97,6 +97,7 @@ class AgentLoop:
         recovery_manager: RecoveryManager | None = None,
         max_model_recovery_attempts: int = 3,
         skill_registry: SkillRegistry | None = None,
+        system_prompt_preamble: str = "",
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -109,6 +110,7 @@ class AgentLoop:
         self.approval_requester = approval_requester
         self.audit_logger = audit_logger
         self.skill_registry = skill_registry or SkillRegistry.empty(cwd / "skills")
+        self.system_prompt_preamble = system_prompt_preamble.strip()
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
@@ -244,7 +246,7 @@ class AgentLoop:
 
     def _ensure_skill_manifest_message(self, state: AgentState) -> AgentState:
         """确保 AgentState 顶部始终存在当前 skills 的 system message。"""
-        text = self.skill_registry.system_prompt_text()
+        text = _build_system_prompt_text(self.system_prompt_preamble, self.skill_registry)
         system_message = AgentMessage(
             role="system",
             content=(
@@ -260,7 +262,6 @@ class AgentLoop:
                 return state
             return replace(state, messages=(system_message,) + state.messages[1:])
         return replace(state, messages=(system_message,) + state.messages)
-
     def _register_model_recovery(
         self,
         state: AgentState,
@@ -427,6 +428,14 @@ class AgentLoop:
                 "transition_reason": state.transition_reason,
             },
         )
+
+
+def _build_system_prompt_text(system_prompt_preamble: str, skill_registry: SkillRegistry) -> str:
+    """组合可选系统提示前导和当前 skills manifest。"""
+    skills_text = skill_registry.system_prompt_text()
+    if not system_prompt_preamble:
+        return skills_text
+    return f"{system_prompt_preamble}\n\n{skills_text}"
 
 
 def extract_tool_calls(state: AgentState) -> tuple[ToolCall, ...]:

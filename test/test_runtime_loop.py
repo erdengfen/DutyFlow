@@ -26,17 +26,36 @@ from dutyflow.perception.store import PerceptionRecordService  # noqa: E402
 class TestRuntimeLoop(unittest.TestCase):
     """验证正式 runtime loop 与现有 AgentLoop 的最小整合闭环。"""
 
-    def test_runtime_loop_defaults_to_user_facing_registry_and_empty_skills(self) -> None:
-        """正式 runtime loop 默认不应暴露 CLI/skill 写入能力。"""
+    def test_runtime_loop_defaults_to_non_cli_tools_and_full_skills(self) -> None:
+        """正式 runtime loop 默认应注册全量非 CLI tools，并加载项目内全部 skills。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             config = _write_env(root)
+            _write_skill(root, "alpha_skill", "alpha description")
             loop = RuntimeAgentLoop(root, config, feedback_gateway=_FakeFeedbackGateway())
             self.assertFalse(loop.agent_loop.registry.has("open_cli_session"))
             self.assertFalse(loop.agent_loop.registry.has("exec_cli_command"))
-            self.assertFalse(loop.agent_loop.registry.has("create_skill"))
+            self.assertFalse(loop.agent_loop.registry.has("close_cli_session"))
             self.assertTrue(loop.agent_loop.registry.has("lookup_contact_identity"))
-            self.assertEqual(loop.agent_loop.skill_registry.describe_available(), "(none)")
+            self.assertTrue(loop.agent_loop.registry.has("add_contact_knowledge"))
+            self.assertTrue(loop.agent_loop.registry.has("update_contact_knowledge"))
+            self.assertTrue(loop.agent_loop.registry.has("load_skill"))
+            self.assertTrue(loop.agent_loop.registry.has("create_skill"))
+            self.assertIn("alpha_skill", loop.agent_loop.skill_registry.describe_available())
+
+    def test_runtime_loop_uses_runtime_system_prompt(self) -> None:
+        """正式 runtime loop 的 system message 应包含英文系统提示和 skills 清单。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root)
+            _write_skill(root, "alpha_skill", "alpha description")
+            loop = RuntimeAgentLoop(root, config, feedback_gateway=_FakeFeedbackGateway())
+            state = loop.agent_loop._prepare_state("hello", "q_runtime", None)
+            system_text = state.messages[0].content[0].text
+            self.assertIn("You are a personal assistant designed for workplace scenarios.", system_text)
+            self.assertIn("Always respond in Chinese", system_text)
+            self.assertIn("Skills available:", system_text)
+            self.assertIn("alpha_skill", system_text)
 
     def test_runtime_loop_sends_plain_text_reply(self) -> None:
         """纯文本响应应通过统一反馈接口直接发回当前会话。"""
@@ -200,6 +219,16 @@ def _create_perception_record(
     )
     raw_event_path = perception.project_root / "data" / "events" / f"evt_{message_id}.md"
     return perception.create_record(envelope, raw_event_path)
+
+
+def _write_skill(root: Path, name: str, description: str) -> None:
+    """在临时项目目录中写入一条最小可加载 skill。"""
+    path = root / "skills" / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nbody\n",
+        encoding="utf-8",
+    )
 
 
 def _work_item(record) -> RuntimeWorkItem:

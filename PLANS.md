@@ -750,8 +750,9 @@ Demo 期最终必须实现以下完整链路：
 - 正式 loop 复用 Step 5 已完成的飞书长连接与心跳保活，不重复创建第二套监听主链。
 - 旧的 `src/dutyflow/agent/loop.py` 保留，用于 `/chat` 调试；在正式 runtime 完成前不删除。
 - 正式 loop 新增独立模块，不与当前 `/chat` 调试 loop 混写。
-- 正式主 loop 只暴露用户态业务工具与必要业务 skill，不暴露开发期 CLI tools、skill 创建能力或开发辅助 skill。
-- 工具与 skill 的能力边界优先通过 registry / skill 面隔离实现，而不是依赖更详细的 description 去“劝阻”模型少用。
+- 正式主 loop 当前加载项目内全部 skills，并注册除 CLI tools 外的全部 runtime tools。
+- 当前阶段仅把 `open_cli_session`、`exec_cli_command`、`close_cli_session` 排除在正式主 loop 外；其它 tools 与 skills 暂按项目内默认能力面暴露。
+- 工具与 skill 的能力边界仍优先通过 registry / skill 面隔离实现，而不是依赖更详细的 description 去“劝阻”模型少用。
 - 后续若需要“后台挂起任务”能力面，应单独定义独立 registry / runtime profile，可按白名单接入更强工具，但不默认继承主 loop 的工具集，也不默认接入开发期 CLI tools。
 
 ### 线程与运行模型
