@@ -19,6 +19,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         """运行时注册表应包含当前项目内置内部工具。"""
         registry = create_runtime_tool_registry()
         self.assertTrue(registry.has("add_contact_knowledge"))
+        self.assertTrue(registry.has("create_approval_request"))
         self.assertTrue(registry.has("close_cli_session"))
         self.assertTrue(registry.has("create_background_task"))
         self.assertTrue(registry.has("create_skill"))
@@ -48,6 +49,7 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         """运行时注册表应把重试与幂等声明加载到 ToolSpec。"""
         registry = create_runtime_tool_registry()
         add_spec = registry.get("add_contact_knowledge")
+        approval_spec = registry.get("create_approval_request")
         close_spec = registry.get("close_cli_session")
         create_background_spec = registry.get("create_background_task")
         create_spec = registry.get("create_skill")
@@ -63,6 +65,8 @@ class TestRuntimeToolRegistry(unittest.TestCase):
         update_spec = registry.get("update_contact_knowledge")
         self.assertTrue(add_spec.requires_approval)
         self.assertEqual(add_spec.idempotency, "unsafe")
+        self.assertFalse(approval_spec.requires_approval)
+        self.assertEqual(approval_spec.idempotency, "read_only")
         self.assertFalse(create_background_spec.requires_approval)
         self.assertEqual(create_background_spec.idempotency, "read_only")
         self.assertTrue(create_spec.requires_approval)

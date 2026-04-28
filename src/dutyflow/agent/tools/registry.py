@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
+from dutyflow.agent.tools.logic.approval_tools.create_approval_request import CreateApprovalRequestTool
 from dutyflow.agent.tools.logic.cli_tools.close_cli_session import CloseCliSessionTool
 from dutyflow.agent.tools.logic.cli_tools.exec_cli_command import ExecCliCommandTool
 from dutyflow.agent.tools.logic.cli_tools.open_cli_session import OpenCliSessionTool
@@ -35,6 +36,7 @@ ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 
 TOOL_REGISTRY = {
     AddContactKnowledgeTool.name: AddContactKnowledgeTool(),
+    CreateApprovalRequestTool.name: CreateApprovalRequestTool(),
     CloseCliSessionTool.name: CloseCliSessionTool(),
     CreateBackgroundTaskTool.name: CreateBackgroundTaskTool(),
     CreateSkillTool.name: CreateSkillTool(),
@@ -135,6 +137,7 @@ def _self_test() -> None:
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
         assert runtime_registry.has("add_contact_knowledge")
+        assert runtime_registry.has("create_approval_request")
         assert runtime_registry.has("close_cli_session")
         assert runtime_registry.has("create_background_task")
         assert runtime_registry.has("create_skill")

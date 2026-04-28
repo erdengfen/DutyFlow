@@ -38,6 +38,7 @@ class TestRuntimeLoop(unittest.TestCase):
             self.assertFalse(loop.agent_loop.registry.has("close_cli_session"))
             self.assertTrue(loop.agent_loop.registry.has("lookup_contact_identity"))
             self.assertTrue(loop.agent_loop.registry.has("add_contact_knowledge"))
+            self.assertTrue(loop.agent_loop.registry.has("create_approval_request"))
             self.assertTrue(loop.agent_loop.registry.has("create_background_task"))
             self.assertTrue(loop.agent_loop.registry.has("update_contact_knowledge"))
             self.assertTrue(loop.agent_loop.registry.has("load_skill"))
