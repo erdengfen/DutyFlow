@@ -715,7 +715,7 @@ Demo 期最终必须实现以下完整链路：
 
 ### 当前未完成
 
-- [ ] 正式 Step 6 事件驱动 loop 仍未接入感知记录读取接口。
+- [x] 正式 Step 6 事件驱动 loop 已接入感知记录读取接口。
 - [ ] 消息资源本体下载和本地资源存储仍未实现；当前只保存资源线索和原始事件。
 - [ ] 文档、飞书文档链接、更多消息类型的解析目标细化规则仍待补充。
 - [ ] 感知记录到任务层、上下文层的衔接尚未开始。
@@ -728,7 +728,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 6: 正式 Agent Loop 与常驻运行编排
 
-状态：进行中。已完成前 7 个功能点：正式 runtime service 骨架、应用启动自动拉起后台服务、感知记录接入 runtime queue、统一反馈接口、正式 loop 接到现有 Agent 基架能力、`/feishu` 命令迁移为状态查看/诊断语义、`/chat` 迁移为非阻塞 debug 任务入口。Step 6 的目标不再是单独实现“权重判断模块”，而是把当前调试期能力收束为正式常驻运行的 Agent 主循环。权重判断、硬规则和决策留痕将作为正式 loop 的内部子环节实现，而不是单独脱离 runtime 编排。
+状态：已完成。Step 6 已完成正式 Agent Loop 与常驻运行编排，包括正式 runtime service 骨架、应用启动自动拉起后台服务、感知记录接入 runtime queue、统一反馈接口、正式 loop 接到现有 Agent 基架能力、`/feishu` 命令迁移为状态查看/诊断语义、`/chat` 迁移为非阻塞 debug 任务入口，以及共享执行核心迁移到 `src/dutyflow/agent/core_loop.py`。原“第一版权重判断、面向用户的硬规则判断和决策留痕”依赖后续用户视角飞书事件接入，当前不纳入 Step 6 实现范围，延后到后续阶段收口。
 
 ### 最终效果
 
@@ -833,7 +833,6 @@ Demo 期最终必须实现以下完整链路：
 - 正式 runtime 不再通过 CLI `input()` 做审批。
 - 用户发送能力统一经过独立反馈接口，而不是模型自由调用工具。
 - 共享执行核心与 `/chat` 调试任务解耦后，正式 runtime 仍保持独立编排。
-- 决策结果可写入 `data/reports/trace_<id>.md`。
 
 ### 涉及文件、类、方法、模块
 
@@ -842,19 +841,14 @@ Demo 期最终必须实现以下完整链路：
 - `src/dutyflow/feishu/runtime.py`
 - `src/dutyflow/perception/store.py`
 - `src/dutyflow/agent/core_loop.py`
-  - 保留为 `/chat` 调试链路
+  - 作为正式 runtime 与 `/chat` debug 共享的执行核心
 - 预期新增：
   - `src/dutyflow/agent/runtime_loop.py`
   - `src/dutyflow/agent/runtime_service.py`
   - `src/dutyflow/feedback/gateway.py`
-  - `src/dutyflow/decision/weighting.py`
-  - `src/dutyflow/decision/rules.py`
-  - `src/dutyflow/agent/tools/decision_trace.py`
 - `data/reports/`
 - `test/test_runtime_loop.py`
 - `test/test_runtime_service.py`
-- `test/test_decision_weighting.py`
-- `test/test_decision_rules.py`
 
 ### 未敲定问题
 
@@ -862,9 +856,9 @@ Demo 期最终必须实现以下完整链路：
 - runtime queue 是否只保留内存队列，还是提前落轻量待消费记录。
 - 长任务“先回复、后完成”的第一版用户文案和状态对象形式。
 - “后台挂起任务”是否需要单独能力面，以及那一层是否需要接入更强工具或独立 skill。
-- `weight_level` 到提醒策略的具体映射。
-- 权重 skill 输出格式。
-- 硬规则阈值，如尝试轮数上限。
+- 后续用户视角飞书事件接入后，`weight_level` 到提醒策略的具体映射。
+- 后续用户视角飞书事件接入后，权重 skill 输出格式。
+- 后续用户视角飞书事件接入后，硬规则阈值，如尝试轮数上限。
 
 ### 分点开发顺序
 
@@ -878,11 +872,11 @@ Demo 期最终必须实现以下完整链路：
 - [x] 第 4 点：新增统一反馈接口，收口文本回复和状态回馈，不让模型自由调用发消息工具。
 - [x] 第 5 点：把正式 loop 接到现有 Agent 基架能力上，支持多轮模型调用和多轮 tool call。
 - [x] 第 6 点：迁移 `/feishu` 命令为状态查看/控制类命令，不再承担启动监听语义。
-- [x] 第 7 点：迁移 `/chat` 为非阻塞 debug 任务入口，旧 `loop.py` 保留但不再作为正式主循环。
-- [ ] 第 8 点：在正式 loop 中接入第一版权重判断、硬规则和决策留痕。
-- [ ] 第 9 点：为新增 `.py` 文件添加自测入口。
-- [ ] 第 10 点：编写对应测试文件。
-- [ ] 第 11 点：执行本阶段完整链路检查。
+- [x] 第 7 点：迁移 `/chat` 为非阻塞 debug 任务入口，并将正式 runtime 与 debug loop 的共享执行核心迁移到 `src/dutyflow/agent/core_loop.py`。
+- [x] 第 8 点：确认“第一版权重判断、面向用户的硬规则判断和决策留痕”依赖后续用户视角飞书事件接入，当前移出 Step 6 实现范围，延后到后续阶段。
+- [x] 第 9 点：为新增 `.py` 文件添加自测入口。
+- [x] 第 10 点：编写对应测试文件。
+- [x] 第 11 点：执行本阶段完整链路检查。
 
 ### 人工确认
 
@@ -1244,9 +1238,9 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 1 | completed | 2026-04-17 | 已完成配置入口、Markdown 存储、按天审计日志、运行目录初始化和 Step 1 测试；真实模型与飞书链路待配置后补测。 |
 | Step 2 | completed | 2026-04-23 | 已完成最小 agent 基架控制面、权限、恢复、审计和 Hook 预留接口，并通过阶段回归。 |
 | Step 3 | completed | 2026-04-23 | 已完成 skills 解析层、`load_skill` 内部工具、system message manifest 注入和阶段测试。 |
-| Step 4 | pending |  |  |
+| Step 4 | completed | 2026-04-25 | 已完成身份、来源、责任查询主链路，以及联系人知识两段式工具与对应测试。 |
 | Step 5 | in_progress | 2026-04-27 | 已完成真实 p2p 私聊链路、`/bind` 回填 `.env`、Bot 回信与 `/feishu doctor` 诊断；群聊 `@Bot` 与消息资源获取仍待补测。 |
-| Step 6 | pending |  |  |
+| Step 6 | completed | 2026-04-28 | 已完成正式 Agent Loop 与常驻运行编排；面向用户的硬规则判断与决策留痕延后到后续用户视角飞书事件接入后收口。 |
 | Step 7 | pending |  |  |
 | Step 8 | pending |  |  |
 | Step 9 | pending |  |  |
