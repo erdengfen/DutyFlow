@@ -1,13 +1,26 @@
-# 本文件负责导出 Step 7 的任务状态存储与调度能力。
+# 本文件负责导出 Step 7 的任务状态、调度与后台任务入口能力。
 
+from dutyflow.tasks.background_task_intake import (
+    BackgroundTaskIntakeService,
+    BackgroundTaskToolResult,
+)
 from dutyflow.tasks.task_scheduler import TaskDispatchItem, TaskSchedulerService
 from dutyflow.tasks.task_state import TaskRecord, TaskStore
 
-__all__ = ["TaskDispatchItem", "TaskRecord", "TaskSchedulerService", "TaskStore"]
+__all__ = [
+    "BackgroundTaskIntakeService",
+    "BackgroundTaskToolResult",
+    "TaskDispatchItem",
+    "TaskRecord",
+    "TaskSchedulerService",
+    "TaskStore",
+]
 
 
 def _self_test() -> None:
     """验证 tasks 包能正常导出核心对象。"""
+    assert BackgroundTaskIntakeService is not None
+    assert BackgroundTaskToolResult is not None
     assert TaskDispatchItem is not None
     assert TaskRecord is not None
     assert TaskSchedulerService is not None

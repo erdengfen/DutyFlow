@@ -25,6 +25,8 @@ from dutyflow.agent.tools.logic.identity_tools.lookup_responsibility_context imp
 from dutyflow.agent.tools.logic.identity_tools.lookup_source_context import LookupSourceContextTool
 from dutyflow.agent.tools.logic.skill_tools.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.skill_tools.load_skill import LoadSkillTool
+from dutyflow.agent.tools.logic.task_tools.create_background_task import CreateBackgroundTaskTool
+from dutyflow.agent.tools.logic.task_tools.schedule_background_task import ScheduleBackgroundTaskTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext
@@ -34,6 +36,7 @@ ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 TOOL_REGISTRY = {
     AddContactKnowledgeTool.name: AddContactKnowledgeTool(),
     CloseCliSessionTool.name: CloseCliSessionTool(),
+    CreateBackgroundTaskTool.name: CreateBackgroundTaskTool(),
     CreateSkillTool.name: CreateSkillTool(),
     ExecCliCommandTool.name: ExecCliCommandTool(),
     GetContactKnowledgeDetailTool.name: GetContactKnowledgeDetailTool(),
@@ -42,6 +45,7 @@ TOOL_REGISTRY = {
     LookupResponsibilityContextTool.name: LookupResponsibilityContextTool(),
     LookupSourceContextTool.name: LookupSourceContextTool(),
     OpenCliSessionTool.name: OpenCliSessionTool(),
+    ScheduleBackgroundTaskTool.name: ScheduleBackgroundTaskTool(),
     SearchContactKnowledgeHeadersTool.name: SearchContactKnowledgeHeadersTool(),
     UpdateContactKnowledgeTool.name: UpdateContactKnowledgeTool(),
 }
@@ -132,6 +136,7 @@ def _self_test() -> None:
         runtime_registry = create_runtime_tool_registry()
         assert runtime_registry.has("add_contact_knowledge")
         assert runtime_registry.has("close_cli_session")
+        assert runtime_registry.has("create_background_task")
         assert runtime_registry.has("create_skill")
         assert runtime_registry.has("exec_cli_command")
         assert runtime_registry.has("get_contact_knowledge_detail")
@@ -140,6 +145,7 @@ def _self_test() -> None:
         assert runtime_registry.has("lookup_responsibility_context")
         assert runtime_registry.has("lookup_source_context")
         assert runtime_registry.has("open_cli_session")
+        assert runtime_registry.has("schedule_background_task")
         assert runtime_registry.has("search_contact_knowledge_headers")
         assert runtime_registry.has("update_contact_knowledge")
         return
