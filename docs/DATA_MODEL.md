@@ -50,6 +50,7 @@ updated_at: <ISO-8601>
 建议使用以下稳定 ID 前缀：
 
 - `evt_`：事件记录
+- `per_`：感知记录
 - `contact_`：联系人
 - `source_`：信息来源
 - `task_`：任务
@@ -83,6 +84,7 @@ data/
   memory/
   state/
   events/
+  perception/
   contexts/
   approvals/
   tasks/
@@ -105,6 +107,7 @@ data/
     identity/
     state/
     events/
+    perception/
     contexts/
     approvals/
     tasks/
@@ -608,6 +611,105 @@ task_id: ""
 
 - 飞书原始事件如包含敏感内容，应只保存必要摘要和定位信息。
 - 事件记录必须能关联任务、联系人和来源。
+
+## 5.1 感知记录
+
+感知记录位于飞书接入层和后续 Agent Loop 之间，用于把原始事件转换成更稳定的标准输入。
+
+文件位置：
+
+```text
+data/perception/YYYY-MM-DD/per_<message_id>.md
+```
+
+约束：
+
+- 一条进入主链的有意义事件对应一条感知记录。
+- 感知记录不按天、联系人或群聊聚合；日期目录仅用于分片。
+- 后续 Agent Loop 默认读取感知记录，不直接读取 `data/events/` 下的原始事件文件。
+- 感知层只做确定性结构提取和确定性改写，不做责任判断、权重判断和任务生成。
+
+Frontmatter：
+
+```yaml
+schema: dutyflow.perceived_event.v1
+id: per_om_xxx
+source_event_id: evt_om_xxx
+message_id: om_xxx
+received_at: 2026-04-28T12:00:00+08:00
+event_type: im.message.receive_v1
+trigger_kind: p2p_text
+chat_type: p2p
+chat_id: oc_xxx
+sender_open_id: ou_xxx
+message_type: text
+mentions_bot: true
+has_attachment: false
+attachment_kinds: ""
+raw_event_file: data/events/evt_om_xxx.md
+status: perceived
+updated_at: 2026-04-28T12:00:00+08:00
+```
+
+第一版 `trigger_kind` 建议值：
+
+- `p2p_text`
+- `p2p_file`
+- `p2p_image`
+- `p2p_link`
+- `group_at_bot_text`
+- `group_at_bot_file`
+- `group_at_bot_image`
+- `group_at_bot_link`
+
+正文结构：
+
+```md
+# Perceived Event per_om_xxx
+
+## Summary
+
+一句话描述当前输入是什么。
+
+## Extracted Text
+
+- raw_text:
+- content_preview:
+- mention_text:
+
+## Entities
+
+| kind | value | source |
+|---|---|---|
+| sender | ou_xxx | sender_open_id |
+| chat | oc_xxx | chat_id |
+| mention | ou_bot_xxx | mentions |
+
+## Parse Targets
+
+| target_id | target_type | file_key | file_name | url | required_tool |
+|---|---|---|---|---|---|
+
+## Lookup Hints
+
+- contact_lookup_hint:
+- source_lookup_hint:
+- responsibility_lookup_hint:
+- followup_needed:
+
+## Raw Reference
+
+- event_record: data/events/evt_om_xxx.md
+```
+
+字段说明：
+
+- `source_event_id`：指向对应原始事件记录 ID。
+- `raw_event_file`：指向 `data/events/` 下原始事件记录的稳定相对路径。
+- `attachment_kinds`：多值字段，使用英文逗号分隔字符串。
+- `Entities`：保存 sender、chat、mentions 等稳定实体，不做关系推理。
+- `Parse Targets`：保存后续内容解析工具可能消费的资源线索，不在感知层直接执行下载或解析。
+- `Lookup Hints`：保存后续身份、来源、责任工具可直接消费的稳定提示。
 
 ## 6. 上下文摘要
 

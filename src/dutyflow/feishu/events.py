@@ -19,12 +19,14 @@ class FeishuEventEnvelope:
     message_id: str
     chat_id: str
     chat_type: str
+    message_type: str
     sender_open_id: str
     sender_user_id: str
     sender_union_id: str
     message_text: str
     content_preview: str
     mentions_bot: bool
+    mentioned_open_ids: tuple[str, ...]
     received_at: str
     raw_event: dict[str, Any]
 
@@ -72,12 +74,14 @@ class FeishuEventAdapter:
             message_id=_as_text(message.get("message_id")),
             chat_id=_as_text(message.get("chat_id")),
             chat_type=_pick_first_non_empty(message.get("chat_type"), event.get("chat_type")),
+            message_type=_pick_first_non_empty(message.get("message_type"), event.get("message_type")),
             sender_open_id=_as_text(sender_id.get("open_id")),
             sender_user_id=_as_text(sender_id.get("user_id")),
             sender_union_id=_as_text(sender_id.get("union_id")),
             message_text=_extract_message_text(message.get("content")),
             content_preview=_extract_content_preview(message.get("content")),
             mentions_bot=_mentions_bot(mentions),
+            mentioned_open_ids=_extract_mentioned_open_ids(mentions),
             received_at=received_at or _received_at_from_header(header),
             raw_event=dict(raw_event),
         )
@@ -95,6 +99,8 @@ class FeishuEventAdapter:
         sender_open_id: str = "ou_fixture_sender",
         sender_user_id: str = "user_fixture_sender",
         sender_union_id: str = "union_fixture_sender",
+        message_type: str = "text",
+        content_payload: Mapping[str, Any] | None = None,
         mentions_bot: bool = False,
     ) -> dict[str, Any]:
         """构造无真实飞书环境下可复用的本地 fixture 事件。"""
@@ -110,6 +116,7 @@ class FeishuEventAdapter:
                     },
                 }
             )
+        payload = _build_fixture_content_payload(text, message_type, content_payload)
         return {
             "schema": "2.0",
             "header": {
@@ -131,7 +138,8 @@ class FeishuEventAdapter:
                     "message_id": message_id,
                     "chat_id": chat_id,
                     "chat_type": chat_type,
-                    "content": json.dumps({"text": text}, ensure_ascii=False),
+                    "content": json.dumps(payload, ensure_ascii=False),
+                    "message_type": message_type,
                     "mentions": mention_blocks,
                 },
                 "chat_type": chat_type,
@@ -172,6 +180,38 @@ def _normalize_mentions(value: object) -> list[dict[str, Any]]:
 def _mentions_bot(mentions: list[dict[str, Any]]) -> bool:
     """根据 mentions 粗略判断当前消息是否显式 @Bot。"""
     return any(_mapping(item.get("id")) for item in mentions)
+
+
+def _extract_mentioned_open_ids(mentions: list[dict[str, Any]]) -> tuple[str, ...]:
+    """提取消息 mentions 中可稳定复用的 open_id 列表。"""
+    values: list[str] = []
+    for item in mentions:
+        mention_id = _mapping(item.get("id"))
+        open_id = _as_text(mention_id.get("open_id"))
+        if open_id:
+            values.append(open_id)
+    return tuple(values)
+
+
+def _build_fixture_content_payload(
+    text: str,
+    message_type: str,
+    content_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """为本地 fixture 生成与消息类型匹配的最小内容结构。"""
+    if content_payload is not None:
+        return dict(content_payload)
+    if message_type == "file":
+        return {
+            "file_key": "file_fixture_key",
+            "file_name": text or "fixture.txt",
+        }
+    if message_type == "image":
+        return {
+            "image_key": "img_fixture_key",
+            "image_name": text or "fixture.png",
+        }
+    return {"text": text}
 
 
 def _extract_content_preview(raw_content: object) -> str:
@@ -246,6 +286,7 @@ def _self_test() -> None:
     envelope = adapter.build_event_envelope(raw_event)
     assert envelope.event_type == "im.message.receive_v1"
     assert envelope.is_group_at_bot()
+    assert envelope.message_type == "text"
 
 
 if __name__ == "__main__":

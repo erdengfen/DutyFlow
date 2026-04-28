@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
+from dutyflow.perception.store import PerceptionRecordService
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
 
@@ -38,6 +39,7 @@ class FeishuIngressService:
         adapter: FeishuEventAdapter | None = None,
         client: FeishuClient | None = None,
         markdown_store: MarkdownStore | None = None,
+        perception_service: PerceptionRecordService | None = None,
     ) -> None:
         """绑定配置、适配器和持久化依赖。"""
         self.project_root = project_root
@@ -45,6 +47,10 @@ class FeishuIngressService:
         self.adapter = adapter or FeishuEventAdapter()
         self.client = client or FeishuClient(config)
         self.markdown_store = markdown_store or MarkdownStore(FileStore(project_root))
+        self.perception_service = perception_service or PerceptionRecordService(
+            project_root,
+            markdown_store=self.markdown_store,
+        )
         self.events_dir = config.data_dir / "events"
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
@@ -85,11 +91,12 @@ class FeishuIngressService:
         bind_payload: dict[str, Any] = {}
         action = "accepted"
         detail = "event accepted and persisted"
+        record_path = self._write_event_record(envelope)
+        perception_payload = self._build_perception_payload(envelope, record_path)
         if envelope.is_bind_request():
             bind_payload = self._handle_bind_request(envelope)
             action = "bind_saved"
             detail = "bind command processed and persisted"
-        record_path = self._write_event_record(envelope)
         self._remember_event(envelope)
         result = FeishuIngressResult(
             action=action,
@@ -97,7 +104,12 @@ class FeishuIngressService:
             message_id=envelope.message_id,
             record_path=str(record_path),
             detail=detail,
-            payload={**event_payload, **self._build_discovery_payload(envelope), **bind_payload},
+            payload={
+                **event_payload,
+                **self._build_discovery_payload(envelope),
+                **perception_payload,
+                **bind_payload,
+            },
         )
         self.latest_result = result
         if envelope.is_bind_request():
@@ -229,8 +241,29 @@ class FeishuIngressService:
             "event_type": envelope.event_type,
             "chat_type": envelope.chat_type,
             "chat_id": envelope.chat_id,
+            "message_type": envelope.message_type,
             "sender_open_id": envelope.sender_open_id,
             "content_preview": envelope.content_preview,
+        }
+
+    def _build_perception_payload(
+        self,
+        envelope: FeishuEventEnvelope,
+        record_path: Path,
+    ) -> dict[str, Any]:
+        """生成感知记录，并把后续 loop 读取所需线索挂回结果载荷。"""
+        record = self.perception_service.create_record(envelope, record_path)
+        return {
+            "perception_record_id": record.record_id,
+            "perception_record_path": str(record.path),
+            "perception_trigger_kind": record.trigger_kind,
+            "perception_has_attachment": "yes" if record.has_attachment else "no",
+            "loop_input_preview": {
+                "perception_id": record.record_id,
+                "trigger_kind": record.trigger_kind,
+                "contact_lookup_hint": record.contact_lookup_hint,
+                "source_lookup_hint": record.source_lookup_hint,
+            },
         }
 
     def _handle_bind_request(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
@@ -357,6 +390,7 @@ def _build_event_body(
         "## Raw Summary\n\n"
         f"- event_type: {envelope.event_type}\n"
         f"- chat_type: {envelope.chat_type}\n"
+        f"- message_type: {envelope.message_type}\n"
         f"- message_id: {envelope.message_id}\n"
         f"- sender_open_id: {envelope.sender_open_id}\n"
         f"- tenant_key: {tenant_key}\n"

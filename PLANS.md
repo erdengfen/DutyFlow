@@ -718,6 +718,29 @@ Demo 期最终必须实现以下完整链路：
 
 本小节定义 Step 5 之后、正式 Agent Loop 之前的“感知记录层”规划。该层的职责不是做业务判断，而是把飞书原始事件整理成后续 loop、责任工具和内容解析工具更容易消费的标准输入。
 
+状态：已完成第一版实现。当前 `FeishuIngressService` 会在原始事件落盘后同步生成 `data/perception/` 感知记录，并通过 `PerceptionRecordService.build_loop_input(...)` 向后续 loop 暴露标准读取接口。
+
+#### 当前完成项
+
+- [x] 新增 `src/dutyflow/perception/store.py`，落地 `PerceptionRecordService` 和 `PerceivedEventRecord`。
+- [x] 感知记录按“一条有意义事件一个 Markdown 文件”落盘到 `data/perception/YYYY-MM-DD/per_<message_id>.md`。
+- [x] 飞书接入层在写入 `data/events/` 原始事件后，会同步生成对应感知记录。
+- [x] 感知记录已落地第一版 frontmatter：`schema / source_event_id / message_id / trigger_kind / chat_id / sender_open_id / message_type / raw_event_file`。
+- [x] 感知记录已落地第一版正文 sections：`Summary / Extracted Text / Entities / Parse Targets / Lookup Hints / Raw Reference`。
+- [x] 当前感知层已提取 `message_type`、`raw_text`、`content_preview`、`mentions_bot`、`mentioned_open_ids`。
+- [x] 当前感知层已提取第一版 `parse_targets`，覆盖文件、图片、链接三类稳定线索。
+- [x] 当前感知层已输出第一版确定性查询提示：`contact_lookup_hint`、`source_lookup_hint`、`responsibility_lookup_hint`。
+- [x] 当前感知层已向后续 loop 暴露 `build_loop_input(record_id / message_id)` 标准读取接口。
+- [x] `docs/DATA_MODEL.md` 已同步 `dutyflow.perceived_event.v1` 结构。
+- [x] `test/test_feishu_perception.py` 已覆盖文本、文件、群聊 `@Bot` 三类感知记录场景。
+
+#### 后续未完成项
+
+- [ ] 正式 Step 6 事件驱动 loop 仍未接入感知记录读取接口。
+- [ ] `im.chat.member.bot.added_v1` 等系统事件是否生成感知记录，仍待单独定规。
+- [ ] 文档、飞书文档链接、更多消息类型的 `parse_targets` 细化规则仍待补充。
+- [ ] 感知记录到任务层、上下文层的衔接尚未开始。
+
 #### 设计目标
 
 - 感知层只处理“已进入主链的有意义事件”，不把全部飞书事件都变成长期上下文。
@@ -927,6 +950,12 @@ updated_at: <ISO-8601>
   - `FeishuIngressService`
   - `handle_raw_event`
   - `ack_event`
+- `src/dutyflow/perception/store.py`
+  - `PerceptionRecordService`
+  - `PerceivedEventRecord`
+  - `create_record`
+  - `read_by_message_id`
+  - `build_loop_input`
 - `src/dutyflow/cli/main.py`
   - `/feishu fixture`
   - `/feishu listen`
@@ -940,7 +969,9 @@ updated_at: <ISO-8601>
   - `get_feishu_doctor_debug`
 - `src/dutyflow/storage/markdown_store.py`
 - `data/events/`
+- `data/perception/`
 - `test/test_feishu_events.py`
+- `test/test_feishu_perception.py`
 
 ### 新增 `.env` 字段清单
 

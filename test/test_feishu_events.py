@@ -67,6 +67,12 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertIn("schema: dutyflow.event_record.v1", saved)
             self.assertIn("## Raw Payload", saved)
             self.assertIn("installation_scope_id: cli_demo_app:tenant_demo", saved)
+            perception_files = list((root / "data" / "perception").glob("*/*.md"))
+            self.assertEqual(len(perception_files), 1)
+            perception_text = perception_files[0].read_text(encoding="utf-8")
+            self.assertIn("schema: dutyflow.perceived_event.v1", perception_text)
+            self.assertIn("## Lookup Hints", perception_text)
+            self.assertIn("perception_record_path", first_result.payload)
 
     def test_long_connection_uses_injected_connector(self) -> None:
         """长连接骨架应能通过注入连接器把事件送入接入层。"""
@@ -87,6 +93,7 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertTrue(connector.connected)
             self.assertEqual(len(list((root / "data" / "events").glob("evt_*.md"))), 1)
+            self.assertEqual(len(list((root / "data" / "perception").glob("*/*.md"))), 1)
             self.assertIn("[Feishu] event received", stdout.getvalue())
 
     def test_group_message_without_bot_mention_is_ignored(self) -> None:

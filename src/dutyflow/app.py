@@ -103,6 +103,7 @@ class DutyFlowApp:
             data_dir / "state",
             data_dir / "logs",
             data_dir / "events",
+            data_dir / "perception",
             data_dir / "contexts",
             data_dir / "approvals" / "pending",
             data_dir / "approvals" / "completed",
