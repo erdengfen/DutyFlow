@@ -74,6 +74,22 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertIn("## Lookup Hints", perception_text)
             self.assertIn("perception_record_path", first_result.payload)
 
+    def test_supported_event_is_enqueued_to_runtime_queue(self) -> None:
+        """普通主链事件在生成感知记录后应进入 runtime queue。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, event_mode="fixture")
+            adapter = FeishuEventAdapter()
+            runtime = FakeRuntimeService()
+            service = FeishuIngressService(root, config, adapter=adapter, runtime_service=runtime)
+            result = service.handle_raw_event(
+                adapter.create_local_fixture_event("hello", event_id="evt_queue", message_id="msg_queue")
+            )
+            self.assertEqual(result.action, "accepted")
+            self.assertEqual(result.payload["runtime_queue_action"], "enqueued")
+            self.assertEqual(len(runtime.enqueued_inputs), 1)
+            self.assertEqual(runtime.enqueued_inputs[0]["perception_id"], "per_msg_queue")
+
     def test_long_connection_uses_injected_connector(self) -> None:
         """长连接骨架应能通过注入连接器把事件送入接入层。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -134,7 +150,14 @@ class TestFeishuEvents(unittest.TestCase):
             config = _write_env(root, event_mode="long_connection", bootstrap_owner=True)
             adapter = FeishuEventAdapter()
             client = FakeBindClient()
-            service = FeishuIngressService(root, config, adapter=adapter, client=client)
+            runtime = FakeRuntimeService()
+            service = FeishuIngressService(
+                root,
+                config,
+                adapter=adapter,
+                client=client,
+                runtime_service=runtime,
+            )
             raw_event = adapter.create_local_fixture_event(
                 "/bind",
                 tenant_key="tenant_bind",
@@ -146,6 +169,8 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY", result.payload["saved_env_keys"])
             self.assertTrue(result.payload["send_message_ok"])
             self.assertEqual(client.sent_chat_id, "oc_bind")
+            self.assertEqual(result.payload["runtime_queue_action"], "skipped_bind")
+            self.assertEqual(len(runtime.enqueued_inputs), 0)
             env_text = (root / ".env").read_text(encoding="utf-8")
             self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY=tenant_bind", env_text)
             self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID=ou_bind", env_text)
@@ -203,6 +228,32 @@ class FakeBindClient:
             status="sent",
             detail="fake bind confirmation sent",
             payload={"chat_id": chat_id, "msg_type": msg_type, "message_id": "om_bind_reply"},
+        )
+
+
+class FakeRuntimeService:
+    """模拟可接收感知记录入队请求的 runtime service。"""
+
+    def __init__(self) -> None:
+        """保存所有入队输入。"""
+        self.enqueued_inputs: list[dict[str, object]] = []
+
+    def enqueue_perception(self, loop_input):
+        """记录入队输入并返回最小 work item。"""
+        self.enqueued_inputs.append(dict(loop_input))
+        from dutyflow.agent.runtime_service import RuntimeWorkItem, RuntimeLoopInput  # noqa: WPS433
+
+        payload = dict(loop_input)
+        return RuntimeWorkItem(
+            work_id="run_fake",
+            perception_id=str(loop_input["perception_id"]),
+            enqueued_at="2026-04-28T00:00:00+00:00",
+            loop_input=RuntimeLoopInput(
+                perception_id=str(loop_input["perception_id"]),
+                perception_file=str(loop_input.get("perception_file", "")),
+                trigger_kind=str(loop_input.get("trigger_kind", "")),
+                payload=payload,
+            ),
         )
 
 

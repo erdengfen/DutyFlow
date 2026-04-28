@@ -366,7 +366,11 @@ class DutyFlowApp:
         if self._feishu_ingress_service is not None:
             return self._feishu_ingress_service
         config = load_env_config(self.project_root)
-        self._feishu_ingress_service = FeishuIngressService(self.project_root, config)
+        self._feishu_ingress_service = FeishuIngressService(
+            self.project_root,
+            config,
+            runtime_service=self._get_or_create_runtime_service(),
+        )
         return self._feishu_ingress_service
 
     def _get_or_create_runtime_service(self) -> RuntimeService:

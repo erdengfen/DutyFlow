@@ -9,6 +9,7 @@ import tempfile
 from typing import Any, Mapping
 
 from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
+from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
 from dutyflow.perception.store import PerceptionRecordService
@@ -40,6 +41,7 @@ class FeishuIngressService:
         client: FeishuClient | None = None,
         markdown_store: MarkdownStore | None = None,
         perception_service: PerceptionRecordService | None = None,
+        runtime_service: RuntimeService | None = None,
     ) -> None:
         """绑定配置、适配器和持久化依赖。"""
         self.project_root = project_root
@@ -51,6 +53,7 @@ class FeishuIngressService:
             project_root,
             markdown_store=self.markdown_store,
         )
+        self.runtime_service = runtime_service
         self.events_dir = config.data_dir / "events"
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
@@ -93,6 +96,7 @@ class FeishuIngressService:
         detail = "event accepted and persisted"
         record_path = self._write_event_record(envelope)
         perception_payload = self._build_perception_payload(envelope, record_path)
+        runtime_payload = self._enqueue_runtime_if_needed(envelope, perception_payload)
         if envelope.is_bind_request():
             bind_payload = self._handle_bind_request(envelope)
             action = "bind_saved"
@@ -108,6 +112,7 @@ class FeishuIngressService:
                 **event_payload,
                 **self._build_discovery_payload(envelope),
                 **perception_payload,
+                **runtime_payload,
                 **bind_payload,
             },
         )
@@ -264,6 +269,41 @@ class FeishuIngressService:
                 "contact_lookup_hint": record.contact_lookup_hint,
                 "source_lookup_hint": record.source_lookup_hint,
             },
+        }
+
+    def _enqueue_runtime_if_needed(
+        self,
+        envelope: FeishuEventEnvelope,
+        perception_payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """把主链事件对应的感知记录送入 runtime queue。"""
+        if envelope.is_bind_request():
+            return {"runtime_queue_action": "skipped_bind"}
+        if self.runtime_service is None:
+            return {"runtime_queue_action": "runtime_not_connected"}
+        loop_input = perception_payload.get("loop_input_preview")
+        record_id = str(perception_payload.get("perception_record_id", "")).strip()
+        record_path = str(perception_payload.get("perception_record_path", "")).strip()
+        trigger_kind = str(perception_payload.get("perception_trigger_kind", "")).strip()
+        if not isinstance(loop_input, Mapping):
+            return {"runtime_queue_action": "runtime_missing_loop_input"}
+        queue_input = {
+            **dict(loop_input),
+            "perception_id": record_id,
+            "perception_file": record_path,
+            "trigger_kind": trigger_kind,
+        }
+        try:
+            work_item = self.runtime_service.enqueue_perception(queue_input)
+        except RuntimeError as exc:
+            return {
+                "runtime_queue_action": "runtime_unavailable",
+                "runtime_queue_error": str(exc),
+            }
+        return {
+            "runtime_queue_action": "enqueued",
+            "runtime_work_id": work_item.work_id,
+            "runtime_perception_id": work_item.perception_id,
         }
 
     def _handle_bind_request(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
