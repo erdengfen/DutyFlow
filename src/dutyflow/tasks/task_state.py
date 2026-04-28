@@ -91,9 +91,10 @@ class TaskStore:
     ) -> TaskRecord:
         """创建一条新的任务 Markdown 记录并立即落盘。"""
         now = _now_iso()
+        resolved_task_id = task_id or _generate_task_id()
         record = TaskRecord(
-            path=_build_task_path(self.tasks_dir, task_id or _generate_task_id()),
-            task_id=task_id or _generate_task_id(),
+            path=_build_task_path(self.tasks_dir, resolved_task_id),
+            task_id=resolved_task_id,
             title=title.strip(),
             status=status.strip() or "queued",
             weight_level=weight_level.strip() or "normal",
@@ -354,9 +355,12 @@ def _parse_key_value_section(section_text: str) -> dict[str, str]:
 
 def _self_test() -> None:
     """验证任务存储最小创建与读取能力。"""
-    store = TaskStore(Path.cwd())
-    record = store.create_task(title="self test task", task_id="task_selftest")
-    loaded = store.read_task("task_selftest")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        store = TaskStore(Path(temp_dir))
+        record = store.create_task(title="self test task", task_id="task_selftest")
+        loaded = store.read_task("task_selftest")
     assert loaded is not None
     assert loaded.task_id == record.task_id
     assert loaded.title == "self test task"

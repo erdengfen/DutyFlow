@@ -89,6 +89,16 @@ class TestTaskStore(unittest.TestCase):
             records = store.list_tasks()
         self.assertEqual([item.task_id for item in records], ["task_010", "task_011"])
 
+    def test_create_task_without_explicit_id_uses_same_id_for_file(self) -> None:
+        """未显式传入 task_id 时，frontmatter 和文件名应保持一致。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TaskStore(Path(temp_dir))
+            record = store.create_task(title="自动生成 ID")
+            loaded = store.read_task(record.task_id)
+        assert loaded is not None
+        self.assertEqual(record.path.name, f"{record.task_id}.md")
+        self.assertEqual(loaded.task_id, record.task_id)
+
 
 def _self_test() -> None:
     """运行本文件单元测试。"""
