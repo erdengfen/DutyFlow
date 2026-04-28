@@ -53,12 +53,12 @@ class RuntimeAgentLoop:
         self.perception_service = perception_service or PerceptionRecordService(self.project_root)
         self.agent_loop = AgentLoop(
             model_client or OpenAICompatibleModelClient(config),
-            registry or create_runtime_tool_registry(),
+            registry or _build_user_facing_runtime_registry(),
             self.project_root,
             permission_mode="auto",
             approval_requester=None,
             audit_logger=audit_logger,
-            skill_registry=skill_registry or SkillRegistry(self.project_root / "skills"),
+            skill_registry=skill_registry or SkillRegistry.empty(self.project_root / "skills"),
         )
         self.latest_result: RuntimeLoopExecutionResult | None = None
 
@@ -112,25 +112,42 @@ def _build_runtime_user_text(loop_input: Mapping[str, Any]) -> str:
     """把感知记录转换为正式 AgentLoop 的最小用户输入。"""
     raw_text = str(loop_input.get("raw_text", "")).strip()
     if raw_text:
-        return raw_text
+        return _wrap_user_message_for_runtime(raw_text)
     content_preview = str(loop_input.get("content_preview", "")).strip()
     if content_preview:
         return _preview_fallback_text(loop_input, content_preview)
     return _empty_fallback_text(loop_input)
 
 
+def _wrap_user_message_for_runtime(raw_text: str) -> str:
+    """为正式 runtime 的用户消息补一层最小执行边界提示。"""
+    return (
+        "你正在处理一条实时飞书用户消息。优先直接回复用户；"
+        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        f"用户原始消息：{raw_text}"
+    )
+
+
 def _preview_fallback_text(loop_input: Mapping[str, Any], content_preview: str) -> str:
     """为非文本消息构造带预览内容的最小输入文本。"""
     message_type = str(loop_input.get("message_type", "")).strip() or "unknown"
     trigger_kind = str(loop_input.get("trigger_kind", "")).strip() or "unknown"
-    return f"收到一条飞书 {trigger_kind} 消息，类型为 {message_type}，内容线索：{content_preview}"
+    return (
+        "你正在处理一条实时飞书用户消息。优先直接回复用户；"
+        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        f"收到一条飞书 {trigger_kind} 消息，类型为 {message_type}，内容线索：{content_preview}"
+    )
 
 
 def _empty_fallback_text(loop_input: Mapping[str, Any]) -> str:
     """为没有文本也没有预览的消息构造兜底输入。"""
     message_type = str(loop_input.get("message_type", "")).strip() or "unknown"
     chat_type = str(loop_input.get("chat_type", "")).strip() or "unknown"
-    return f"收到一条来自飞书 {chat_type} 会话的 {message_type} 消息，请结合当前工具链判断如何处理。"
+    return (
+        "你正在处理一条实时飞书用户消息。优先直接回复用户；"
+        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        f"收到一条来自飞书 {chat_type} 会话的 {message_type} 消息，请结合当前工具链判断如何处理。"
+    )
 
 
 def _build_runtime_tool_content(
@@ -148,6 +165,15 @@ def _build_runtime_tool_content(
     }
 
 
+def _build_user_facing_runtime_registry() -> ToolRegistry:
+    """为正式用户态 runtime 构造受限工具集，排除开发期 CLI 和写入能力。"""
+    base_registry = create_runtime_tool_registry()
+    user_registry = ToolRegistry()
+    for name in _USER_FACING_TOOL_NAMES:
+        user_registry.register(base_registry.get(name), base_registry.get_handler(name))
+    return user_registry
+
+
 def _build_empty_reply_summary(loop_result: AgentLoopResult) -> str:
     """为没有直接回复文本的情况生成稳定状态说明。"""
     if loop_result.stop_reason == "max_turns_reached":
@@ -155,6 +181,15 @@ def _build_empty_reply_summary(loop_result: AgentLoopResult) -> str:
     if loop_result.stop_reason == "context_overflow":
         return "已收到消息，但当前上下文过长，后续需要进入正式的上下文压缩与恢复链。"
     return "已收到消息，当前未生成直接回复文本。"
+
+
+_USER_FACING_TOOL_NAMES = (
+    "get_contact_knowledge_detail",
+    "lookup_contact_identity",
+    "lookup_responsibility_context",
+    "lookup_source_context",
+    "search_contact_knowledge_headers",
+)
 
 
 def _self_test() -> None:

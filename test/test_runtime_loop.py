@@ -26,6 +26,18 @@ from dutyflow.perception.store import PerceptionRecordService  # noqa: E402
 class TestRuntimeLoop(unittest.TestCase):
     """验证正式 runtime loop 与现有 AgentLoop 的最小整合闭环。"""
 
+    def test_runtime_loop_defaults_to_user_facing_registry_and_empty_skills(self) -> None:
+        """正式 runtime loop 默认不应暴露 CLI/skill 写入能力。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root)
+            loop = RuntimeAgentLoop(root, config, feedback_gateway=_FakeFeedbackGateway())
+            self.assertFalse(loop.agent_loop.registry.has("open_cli_session"))
+            self.assertFalse(loop.agent_loop.registry.has("exec_cli_command"))
+            self.assertFalse(loop.agent_loop.registry.has("create_skill"))
+            self.assertTrue(loop.agent_loop.registry.has("lookup_contact_identity"))
+            self.assertEqual(loop.agent_loop.skill_registry.describe_available(), "(none)")
+
     def test_runtime_loop_sends_plain_text_reply(self) -> None:
         """纯文本响应应通过统一反馈接口直接发回当前会话。"""
         with tempfile.TemporaryDirectory() as temp_dir:
