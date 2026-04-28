@@ -20,6 +20,7 @@ import os
 from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.runtime_service import RuntimeService
+from dutyflow.agent.runtime_loop import RuntimeAgentLoop
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.agent.skills import SkillRegistry
@@ -68,6 +69,7 @@ class DutyFlowApp:
         self.cli = CliConsole(self)
         self._feishu_ingress_service: FeishuIngressService | None = None
         self._runtime_service: RuntimeService | None = None
+        self._runtime_loop: RuntimeAgentLoop | None = None
 
     def health_check(self) -> HealthStatus:
         """返回 Step 1 可验证的占位健康检查结果。"""
@@ -377,8 +379,22 @@ class DutyFlowApp:
         """构造并复用正式 runtime service 骨架。"""
         if self._runtime_service is not None:
             return self._runtime_service
-        self._runtime_service = RuntimeService()
+        self._runtime_service = RuntimeService(
+            self._get_or_create_runtime_loop().handle_work_item
+        )
         return self._runtime_service
+
+    def _get_or_create_runtime_loop(self) -> RuntimeAgentLoop:
+        """构造并复用正式 runtime loop 包装层。"""
+        if self._runtime_loop is not None:
+            return self._runtime_loop
+        config = load_env_config(self.project_root)
+        self._runtime_loop = RuntimeAgentLoop(
+            self.project_root,
+            config,
+            audit_logger=self._create_audit_logger(config),
+        )
+        return self._runtime_loop
 
     def _bootstrap_background_services(self) -> None:
         """在应用启动时静默拉起正式 runtime worker 和飞书监听。"""
