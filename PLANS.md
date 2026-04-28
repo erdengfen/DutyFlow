@@ -714,6 +714,198 @@ Demo 期最终必须实现以下完整链路：
   - 任务生成
   - Agent Loop 注入
 
+### Step 5.1: 感知记录层设计
+
+本小节定义 Step 5 之后、正式 Agent Loop 之前的“感知记录层”规划。该层的职责不是做业务判断，而是把飞书原始事件整理成后续 loop、责任工具和内容解析工具更容易消费的标准输入。
+
+#### 设计目标
+
+- 感知层只处理“已进入主链的有意义事件”，不把全部飞书事件都变成长期上下文。
+- 感知层结果不能只保留在内存中，必须持久化为独立 Markdown 记录，便于后续 loop、任务层和人工检查复用。
+- 后续 Agent Loop 默认读取感知记录，不直接读取飞书原始事件文件；原始事件文件只作为审计事实源、调试回溯和解析工具兜底输入。
+- 感知层只做确定性结构提取和确定性改写，不做联系人关系推理、责任判断、权重判断、任务判断。
+
+#### 层级边界
+
+- 飞书接入层：
+  - 负责 SDK、长连接、消息收发、原始事件落盘、资源下载接口占位。
+  - 输出 `data/events/` 下的原始事件记录。
+- 感知记录层：
+  - 负责从原始事件中抽取稳定字段、触发类型、附件线索、mentions 和后续查询提示。
+  - 输出 `data/perception/` 下的标准化感知记录。
+- 内容解析层：
+  - 负责按需下载和解析图片、文件、网页、飞书文档。
+  - 不在感知层自动执行；后续按工具调用。
+- Agent Loop：
+  - 默认以感知记录为输入，再按需调用身份、责任、内容解析等工具。
+
+#### 哪些事件生成感知记录
+
+- 第一版只为“进入主链的关键输入”生成感知记录：
+  - 用户私聊 Bot
+  - 群聊 `@Bot`
+  - 包含文件、图片、文档、链接等明确后续解析目标的 Bot 可见消息
+- 纯噪声或当前不进入主链的事件可以只保留原始事件记录，不生成感知记录。
+- `im.chat.member.bot.added_v1` 这类系统事件后续可决定是否生成独立感知记录；当前先不纳入第一版必需范围。
+
+#### 文件划分方式
+
+感知记录不按“每天一个文件”“每个联系人一个文件”或“每个群一个文件”聚合，而是：
+
+- 一条有意义事件对应一个感知记录文件
+- 日期仅用于目录分片，不承担语义聚合
+
+建议路径：
+
+```text
+data/perception/YYYY-MM-DD/per_<message_id>.md
+```
+
+原因：
+
+- 便于用 `message_id` 做稳定去重和稳定追溯。
+- 便于后续 loop 只读取当前事件的最小上下文。
+- 便于后续对单条感知记录重算、覆盖或补齐，而不污染其它事件。
+
+#### 感知记录与原始事件记录的关系
+
+- 原始事件文件：
+  - 路径：`data/events/...`
+  - 用途：保存完整原始 payload、最小 routing 字段、审计事实源
+- 感知记录文件：
+  - 路径：`data/perception/...`
+  - 用途：保存后续 loop 和工具要消费的标准事件视图
+
+约束：
+
+- 感知记录必须保留指向原始事件文件的稳定引用。
+- loop 默认读取感知记录；只有内容解析工具、调试工具或审计链路才回看原始事件文件。
+
+#### 感知记录建议结构
+
+建议 frontmatter：
+
+```yaml
+schema: dutyflow.perceived_event.v1
+id: per_<message_id>
+source_event_id: evt_<message_id>
+message_id: <message_id>
+received_at: <ISO-8601>
+event_type: im.message.receive_v1
+trigger_kind: p2p_text
+chat_type: p2p
+chat_id: <chat_id>
+sender_open_id: <sender_open_id>
+message_type: text
+mentions_bot: true
+has_attachment: false
+attachment_kinds: ""
+raw_event_file: data/events/YYYY-MM-DD/evt_<message_id>.md
+status: perceived
+updated_at: <ISO-8601>
+```
+
+第一版 `trigger_kind` 建议枚举：
+
+- `p2p_text`
+- `p2p_file`
+- `p2p_image`
+- `p2p_link`
+- `group_at_bot_text`
+- `group_at_bot_file`
+- `group_at_bot_image`
+- `group_at_bot_link`
+
+正文建议：
+
+```md
+# Perceived Event per_<message_id>
+
+## Summary
+
+一句话说明这条输入是什么。
+
+## Extracted Text
+
+- raw_text:
+- content_preview:
+- mention_text:
+
+## Entities
+
+| kind | value | source |
+|---|---|---|
+| sender | <sender_open_id> | sender_open_id |
+| chat | <chat_id> | chat_id |
+| mention | <mentioned_open_id> | mentions |
+
+## Parse Targets
+
+| target_id | target_type | file_key | file_name | url | required_tool |
+|---|---|---|---|---|---|
+
+## Lookup Hints
+
+- contact_lookup_hint:
+- source_lookup_hint:
+- responsibility_lookup_hint:
+- followup_needed:
+
+## Raw Reference
+
+- event_record: data/events/.../evt_<message_id>.md
+```
+
+#### 感知层必须提取的字段
+
+- 事件路由字段：
+  - `event_id`
+  - `message_id`
+  - `chat_id`
+  - `chat_type`
+  - `sender_open_id`
+  - `event_type`
+- 消息基础字段：
+  - `message_type`
+  - `raw_text`
+  - `content_preview`
+  - `mentions_bot`
+- 附件与解析线索：
+  - `has_attachment`
+  - `attachment_kinds`
+  - `file_key`
+  - `file_name`
+  - `doc token`
+  - `url`
+- 后续查询提示：
+  - `contact_lookup_hint`
+  - `source_lookup_hint`
+  - `responsibility_lookup_hint`
+  - `parse_targets`
+
+#### 感知层允许做的改写
+
+- 把 `sender_open_id` 改写成稳定的 `contact_lookup_hint`
+- 把 `chat_id + chat_type` 改写成稳定的 `source_lookup_hint`
+- 把文件、图片、链接、文档线索改写成 `parse_targets`
+- 把 `mentions` 改写成 `mentions_bot` 和 `Entities` 表格
+
+#### 感知层明确不做的事情
+
+- 不做联系人关系推理
+- 不做责任归属判断
+- 不做高低优先级判断
+- 不做任务生成
+- 不直接下载或解析附件本体
+- 不把自由文本直接压成主观摘要
+
+#### 后续 Loop 读取约束
+
+- 正式 Agent Loop 默认只从感知记录层读取输入。
+- raw event 文件不作为默认主输入。
+- 内容解析工具、调试工具、审计链路允许按 `raw_event_file` 引用回看原始事件。
+- 感知记录层一旦落成，应作为 Step 6 以后事件驱动 loop 的标准输入接口。
+
 ### 涉及文件、类、方法、模块
 
 - `src/dutyflow/config/env.py`
@@ -750,7 +942,7 @@ Demo 期最终必须实现以下完整链路：
 - `data/events/`
 - `test/test_feishu_events.py`
 
-### Step 5 新增 `.env` 字段清单
+### 新增 `.env` 字段清单
 
 本阶段对飞书接入配置统一收敛为以下类别。除非后续文档明确变更，字段名不再随实现过程临时改动。
 
@@ -832,6 +1024,7 @@ Demo 期最终必须实现以下完整链路：
 ### 未敲定问题
 
 - 群聊 `@Bot` 事件的真实样例与第一版白名单范围补测。
+- `im.chat.member.bot.added_v1` 当前已能在真实长连接中收到原始事件帧，但接入层尚未注册处理器；拉机器人入群时会出现 `processor not found` 错误日志，后续需决定是显式接入还是稳定忽略。
 - Bot 拉取消息内图片、文件、音视频资源时所需的最小权限集合与真实响应结构。
 - 后续从“Bot 可见信息”扩展到“完整用户可见信息”时，用户 OAuth 的落地边界和授权流程。
 
@@ -1252,6 +1445,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 ## 当前阻塞与风险记录
 
 - [ ] Step 5 已完成真实 p2p 私聊接入与 `/bind` bootstrap，但群聊 `@Bot` 事件和消息资源获取仍待人工补测；`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 仍为预留字段。
+- [ ] Step 5 真实长连接已确认会收到 `im.chat.member.bot.added_v1`，但当前未注册处理器，拉机器人入群时会刷出 `processor not found` 错误日志；需在后续决定接入或显式忽略。
 - [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定；真实 key 提供后需要补跑完整链路。
 - [ ] 权重 skill 第一版提示词和输出格式未敲定。
 - [ ] 审批在飞书端的交互形式未敲定。
