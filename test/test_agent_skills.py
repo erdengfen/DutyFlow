@@ -10,7 +10,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dutyflow.agent.loop import AgentLoop  # noqa: E402
+from dutyflow.agent.core_loop import AgentLoop  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.skills import SkillRegistry  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock, create_initial_agent_state  # noqa: E402

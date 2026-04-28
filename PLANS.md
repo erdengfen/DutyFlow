@@ -370,7 +370,7 @@ Demo 期最终必须实现以下完整链路：
 ### 关键文件
 
 - `src/dutyflow/agent/state.py`
-- `src/dutyflow/agent/loop.py`
+- `src/dutyflow/agent/core_loop.py`
 - `src/dutyflow/agent/permissions.py`
 - `src/dutyflow/agent/recovery.py`
 - `src/dutyflow/agent/hooks.py`
@@ -434,7 +434,7 @@ Demo 期最终必须实现以下完整链路：
   - `SkillRegistry`
   - `describe_available`
   - `load_full_text`
-- `src/dutyflow/agent/loop.py`
+- `src/dutyflow/agent/core_loop.py`
 - `src/dutyflow/agent/tools/context.py`
 - `src/dutyflow/agent/tools/registry.py`
 - `src/dutyflow/app.py`
@@ -748,8 +748,8 @@ Demo 期最终必须实现以下完整链路：
   - 群聊中 `@Bot`
 - 后续“用户与用户聊天中的重点/紧急信息感知”属于后续扩展，本阶段只在文档中保留，不进入实现范围。
 - 正式 loop 复用 Step 5 已完成的飞书长连接与心跳保活，不重复创建第二套监听主链。
-- 旧的 `src/dutyflow/agent/loop.py` 保留，用于 `/chat` 调试；在正式 runtime 完成前不删除。
-- 正式 loop 新增独立模块，不与当前 `/chat` 调试 loop 混写。
+- 正式 loop 与 `/chat` 调试共享 `src/dutyflow/agent/core_loop.py` 中的执行核心。
+- 正式 runtime 的编排模块继续独立维护，不与 `/chat` 的任务入口混写。
 - 正式主 loop 当前加载项目内全部 skills，并注册除 CLI tools 外的全部 runtime tools。
 - 当前阶段仅把 `open_cli_session`、`exec_cli_command`、`close_cli_session` 排除在正式主 loop 外；其它 tools 与 skills 暂按项目内默认能力面暴露。
 - 工具与 skill 的能力边界仍优先通过 registry / skill 面隔离实现，而不是依赖更详细的 description 去“劝阻”模型少用。
@@ -832,7 +832,7 @@ Demo 期最终必须实现以下完整链路：
 - 长任务可先即时回复，再进入后台继续推进。
 - 正式 runtime 不再通过 CLI `input()` 做审批。
 - 用户发送能力统一经过独立反馈接口，而不是模型自由调用工具。
-- 旧 `loop.py` 仍可服务 `/chat` 调试，不影响正式 runtime。
+- 共享执行核心与 `/chat` 调试任务解耦后，正式 runtime 仍保持独立编排。
 - 决策结果可写入 `data/reports/trace_<id>.md`。
 
 ### 涉及文件、类、方法、模块
@@ -841,7 +841,7 @@ Demo 期最终必须实现以下完整链路：
 - `src/dutyflow/cli/main.py`
 - `src/dutyflow/feishu/runtime.py`
 - `src/dutyflow/perception/store.py`
-- `src/dutyflow/agent/loop.py`
+- `src/dutyflow/agent/core_loop.py`
   - 保留为 `/chat` 调试链路
 - 预期新增：
   - `src/dutyflow/agent/runtime_loop.py`

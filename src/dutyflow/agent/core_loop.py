@@ -1,4 +1,4 @@
-# 本文件负责 Step 2.4 的最小多轮调试 loop，不代表最终生产 agent loop。
+# 本文件负责 Agent 的共享执行核心，供正式 runtime 和本地 /chat 调试共同复用。
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope
 
 @dataclass(frozen=True)
 class AgentLoopResult:
-    """保存 /chat 调试 loop 的完整可见结果。"""
+    """保存共享执行核心单次运行后的完整可见结果。"""
 
     state: AgentState
     final_text: str
@@ -70,7 +70,7 @@ class AgentLoopResult:
 
 @dataclass
 class ChatDebugSession:
-    """维护 CLI /chat 子会话中的持续 Agent State。"""
+    """维护本地 /chat 调试任务中的持续 Agent State。"""
 
     loop: "AgentLoop"
     state: AgentState | None = None
@@ -83,7 +83,7 @@ class ChatDebugSession:
 
 
 class AgentLoop:
-    """执行基于 Agent State 和工具控制层的最小多轮调试链路。"""
+    """执行基于 Agent State 和工具控制层的共享多轮执行链路。"""
 
     def __init__(
         self,
@@ -123,7 +123,7 @@ class AgentLoop:
         tool_content: Mapping[str, Any] | None = None,
         state: AgentState | None = None,
     ) -> AgentLoopResult:
-        """运行一轮 /chat 调试输入，直到模型停止或达到轮数限制。"""
+        """运行一轮输入，直到模型停止或达到轮数限制。"""
         state = self._prepare_state(user_text, query_id, state)
         self._record_loop_started(state, user_text)
         tool_results: list[ToolResultEnvelope] = []
@@ -262,6 +262,7 @@ class AgentLoop:
                 return state
             return replace(state, messages=(system_message,) + state.messages[1:])
         return replace(state, messages=(system_message,) + state.messages)
+
     def _register_model_recovery(
         self,
         state: AgentState,

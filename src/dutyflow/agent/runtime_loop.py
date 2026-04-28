@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from dutyflow.agent.loop import AgentLoop, AgentLoopResult
+from dutyflow.agent.core_loop import AgentLoop, AgentLoopResult
 from dutyflow.agent.model_client import ModelClient, OpenAICompatibleModelClient
 from dutyflow.agent.runtime_service import RuntimeWorkItem
 from dutyflow.agent.skills import SkillRegistry

@@ -20,9 +20,9 @@ import os
 from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.debug_chat_service import ChatDebugService, ChatDebugTask
+from dutyflow.agent.core_loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.agent.runtime_loop import RuntimeAgentLoop
-from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.cli.main import CliConsole
