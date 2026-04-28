@@ -38,8 +38,44 @@ class TestAppEntry(unittest.TestCase):
     def test_no_interactive_keeps_script_check_available(self) -> None:
         """--no-interactive 应保留启动后立即退出的脚本检查能力。"""
         app = DutyFlowApp(PROJECT_ROOT)
-        with patch("sys.stdout", new_callable=io.StringIO):
-            self.assertEqual(app.run(("--no-interactive",)), 0)
+        with patch.object(app, "_bootstrap_background_services") as bootstrap:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(app.run(("--no-interactive",)), 0)
+        bootstrap.assert_called_once()
+
+    def test_run_bootstraps_background_services_before_cli(self) -> None:
+        """正常启动应先拉起后台服务，再进入 CLI。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch.object(app, "_bootstrap_background_services") as bootstrap:
+            with patch.object(app.cli, "start", return_value=0) as cli_start:
+                self.assertEqual(app.run(()), 0)
+        bootstrap.assert_called_once()
+        cli_start.assert_called_once_with(interactive=True)
+
+    def test_bootstrap_background_services_starts_runtime_and_feishu(self) -> None:
+        """后台服务启动应同时拉起 runtime worker 和飞书监听。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        runtime = _FakeRuntimeService()
+        ingress = _FakeIngressService()
+        with patch.object(app, "_ensure_runtime_layout"):
+            with patch.object(app, "_get_or_create_runtime_service", return_value=runtime):
+                with patch.object(app, "_get_or_create_feishu_ingress_service", return_value=ingress):
+                    app._bootstrap_background_services()
+        self.assertTrue(runtime.started)
+        self.assertTrue(ingress.started)
+
+    def test_health_mode_does_not_bootstrap_background_services(self) -> None:
+        """健康检查模式不应提前启动正式 runtime 和飞书监听。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch.object(app, "_bootstrap_background_services") as bootstrap:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(app.run(("--no-interactive",)), 0)
+        bootstrap.assert_called_once()
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch.object(app, "_bootstrap_background_services") as bootstrap:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(app.run(("--health",)), 0)
+        bootstrap.assert_not_called()
 
     def test_cli_permission_prompt_uses_enter_as_approve(self) -> None:
         """CLI 审批提示应允许用户直接按 Enter 放行。"""
@@ -55,6 +91,32 @@ class TestAppEntry(unittest.TestCase):
         app = DutyFlowApp(PROJECT_ROOT)
         with patch("builtins.input", return_value="no"):
             self.assertFalse(app._prompt_cli_permission("send_message", "sensitive tool", {"text": "hello"}))
+
+
+class _FakeRuntimeService:
+    """模拟可启动的 runtime service。"""
+
+    def __init__(self) -> None:
+        """记录是否已被启动。"""
+        self.started = False
+
+    def start(self):
+        """模拟 runtime worker 启动。"""
+        self.started = True
+        return object()
+
+
+class _FakeIngressService:
+    """模拟可启动监听的飞书接入服务。"""
+
+    def __init__(self) -> None:
+        """记录是否已被启动。"""
+        self.started = False
+
+    def start_long_connection(self):
+        """模拟长连接启动。"""
+        self.started = True
+        return object()
 
 
 def _self_test() -> None:

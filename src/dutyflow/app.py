@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import os
 from typing import Any, Mapping, Sequence
 
+from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.agent.loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.agent.skills import SkillRegistry
@@ -66,6 +67,7 @@ class DutyFlowApp:
         self.project_root = project_root or Path.cwd()
         self.cli = CliConsole(self)
         self._feishu_ingress_service: FeishuIngressService | None = None
+        self._runtime_service: RuntimeService | None = None
 
     def health_check(self) -> HealthStatus:
         """返回 Step 1 可验证的占位健康检查结果。"""
@@ -297,6 +299,7 @@ class DutyFlowApp:
         if parsed.health:
             print(self.health_check().to_text())
             return 0
+        self._bootstrap_background_services()
         return self.cli.start(interactive=not parsed.no_interactive)
 
     def _build_parser(self) -> argparse.ArgumentParser:
@@ -365,6 +368,19 @@ class DutyFlowApp:
         config = load_env_config(self.project_root)
         self._feishu_ingress_service = FeishuIngressService(self.project_root, config)
         return self._feishu_ingress_service
+
+    def _get_or_create_runtime_service(self) -> RuntimeService:
+        """构造并复用正式 runtime service 骨架。"""
+        if self._runtime_service is not None:
+            return self._runtime_service
+        self._runtime_service = RuntimeService()
+        return self._runtime_service
+
+    def _bootstrap_background_services(self) -> None:
+        """在应用启动时静默拉起正式 runtime worker 和飞书监听。"""
+        self._ensure_runtime_layout()
+        self._get_or_create_runtime_service().start()
+        self._get_or_create_feishu_ingress_service().start_long_connection()
 
     def _prompt_cli_permission(
         self,
