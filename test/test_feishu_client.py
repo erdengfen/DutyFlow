@@ -65,6 +65,36 @@ class TestFeishuClient(unittest.TestCase):
         self.assertEqual(lark.sent_payload["receive_id"], "oc_bind")
         self.assertEqual(lark.sent_payload["msg_type"], "text")
 
+    def test_send_interactive_card_uses_interactive_msg_type(self) -> None:
+        """发送审批卡片应走 interactive 消息类型。"""
+        lark = _FakeLarkModule()
+        result = FeishuClient(_config(), sdk_module=lark).send_interactive_card(
+            "oc_owner",
+            {"config": {"wide_screen_mode": True}},
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(lark.sent_payload["receive_id"], "oc_owner")
+        self.assertEqual(lark.sent_payload["msg_type"], "interactive")
+        self.assertIn("wide_screen_mode", lark.sent_payload["content"])
+
+    def test_sdk_dispatcher_registers_card_action_trigger(self) -> None:
+        """长连接 dispatcher 应注册飞书卡片按钮回调。"""
+        lark = _FakeLarkModule()
+        connector = _SdkLongConnectionConnector(_config(), lark)
+        captured: list[dict[str, object]] = []
+        _FakeLarkModule.marshal_payload = (
+            '{"header": {"event_id": "evt_card", "event_type": "card.action.trigger"}, '
+            '"event": {"operator": {"open_id": "ou_owner"}, '
+            '"action": {"value": {"dutyflow_action": "approval_decision"}}}}'
+        )
+        dispatcher = connector._build_dispatcher(
+            lambda event: captured.append(dict(event)) or {"toast": {"type": "success", "content": "ok"}}
+        )
+        response = dispatcher.handlers["card.action.trigger"](object())
+        _FakeLarkModule.marshal_payload = ""
+        self.assertEqual(captured[0]["header"]["event_id"], "evt_card")
+        self.assertEqual(response["toast"]["content"], "ok")
+
 
 class _FakeConnector:
     """提供最小可注入连接器。"""
@@ -99,6 +129,8 @@ class _FakeLarkModule:
         @staticmethod
         def marshal(data) -> str:
             """返回固定事件 JSON。"""
+            if _FakeLarkModule.marshal_payload:
+                return _FakeLarkModule.marshal_payload
             return (
                 '{"header": {"event_id": "evt_sdk", "tenant_key": "tenant_demo", "app_id": "app_demo"}, '
                 '"event": {"message": {"message_id": "msg_sdk", "chat_id": "oc_demo", "chat_type": "p2p", '
@@ -183,6 +215,7 @@ class _FakeLarkModule:
     builder_tokens = ("", "")
     last_ws_args = ("", "", None, None)
     sent_payload = {}
+    marshal_payload = ""
 
 
 class _FakeDispatcherBuilder:
@@ -195,6 +228,11 @@ class _FakeDispatcherBuilder:
     def register_p2_im_message_receive_v1(self, handler):
         """记录消息事件处理器。"""
         self.handlers["im.message.receive_v1"] = handler
+        return self
+
+    def register_p2_card_action_trigger(self, handler):
+        """记录卡片按钮回调处理器。"""
+        self.handlers["card.action.trigger"] = handler
         return self
 
     def build(self):

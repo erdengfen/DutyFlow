@@ -70,6 +70,27 @@ class TestFeedbackGateway(unittest.TestCase):
             self.assertEqual(client.sent_chat_id, "oc_target")
             self.assertEqual(client.sent_text, "【处理中】\n已进入后台任务")
 
+    def test_send_owner_approval_card_uses_fixed_card_shape(self) -> None:
+        """审批卡片应通过 owner 会话发送，并携带固定按钮恢复字段。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, owner_report_chat_id="oc_owner")
+            client = FakeFeedbackClient()
+            gateway = FeedbackGateway(config, client=client)
+            result = gateway.send_owner_approval_card(
+                {
+                    "approval_id": "approval_001",
+                    "task_id": "task_001",
+                    "resume_token": "resume_001",
+                    "risk_level": "high",
+                    "request": "需要写入联系人知识库。",
+                }
+            )
+        self.assertTrue(result.ok)
+        self.assertEqual(client.sent_chat_id, "oc_owner")
+        self.assertEqual(client.sent_msg_type, "interactive")
+        self.assertEqual(client.sent_card["elements"][1]["actions"][0]["value"]["decision_result"], "approved")
+
 
 class FakeFeedbackClient:
     """模拟统一反馈接口依赖的最小飞书发送客户端。"""
@@ -78,6 +99,7 @@ class FakeFeedbackClient:
         """记录最近一次发送行为。"""
         self.sent_chat_id = ""
         self.sent_text = ""
+        self.sent_card = {}
         self.sent_msg_type = ""
 
     def send_message(self, chat_id: str, content: str, *, msg_type: str = "text"):
@@ -90,6 +112,18 @@ class FakeFeedbackClient:
             status="sent",
             detail="fake feedback message sent",
             payload={"chat_id": chat_id, "msg_type": msg_type, "message_id": "om_feedback_reply"},
+        )
+
+    def send_interactive_card(self, chat_id: str, card_content: dict):
+        """返回稳定的伪卡片发送结果。"""
+        self.sent_chat_id = chat_id
+        self.sent_card = dict(card_content)
+        self.sent_msg_type = "interactive"
+        return FeishuClientResult(
+            ok=True,
+            status="sent",
+            detail="fake feedback card sent",
+            payload={"chat_id": chat_id, "msg_type": "interactive", "message_id": "om_card_reply"},
         )
 
 

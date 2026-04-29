@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 from random import uniform
 from threading import Lock
 from uuid import uuid4
@@ -11,10 +12,13 @@ from uuid import uuid4
 _THIS_DIR = __file__.rsplit("/", 1)[0]
 if sys.path and sys.path[0] == _THIS_DIR:
     sys.path.pop(0)
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[3]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Mapping, Sequence
 
 from dutyflow.agent.permissions import PermissionDecision, PermissionGate
@@ -115,7 +119,7 @@ class ToolExecutor:
                 pool.submit(self._execute_one_route, route, context)
                 for route in batch.routes
             ]
-            return tuple(future.result() for future in as_completed(futures))
+            return tuple(future.result() for future in futures)
 
     def _execute_serial_batch(
         self,

@@ -5,9 +5,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any, Mapping
 
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[2]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
+
+from dutyflow.approval.approval_card_action import ApprovalCardActionService
 from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
 from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
@@ -44,6 +51,7 @@ class FeishuIngressService:
         perception_service: PerceptionRecordService | None = None,
         runtime_service: RuntimeService | None = None,
         feedback_gateway: FeedbackGateway | None = None,
+        approval_card_service: ApprovalCardActionService | None = None,
     ) -> None:
         """绑定配置、适配器和持久化依赖。"""
         self.project_root = project_root
@@ -57,6 +65,7 @@ class FeishuIngressService:
         )
         self.runtime_service = runtime_service
         self.feedback_gateway = feedback_gateway or FeedbackGateway(config, client=self.client)
+        self.approval_card_service = approval_card_service or ApprovalCardActionService(project_root)
         self.events_dir = config.data_dir / "events"
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
@@ -79,6 +88,14 @@ class FeishuIngressService:
         """处理单条原始事件，执行过滤、去重和结构化落盘。"""
         envelope = self.adapter.build_event_envelope(raw_event)
         event_payload = self._build_event_debug_payload(envelope)
+        duplicate = self._detect_duplicate(envelope, event_payload)
+        if duplicate is not None:
+            self.latest_result = duplicate
+            return duplicate
+        if envelope.event_type == "card.action.trigger":
+            result = self._handle_approval_card_action(envelope, event_payload)
+            self.latest_result = result
+            return result
         if not self._is_supported_event(envelope):
             result = FeishuIngressResult(
                 action="ignored",
@@ -90,10 +107,6 @@ class FeishuIngressService:
             )
             self.latest_result = result
             return result
-        duplicate = self._detect_duplicate(envelope, event_payload)
-        if duplicate is not None:
-            self.latest_result = duplicate
-            return duplicate
         bind_payload: dict[str, Any] = {}
         action = "accepted"
         detail = "event accepted and persisted"
@@ -126,6 +139,9 @@ class FeishuIngressService:
 
     def ack_event(self, result: FeishuIngressResult) -> dict[str, Any]:
         """返回接入层统一确认结构，便于后续接 WebSocket 或回调入口。"""
+        toast = result.payload.get("card_action_toast")
+        if isinstance(toast, Mapping):
+            return {"toast": dict(toast)}
         return {"success": True, "action": result.action, "event_id": result.event_id}
 
     def _handle_for_connection(self, raw_event: Mapping[str, Any]) -> dict[str, Any]:
@@ -138,6 +154,36 @@ class FeishuIngressService:
     def _is_supported_event(self, envelope: FeishuEventEnvelope) -> bool:
         """只允许私聊 Bot 或群聊 @Bot 进入 Step 5 初版主链。"""
         return envelope.is_p2p_message() or envelope.is_group_at_bot()
+
+    def _handle_approval_card_action(
+        self,
+        envelope: FeishuEventEnvelope,
+        event_payload: Mapping[str, Any],
+    ) -> FeishuIngressResult:
+        """处理飞书审批卡片按钮回调，并桥接到审批恢复链。"""
+        record_path = self._write_event_record(envelope)
+        card_result = self.approval_card_service.handle_raw_event(envelope.raw_event)
+        self._remember_event(envelope)
+        return FeishuIngressResult(
+            action=card_result.status,
+            event_id=envelope.event_id,
+            message_id=envelope.message_id,
+            record_path=str(record_path),
+            detail="approval card action processed" if card_result.ok else "approval card action failed",
+            payload={
+                **event_payload,
+                "approval_id": card_result.approval_id,
+                "decision_result": card_result.decision_result,
+                "task_id": card_result.task_id,
+                "task_status": card_result.task_status,
+                "card_action_ok": card_result.ok,
+                "card_action_toast": {
+                    "type": card_result.toast_type,
+                    "content": card_result.toast_content,
+                },
+                "card_action_payload": card_result.payload,
+            },
+        )
 
     def _detect_duplicate(
         self,

@@ -14,10 +14,12 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from dutyflow.approval.approval_request_intake import ApprovalRequestIntakeService  # noqa: E402
 from dutyflow.config.env import load_env_config  # noqa: E402
 from dutyflow.feishu.client import FeishuClientResult  # noqa: E402
 from dutyflow.feishu.events import FeishuEventAdapter  # noqa: E402
 from dutyflow.feishu.runtime import FeishuIngressService  # noqa: E402
+from dutyflow.tasks.task_state import TaskStore  # noqa: E402
 
 
 class FakeConnector:
@@ -178,6 +180,30 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID=ou_bind", env_text)
             self.assertIn("DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=oc_bind", env_text)
 
+    def test_card_action_trigger_resumes_approval_and_returns_toast(self) -> None:
+        """飞书卡片按钮回调应进入审批恢复链，并返回卡片 toast。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, event_mode="fixture")
+            task_store = TaskStore(root)
+            created = _create_waiting_approval(root, task_store)
+            service = FeishuIngressService(root, config, adapter=FeishuEventAdapter())
+            result = service.handle_raw_event(
+                _card_action_event(created.approval_id, created.resume_token, "approved")
+            )
+            ack = service.ack_event(result)
+            task = task_store.read_task(created.task_id)
+            event_files = list((root / "data" / "events").glob("evt_*.md"))
+        self.assertEqual(result.action, "approval_resumed")
+        self.assertTrue(result.payload["card_action_ok"])
+        self.assertEqual(result.payload["decision_result"], "approved")
+        self.assertEqual(ack["toast"]["type"], "success")
+        self.assertEqual(len(event_files), 1)
+        self.assertIsNotNone(task)
+        assert task is not None
+        self.assertEqual(task.status, "queued")
+        self.assertEqual(task.approval_status, "approved")
+
 
 def _write_env(root: Path, *, event_mode: str, bootstrap_owner: bool = False) -> object:
     """写入最小可用 .env，并返回解析后的配置对象。"""
@@ -204,6 +230,50 @@ def _write_env(root: Path, *, event_mode: str, bootstrap_owner: bool = False) ->
     )
     (root / ".env").write_text(content, encoding="utf-8")
     return load_env_config(root)
+
+
+def _create_waiting_approval(root: Path, task_store: TaskStore):
+    """创建飞书卡片回调测试所需的等待审批任务。"""
+    task = task_store.create_task(title="审批测试任务", status="queued")
+    return ApprovalRequestIntakeService(root, task_store=task_store).create_request(
+        {
+            "task_id": task.task_id,
+            "requested_action": "knowledge_write",
+            "risk_level": "high",
+            "request": "需要写入联系人知识库。",
+            "reason": "该动作会修改本地知识记录。",
+            "risk": "可能写入错误关系信息。",
+            "original_action_kind": "knowledge_write",
+            "original_tool_name": "add_contact_knowledge",
+            "original_tool_input_preview": "contact_id=contact_001",
+            "expires_at": "2026-05-01T10:00:00+08:00",
+        }
+    )
+
+
+def _card_action_event(approval_id: str, resume_token: str, decision_result: str) -> dict[str, object]:
+    """构造飞书 card.action.trigger 原始事件。"""
+    return {
+        "schema": "2.0",
+        "header": {
+            "event_id": f"evt_card_{decision_result}",
+            "event_type": "card.action.trigger",
+            "tenant_key": "tenant_demo",
+            "app_id": "app_demo",
+        },
+        "event": {
+            "operator": {"open_id": "ou_owner"},
+            "context": {"open_chat_id": "oc_owner"},
+            "action": {
+                "value": {
+                    "dutyflow_action": "approval_decision",
+                    "approval_id": approval_id,
+                    "resume_token": resume_token,
+                    "decision_result": decision_result,
+                }
+            },
+        },
+    }
 
 
 def _client_with_connector(config, connector):

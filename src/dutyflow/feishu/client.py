@@ -8,9 +8,15 @@ import importlib
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import uuid
 from typing import Any, Callable, Mapping, Protocol
+
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[2]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
 
 from dutyflow.config.env import EnvConfig, validate_feishu_ingress_config
 
@@ -110,6 +116,31 @@ class FeishuClient:
         msg_type: str = "text",
     ) -> FeishuClientResult:
         """使用应用身份向指定 chat_id 发送一条最小文本消息。"""
+        return self._send_message_payload(
+            chat_id,
+            msg_type,
+            json.dumps({"text": content}, ensure_ascii=False),
+        )
+
+    def send_interactive_card(
+        self,
+        chat_id: str,
+        card_content: Mapping[str, Any],
+    ) -> FeishuClientResult:
+        """使用应用身份向指定 chat_id 发送一张交互式卡片。"""
+        return self._send_message_payload(
+            chat_id,
+            "interactive",
+            json.dumps(dict(card_content), ensure_ascii=False),
+        )
+
+    def _send_message_payload(
+        self,
+        chat_id: str,
+        msg_type: str,
+        content_payload: str,
+    ) -> FeishuClientResult:
+        """按指定 msg_type 和已序列化 content 调用飞书消息发送接口。"""
         try:
             lark = self.sdk_module or _import_lark_sdk()
         except ImportError:
@@ -130,7 +161,7 @@ class FeishuClient:
                     .builder()
                     .receive_id(chat_id)
                     .msg_type(msg_type)
-                    .content(json.dumps({"text": content}, ensure_ascii=False))
+                    .content(content_payload)
                     .build()
                 )
                 .build()
@@ -250,14 +281,16 @@ class _SdkLongConnectionConnector:
         self,
         event_handler: Callable[[Mapping[str, Any]], object],
     ) -> object:
-        """构造 SDK 事件分发器，只注册 Step 5 初版需要的消息事件。"""
+        """构造 SDK 事件分发器，注册消息事件和审批卡片按钮回调。"""
         builder = self.lark.EventDispatcherHandler.builder(
             self.config.feishu_event_encrypt_key,
             self.config.feishu_event_verify_token,
         )
-        return builder.register_p2_im_message_receive_v1(
-            self._build_message_handler(event_handler)
-        ).build()
+        builder = builder.register_p2_im_message_receive_v1(self._build_message_handler(event_handler))
+        card_register = getattr(builder, "register_p2_card_action_trigger", None)
+        if callable(card_register):
+            builder = card_register(self._build_card_action_handler(event_handler))
+        return builder.build()
 
     def _build_message_handler(
         self,
@@ -270,6 +303,19 @@ class _SdkLongConnectionConnector:
             event_handler(raw_event)
 
         return _handle_message
+
+    def _build_card_action_handler(
+        self,
+        event_handler: Callable[[Mapping[str, Any]], object],
+    ) -> Callable[[object], object]:
+        """把 SDK 卡片按钮回调转回原始字典，并返回飞书需要的快速响应。"""
+
+        def _handle_card_action(data: object) -> object:
+            raw_event = _marshal_sdk_event(self.lark, data)
+            handler_result = event_handler(raw_event)
+            return _build_card_action_response(self.lark, handler_result)
+
+        return _handle_card_action
 
     def _run_client(self, dispatcher: object) -> None:
         """在线程内阻塞运行 SDK WebSocket 客户端。"""
@@ -382,6 +428,58 @@ def _resolve_message_request_types(lark_module: Any) -> dict[str, Any]:
     return {"request": request_class, "request_body": request_body_class}
 
 
+def _build_card_action_response(lark_module: Any, handler_result: object) -> object:
+    """把接入层 ack 转换为 SDK 可返回的卡片回调响应。"""
+    payload = _normalize_card_action_ack(handler_result)
+    try:
+        module = importlib.import_module(
+            f"{lark_module.__name__}.event.callback.model.p2_card_action_trigger"
+        )
+        response_class = getattr(module, "P2CardActionTriggerResponse", None)
+    except Exception:  # noqa: BLE001
+        response_class = None
+    if response_class is None:
+        return payload
+    return _instantiate_card_action_response(response_class, payload)
+
+
+def _normalize_card_action_ack(handler_result: object) -> dict[str, Any]:
+    """从接入层返回值中提取飞书卡片回调响应字段。"""
+    if isinstance(handler_result, Mapping):
+        toast = handler_result.get("toast")
+        if isinstance(toast, Mapping):
+            return {"toast": dict(toast)}
+    return {"toast": {"type": "info", "content": "已收到审批操作。"}}
+
+
+def _instantiate_card_action_response(response_class: Any, payload: Mapping[str, Any]) -> object:
+    """兼容不同 SDK 响应类构造方式，失败时回退为字典。"""
+    builder = getattr(response_class, "builder", None)
+    if callable(builder):
+        built = _build_card_response_with_builder(builder(), payload)
+        if built is not None:
+            return built
+    for args in ((dict(payload),), ()):
+        try:
+            return response_class(*args)
+        except Exception:  # noqa: BLE001
+            continue
+    return dict(payload)
+
+
+def _build_card_response_with_builder(builder: Any, payload: Mapping[str, Any]) -> object | None:
+    """优先使用 SDK builder 写入 toast。"""
+    toast = payload.get("toast")
+    if isinstance(toast, Mapping):
+        toast_method = getattr(builder, "toast", None)
+        if callable(toast_method):
+            builder = toast_method(dict(toast))
+    build_method = getattr(builder, "build", None)
+    if callable(build_method):
+        return build_method()
+    return None
+
+
 def _marshal_sdk_event(lark_module: Any, data: object) -> dict[str, Any]:
     """使用 SDK 自带 JSON 序列化把 typed event 转成原始字典。"""
     payload = lark_module.JSON.marshal(data)
@@ -455,15 +553,18 @@ def _build_raw_payload_summary(payload: bytes) -> dict[str, Any]:
     header = parsed.get("header", {}) if isinstance(parsed.get("header"), Mapping) else {}
     event = parsed.get("event", {}) if isinstance(parsed.get("event"), Mapping) else {}
     message = event.get("message", {}) if isinstance(event.get("message"), Mapping) else {}
+    context = event.get("context", {}) if isinstance(event.get("context"), Mapping) else {}
     sender = event.get("sender", {}) if isinstance(event.get("sender"), Mapping) else {}
     sender_id = sender.get("sender_id", {}) if isinstance(sender.get("sender_id"), Mapping) else {}
+    operator = event.get("operator", {}) if isinstance(event.get("operator"), Mapping) else {}
+    operator_id = operator.get("operator_id", {}) if isinstance(operator.get("operator_id"), Mapping) else {}
     return {
         "event_id": str(header.get("event_id", "") or ""),
         "event_type": str(header.get("event_type", "") or ""),
         "tenant_key": str(header.get("tenant_key", "") or ""),
-        "chat_id": str(message.get("chat_id", "") or ""),
+        "chat_id": str(message.get("chat_id", "") or context.get("open_chat_id", "") or ""),
         "chat_type": str(message.get("chat_type", "") or ""),
-        "sender_open_id": str(sender_id.get("open_id", "") or ""),
+        "sender_open_id": str(sender_id.get("open_id", "") or operator.get("open_id", "") or operator_id.get("open_id", "") or ""),
     }
 
 
