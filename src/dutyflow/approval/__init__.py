@@ -4,6 +4,10 @@ from dutyflow.approval.approval_request_intake import (
     ApprovalRequestIntakeService,
     ApprovalRequestToolResult,
 )
+from dutyflow.approval.approval_resume_intake import (
+    ApprovalResumeIntakeService,
+    ApprovalResumeToolResult,
+)
 from dutyflow.approval.approval_flow import ApprovalRecord, ApprovalStore
 from dutyflow.approval.task_interrupt import TaskInterruptRecord, TaskInterruptStore
 
@@ -11,6 +15,8 @@ __all__ = [
     "ApprovalRecord",
     "ApprovalRequestIntakeService",
     "ApprovalRequestToolResult",
+    "ApprovalResumeIntakeService",
+    "ApprovalResumeToolResult",
     "ApprovalStore",
     "TaskInterruptRecord",
     "TaskInterruptStore",
@@ -22,6 +28,8 @@ def _self_test() -> None:
     assert ApprovalRecord is not None
     assert ApprovalRequestIntakeService is not None
     assert ApprovalRequestToolResult is not None
+    assert ApprovalResumeIntakeService is not None
+    assert ApprovalResumeToolResult is not None
     assert ApprovalStore is not None
     assert TaskInterruptRecord is not None
     assert TaskInterruptStore is not None

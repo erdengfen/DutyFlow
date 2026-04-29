@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope, ToolSpec
 from dutyflow.agent.tools.logic.approval_tools.create_approval_request import CreateApprovalRequestTool
+from dutyflow.agent.tools.logic.approval_tools.resume_after_approval import ResumeAfterApprovalTool
 from dutyflow.agent.tools.logic.cli_tools.close_cli_session import CloseCliSessionTool
 from dutyflow.agent.tools.logic.cli_tools.exec_cli_command import ExecCliCommandTool
 from dutyflow.agent.tools.logic.cli_tools.open_cli_session import OpenCliSessionTool
@@ -47,6 +48,7 @@ TOOL_REGISTRY = {
     LookupResponsibilityContextTool.name: LookupResponsibilityContextTool(),
     LookupSourceContextTool.name: LookupSourceContextTool(),
     OpenCliSessionTool.name: OpenCliSessionTool(),
+    ResumeAfterApprovalTool.name: ResumeAfterApprovalTool(),
     ScheduleBackgroundTaskTool.name: ScheduleBackgroundTaskTool(),
     SearchContactKnowledgeHeadersTool.name: SearchContactKnowledgeHeadersTool(),
     UpdateContactKnowledgeTool.name: UpdateContactKnowledgeTool(),
@@ -148,6 +150,7 @@ def _self_test() -> None:
         assert runtime_registry.has("lookup_responsibility_context")
         assert runtime_registry.has("lookup_source_context")
         assert runtime_registry.has("open_cli_session")
+        assert runtime_registry.has("resume_after_approval")
         assert runtime_registry.has("schedule_background_task")
         assert runtime_registry.has("search_contact_knowledge_headers")
         assert runtime_registry.has("update_contact_knowledge")

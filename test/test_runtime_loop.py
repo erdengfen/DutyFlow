@@ -43,6 +43,7 @@ class TestRuntimeLoop(unittest.TestCase):
             self.assertTrue(loop.agent_loop.registry.has("update_contact_knowledge"))
             self.assertTrue(loop.agent_loop.registry.has("load_skill"))
             self.assertTrue(loop.agent_loop.registry.has("create_skill"))
+            self.assertTrue(loop.agent_loop.registry.has("resume_after_approval"))
             self.assertTrue(loop.agent_loop.registry.has("schedule_background_task"))
             self.assertIn("alpha_skill", loop.agent_loop.skill_registry.describe_available())
 
