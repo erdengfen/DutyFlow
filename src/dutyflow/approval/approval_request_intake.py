@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.approval.approval_flow import ApprovalStore
 from dutyflow.approval.task_interrupt import TaskInterruptStore
 from dutyflow.tasks.task_state import TaskStore
@@ -53,12 +54,17 @@ class ApprovalRequestIntakeService:
         task_store: TaskStore | None = None,
         approval_store: ApprovalStore | None = None,
         interrupt_store: TaskInterruptStore | None = None,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定工作区及任务、审批、中断三个持久化入口。"""
         self.project_root = Path(project_root).resolve()
         self.task_store = task_store or TaskStore(self.project_root)
         self.approval_store = approval_store or ApprovalStore(self.project_root)
         self.interrupt_store = interrupt_store or TaskInterruptStore(self.project_root)
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            self.project_root,
+            task_store=self.task_store,
+        )
 
     def create_request(self, tool_input: dict[str, object]) -> ApprovalRequestToolResult:
         """创建审批记录与中断记录，并把任务切到 waiting_approval。"""
@@ -130,6 +136,7 @@ class ApprovalRequestIntakeService:
                 ),
             },
         )
+        self.control_state_store.sync()
         return ApprovalRequestToolResult(
             approval_id=approval.approval_id,
             approval_file=_relative_path(self.project_root, approval.path),

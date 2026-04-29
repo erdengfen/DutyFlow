@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.approval.approval_flow import ApprovalStore
 from dutyflow.approval.task_interrupt import TaskInterruptStore
 from dutyflow.tasks.task_state import TaskStore
@@ -55,12 +56,17 @@ class ApprovalResumeIntakeService:
         task_store: TaskStore | None = None,
         approval_store: ApprovalStore | None = None,
         interrupt_store: TaskInterruptStore | None = None,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定工作区及任务、审批、中断三个持久化入口。"""
         self.project_root = Path(project_root).resolve()
         self.task_store = task_store or TaskStore(self.project_root)
         self.approval_store = approval_store or ApprovalStore(self.project_root)
         self.interrupt_store = interrupt_store or TaskInterruptStore(self.project_root)
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            self.project_root,
+            task_store=self.task_store,
+        )
 
     def resume_after_decision(self, tool_input: dict[str, object]) -> ApprovalResumeToolResult:
         """根据审批决策完成审批记录，并更新对应任务状态。"""
@@ -97,6 +103,7 @@ class ApprovalResumeIntakeService:
                 "decision_trace": _append_resume_trace(task.decision_trace, resolved.approval_id, decision),
             },
         )
+        self.control_state_store.sync()
         return ApprovalResumeToolResult(
             approval_id=resolved.approval_id,
             approval_file=_relative_path(self.project_root, resolved.path),

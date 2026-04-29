@@ -17,6 +17,7 @@ if __package__ in {None, ""}:
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.tasks.task_state import TaskRecord, TaskStore
 
 
@@ -74,10 +75,15 @@ class BackgroundTaskWorker:
         *,
         queue_poll_seconds: float = 0.1,
         ready_scan_interval_seconds: float = 1.0,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定任务存储、执行器和线程控制对象。"""
         self.task_store = task_store
         self._task_handler = task_handler or _placeholder_task_handler
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            task_store.project_root,
+            task_store=task_store,
+        )
         self._queue: Queue[BackgroundTaskWorkItem | None] = Queue()
         # 关键开关：队列空轮询间隔为 0.1 秒，保证 stop 和测试等待不会长时间阻塞。
         self._queue_poll_seconds = queue_poll_seconds
@@ -224,7 +230,7 @@ class BackgroundTaskWorker:
             raise FileNotFoundError(f"task not found: {work_item.task_id}")
         if task.status != "queued":
             raise RuntimeError(f"task is not queued: {work_item.task_id}")
-        return self.task_store.update_task(
+        updated = self.task_store.update_task(
             task.task_id,
             frontmatter_updates={"status": "running"},
             state_updates={
@@ -234,6 +240,8 @@ class BackgroundTaskWorker:
             },
             section_updates={"next_action": "后台任务正在独立执行面中处理。"},
         )
+        self.control_state_store.sync()
+        return updated
 
     def _apply_execution_result(self, task_id: str, result: BackgroundTaskExecutionResult) -> None:
         """把执行器返回的状态写回任务 Markdown。"""
@@ -246,6 +254,7 @@ class BackgroundTaskWorker:
             },
             section_updates={"next_action": result.next_action},
         )
+        self.control_state_store.sync()
 
     def _mark_task_failed(self, work_item: BackgroundTaskWorkItem, error_message: str) -> None:
         """在执行异常时把任务标记为 failed，同时保留 worker 可继续运行。"""
@@ -255,6 +264,7 @@ class BackgroundTaskWorker:
             state_updates={"retry_status": "failed", "last_result_summary": error_message},
             section_updates={"next_action": "后台任务执行失败，等待后续人工检查或恢复策略。"},
         )
+        self.control_state_store.sync()
         self._mark_work_failed(work_item, error_message)
 
     def _mark_stopping(self) -> threading.Thread | None:

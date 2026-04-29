@@ -20,6 +20,7 @@ import os
 from typing import Any, Mapping, Sequence
 
 from dutyflow.agent.background_task_worker import BackgroundTaskWorker
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.agent.debug_chat_service import ChatDebugService, ChatDebugTask
 from dutyflow.agent.core_loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.runtime_service import RuntimeService
@@ -31,7 +32,7 @@ from dutyflow.config.env import load_env_config
 from dutyflow.feishu.runtime import FeishuIngressService
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
-from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
+from dutyflow.storage.markdown_store import MarkdownStore
 from dutyflow.agent.tools.registry import create_runtime_tool_registry
 from dutyflow.tasks.task_scheduler import TaskDispatchItem, TaskSchedulerService
 from dutyflow.tasks.task_state import TaskStore
@@ -101,7 +102,7 @@ class DutyFlowApp:
         file_store = FileStore(self.project_root)
         markdown_store = MarkdownStore(file_store)
         self._ensure_data_dirs(file_store, config.data_dir)
-        self._ensure_agent_control_state(markdown_store, config.data_dir)
+        self._ensure_agent_control_state(markdown_store, config)
         AuditLogger(markdown_store, config.log_dir).record(
             event_type="health_check",
             note="Step 1 health check initialized runtime layout.",
@@ -124,40 +125,16 @@ class DutyFlowApp:
         ):
             store.ensure_dir(relative)
 
-    def _ensure_agent_control_state(self, store: MarkdownStore, data_dir: Path) -> None:
-        """缺失时创建最小 Agent 运行状态快照文件。"""
-        state_path = data_dir / "state" / "agent_control_state.md"
-        if store.exists(state_path):
-            return
-        document = MarkdownDocument(
-            frontmatter={
-                "schema": "dutyflow.agent_control_state.v1",
-                "id": "agent_control_state_local_user",
-                "updated_at": "1970-01-01T00:00:00+00:00",
-                "current_model": "",
-                "permission_mode": "default",
-                "active_task_ids": "",
-                "waiting_approval_task_ids": "",
-                "last_event_id": "",
-            },
-            body=(
-                "# Agent Control State Snapshot\n\n"
-                "## Runtime\n\n"
-                "- status: initialized\n"
-                "- current_model:\n"
-                "- permission_mode: default\n"
-                "- last_event:\n\n"
-                "## Task Control\n\n"
-                "| task_id | weight_level | attempt_count | approval_status | retry_status | next_action |\n"
-                "|---|---|---:|---|---|---|\n\n"
-                "## Recovery\n\n"
-                "| scope_id | continuation_attempts | compact_attempts | transport_attempts | tool_error_attempts |\n"
-                "|---|---:|---:|---:|---:|\n\n"
-                "## Notes\n\n"
-                "Step 1 initialized placeholder runtime snapshot.\n"
-            ),
+    def _ensure_agent_control_state(self, store: MarkdownStore, config) -> None:
+        """刷新 Agent 控制快照，便于 CLI 和人工检查当前任务控制面。"""
+        AgentControlStateStore(
+            self.project_root,
+            markdown_store=store,
+            data_dir=config.data_dir,
+        ).sync(
+            current_model=config.model_name,
+            permission_mode=config.permission_mode,
         )
-        store.write_document(state_path, document)
 
     def run_chat_debug(self, user_text: str) -> str:
         """运行 CLI /chat 调试链路并返回完整可见结果。"""

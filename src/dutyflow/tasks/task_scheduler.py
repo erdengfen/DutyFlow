@@ -9,6 +9,7 @@ import threading
 import time
 from typing import Callable
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.tasks.task_state import TaskRecord, TaskStore
 
 
@@ -48,12 +49,17 @@ class TaskSchedulerService:
         *,
         scan_interval_seconds: float = 5.0,
         time_provider: Callable[[], datetime] | None = None,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定任务存储、调度回调和最小线程控制。"""
         self.task_store = task_store
         self.dispatch_handler = dispatch_handler or _noop_dispatch_handler
         self.scan_interval_seconds = scan_interval_seconds
         self.time_provider = time_provider or _local_now
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            task_store.project_root,
+            task_store=task_store,
+        )
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -131,6 +137,7 @@ class TaskSchedulerService:
                 state_updates={"last_result_summary": "任务已到时，等待后台 worker 执行。"},
                 section_updates={"next_action": "等待后台 worker 拉起执行。"},
             )
+            self.control_state_store.sync()
             self.dispatch_handler(dispatch)
             dispatches.append(dispatch)
             self._mark_dispatched(dispatch)

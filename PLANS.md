@@ -887,7 +887,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 7: 任务状态、审批中断与恢复
 
-状态：进行中。已完成前 9 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链；其余真实后台 agent 执行器和 Agent State 收口仍待继续实现。
+状态：进行中。已完成前 10 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入。本阶段测试已通过；真实后台 agent 执行器仍作为后续功能点单独推进。
 
 ### 最终效果
 
@@ -917,6 +917,8 @@ Demo 期最终必须实现以下完整链路：
 - “只是回答问题、查资料、几轮 tool call 即可完成”的请求，不创建后台任务，仍由前台正式 loop 直接完成并回信。
 - 后台任务能力面与主 loop 能力面分离；后续后台 profile 可单独白名单接入更强工具，但不默认继承主 loop 的全部能力。
 - 任务、审批和恢复以本地 Markdown 文件为锚点，不允许只存在于内存结构中。
+- 【已实现】Agent State 接入当前采用可见控制快照方式：
+  `data/state/agent_control_state.md` 由任务、审批和飞书事件链路同步生成。
 - 本节如与旧任务状态或旧审批链文案冲突，以当前讨论结果为准；具体字段和枚举在实现前同步更新 `docs/DATA_MODEL.md`。
 
 ### 运行模型
@@ -1023,6 +1025,14 @@ Demo 期最终必须实现以下完整链路：
   - 在用户下一次与系统发生消息交互时，系统发现存在“审批超时但未最终处置”的任务，应再次询问用户是继续执行还是弃用该任务
   - 在用户重新明确前，不自动恢复原动作
 
+### Agent State 接入
+
+- 【已实现】`src/dutyflow/agent/control_state_store.py` 负责刷新 `data/state/agent_control_state.md`，该文件是人工可读控制快照，不替代单次 loop 内的内存 `AgentState`。
+- 【已实现】快照 frontmatter 记录 `current_model`、`permission_mode`、`active_task_ids`、`waiting_approval_task_ids`、`last_event_id`。
+- 【已实现】快照正文记录 `Runtime`、`Task Control`、`Recovery`、`Recovery Scopes`，其中任务控制表从 `data/tasks/task_<id>.md` 汇总生成。
+- 【已实现】同步点包括后台任务创建、定时任务到时入队、后台 worker 任务状态变化、审批进入等待、审批恢复决策、飞书主链事件与审批卡片事件处理。
+- 【边界】当前不让业务工具直接修改 `agent/state.py` 中的内存态；工具链仍通过 `ToolResultEnvelope` 和现有 AgentLoop 规则回写消息流。
+
 ### 涉及文件、类、方法、模块
 
 - `src/dutyflow/tasks/task_state.py`
@@ -1047,6 +1057,9 @@ Demo 期最终必须实现以下完整链路：
   - `BackgroundTaskWorker`
   - `run_task`
   - `resume_task`
+- `src/dutyflow/agent/control_state_store.py`
+  - `AgentControlStateStore`
+  - `sync_agent_control_state`
 - `src/dutyflow/agent/tools/approval_tools.py`
   - `create_approval_request`
   - `resume_after_approval`
@@ -1079,10 +1092,10 @@ Demo 期最终必须实现以下完整链路：
 - [x] 实现审批恢复工具。
 - [x] 将后台任务 worker 接入正式 runtime 之外的独立执行面。
 - [x] 将飞书卡片/按钮审批接入反馈与恢复链。
-- [ ] 接入 Agent State。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写对应测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [x] 接入 Agent State。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写对应测试文件。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 

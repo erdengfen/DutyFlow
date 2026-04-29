@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Protocol
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.tasks.task_state import TaskStore
 
@@ -73,12 +74,17 @@ class BackgroundTaskIntakeService:
         skill_registry: SkillRegistry,
         *,
         task_store: TaskStore | None = None,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定工作区、可用工具注册表和技能注册表。"""
         self.project_root = Path(project_root).resolve()
         self.registry = registry
         self.skill_registry = skill_registry
         self.task_store = task_store or TaskStore(self.project_root)
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            self.project_root,
+            task_store=self.task_store,
+        )
 
     def create_async_task(self, tool_input: Mapping[str, object]) -> BackgroundTaskToolResult:
         """创建立即进入后台队列的异步任务。"""
@@ -135,6 +141,7 @@ class BackgroundTaskIntakeService:
             next_action=_build_next_action(run_mode, scheduled_for),
             last_result_summary=_build_last_result_summary(run_mode, scheduled_for),
         )
+        self.control_state_store.sync()
         return BackgroundTaskToolResult(
             task_id=record.task_id,
             status=record.status,

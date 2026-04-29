@@ -14,9 +14,10 @@ if __package__ in {None, ""}:
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
 
+from dutyflow.agent.control_state_store import AgentControlStateStore
+from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.approval.approval_card_action import ApprovalCardActionService
 from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingress_config
-from dutyflow.agent.runtime_service import RuntimeService
 from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
@@ -52,6 +53,7 @@ class FeishuIngressService:
         runtime_service: RuntimeService | None = None,
         feedback_gateway: FeedbackGateway | None = None,
         approval_card_service: ApprovalCardActionService | None = None,
+        control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定配置、适配器和持久化依赖。"""
         self.project_root = project_root
@@ -66,6 +68,10 @@ class FeishuIngressService:
         self.runtime_service = runtime_service
         self.feedback_gateway = feedback_gateway or FeedbackGateway(config, client=self.client)
         self.approval_card_service = approval_card_service or ApprovalCardActionService(project_root)
+        self.control_state_store = control_state_store or AgentControlStateStore(
+            project_root,
+            data_dir=config.data_dir,
+        )
         self.events_dir = config.data_dir / "events"
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
@@ -95,6 +101,7 @@ class FeishuIngressService:
         if envelope.event_type == "card.action.trigger":
             result = self._handle_approval_card_action(envelope, event_payload)
             self.latest_result = result
+            self._sync_control_state(envelope.event_id)
             return result
         if not self._is_supported_event(envelope):
             result = FeishuIngressResult(
@@ -133,6 +140,7 @@ class FeishuIngressService:
             },
         )
         self.latest_result = result
+        self._sync_control_state(envelope.event_id)
         if envelope.is_bind_request():
             self._print_bind_result(result)
         return result
@@ -154,6 +162,14 @@ class FeishuIngressService:
     def _is_supported_event(self, envelope: FeishuEventEnvelope) -> bool:
         """只允许私聊 Bot 或群聊 @Bot 进入 Step 5 初版主链。"""
         return envelope.is_p2p_message() or envelope.is_group_at_bot()
+
+    def _sync_control_state(self, last_event_id: str) -> None:
+        """把最近处理事件写入 Agent 控制快照，供后续恢复和人工检查使用。"""
+        self.control_state_store.sync(
+            current_model=self.config.model_name,
+            permission_mode=self.config.permission_mode,
+            last_event_id=last_event_id,
+        )
 
     def _handle_approval_card_action(
         self,

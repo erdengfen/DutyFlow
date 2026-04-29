@@ -137,17 +137,17 @@ data/
 -权重 skill、身份工具、来源工具补充的信息，都必须回到 Agent State 后再参与最终控制决策。
 -当前阶段 `Agent State` 仍以内存结构为主；本节定义的数据模型用于约束内存结构、测试序列化和后续恢复能力，不代表当前已经全部落盘。
 
-文件位置：
+当前阶段的可见控制快照文件位置：
 
 ```text
-data/state/agent_state.md
+data/state/agent_control_state.md
 ```
 
 ### 2.1 Frontmatter
 
 ```yaml
-schema: dutyflow.agent_state.v1
-id: agent_state_local_user
+schema: dutyflow.agent_control_state.v1
+id: agent_control_state_local_user
 updated_at: 2026-04-16T00:00:00+08:00
 current_model: ""
 permission_mode: default
@@ -155,6 +155,8 @@ active_task_ids: ""
 waiting_approval_task_ids: ""
 last_event_id: ""
 ```
+
+说明：该文件由任务、审批和飞书事件链路汇总生成，用于人工检查和后续恢复入口；单次模型 loop 内仍使用内存 `AgentState`。
 
 字段说明：
 
@@ -178,13 +180,13 @@ last_event_id: ""
 
 ## Task Control
 
-| task_id | weight_level | attempt_count | approval_status | retry_status | next_action |
-|---|---|---:|---|---|---|
+| task_id | status | weight_level | attempt_count | approval_status | retry_status | next_action |
+|---|---|---|---:|---|---|---|
 
 ## Recovery
 
-| scope_id | continuation_attempts | compact_attempts | transport_attempts | tool_error_attempts | latest_interruption_reason | latest_resume_point |
-|---|---:|---:|---:|---:|
+| scope_id | waiting_approval_tasks | blocked_tasks | expired_tasks | failed_tasks | latest_resume_point |
+|---|---:|---:|---:|---:|---|
 
 ## Recovery Scopes
 
