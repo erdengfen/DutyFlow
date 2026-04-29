@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass, field
+import http
 import importlib
 import json
 import os
 from pathlib import Path
 import sys
 import threading
+import time
 import uuid
 from typing import Any, Callable, Mapping, Protocol
 
@@ -19,6 +22,8 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(_SRC_ROOT))
 
 from dutyflow.config.env import EnvConfig, validate_feishu_ingress_config
+
+_UNHANDLED_WS_MESSAGE = object()
 
 
 @dataclass(frozen=True)
@@ -250,7 +255,11 @@ class _SdkLongConnectionConnector:
                 )
                 return self._latest_result
             dispatcher = self._build_dispatcher(event_handler)
-            event_bridge = _SdkEventHandlerBridge(dispatcher, self._record_raw_event_summary)
+            event_bridge = _SdkEventHandlerBridge(
+                dispatcher,
+                self._record_raw_event_summary,
+                event_handler,
+            )
             thread = threading.Thread(
                 target=self._run_client,
                 args=(event_bridge,),
@@ -327,6 +336,7 @@ class _SdkLongConnectionConnector:
                 event_handler=dispatcher,
                 log_level=_map_lark_log_level(self.lark, self.config.log_level),
             )
+            _install_card_frame_handler_patch(client, self.lark)
             self._ws_client = client
             client.start()
             self._latest_result = FeishuClientResult(
@@ -372,6 +382,9 @@ class _SdkLongConnectionConnector:
             "pid": os.getpid(),
             "thread_name": self._thread.name if self._thread is not None else "",
             "thread_alive": bool(self._thread and self._thread.is_alive()),
+            "card_frame_patch_installed": bool(
+                ws_client and getattr(ws_client, "_dutyflow_card_frame_patch", False)
+            ),
             "raw_event_count": self._raw_event_count,
             "last_raw_event_summary": dict(self._last_raw_event_summary),
             "ws_connected": bool(ws_client and getattr(ws_client, "_conn", None) is not None),
@@ -443,6 +456,126 @@ def _build_card_action_response(lark_module: Any, handler_result: object) -> obj
     return _instantiate_card_action_response(response_class, payload)
 
 
+def _install_card_frame_handler_patch(client: Any, lark_module: Any) -> None:
+    """修正当前 SDK 忽略 WebSocket card 帧的问题，使卡片按钮可进入 dispatcher。"""
+    if getattr(client, "_dutyflow_card_frame_patch", False):
+        return
+    try:
+        sdk_ws_client = importlib.import_module(f"{lark_module.__name__}.ws.client")
+    except Exception:  # noqa: BLE001
+        return
+
+    async def _handle_data_frame(frame: Any) -> None:
+        await _handle_data_frame_with_card_support(client, frame, sdk_ws_client)
+
+    setattr(client, "_handle_data_frame", _handle_data_frame)
+    setattr(client, "_dutyflow_card_frame_patch", True)
+
+
+async def _handle_data_frame_with_card_support(client: Any, frame: Any, sdk_ws_client: Any) -> None:
+    """按 SDK 原逻辑处理 event 帧，并额外把 card 帧交给卡片回调 dispatcher。"""
+    headers = _read_ws_frame_headers(frame, sdk_ws_client)
+    payload = _resolve_ws_payload(client, frame.payload, headers)
+    if payload is None:
+        return
+    message_type = sdk_ws_client.MessageType(headers["type"])
+    response = sdk_ws_client.Response(code=http.HTTPStatus.OK)
+    try:
+        started_at = _now_milliseconds()
+        result = _dispatch_ws_payload(client, message_type, payload, sdk_ws_client)
+        if result is _UNHANDLED_WS_MESSAGE:
+            return
+        _append_biz_runtime_header(frame, sdk_ws_client, started_at)
+        if result is not None:
+            response.data = base64.b64encode(
+                sdk_ws_client.JSON.marshal(result).encode(sdk_ws_client.UTF_8)
+            )
+    except Exception as exc:  # noqa: BLE001
+        _log_ws_handler_error(sdk_ws_client, headers, message_type, exc)
+        response = sdk_ws_client.Response(code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
+    frame.payload = sdk_ws_client.JSON.marshal(response).encode(sdk_ws_client.UTF_8)
+    await client._write_message(frame.SerializeToString())
+
+
+def _read_ws_frame_headers(frame: Any, sdk_ws_client: Any) -> dict[str, str]:
+    """读取 SDK WebSocket data frame 的必要 header。"""
+    headers = frame.headers
+    return {
+        "message_id": sdk_ws_client._get_by_key(headers, sdk_ws_client.HEADER_MESSAGE_ID),
+        "trace_id": sdk_ws_client._get_by_key(headers, sdk_ws_client.HEADER_TRACE_ID),
+        "sum": sdk_ws_client._get_by_key(headers, sdk_ws_client.HEADER_SUM),
+        "seq": sdk_ws_client._get_by_key(headers, sdk_ws_client.HEADER_SEQ),
+        "type": sdk_ws_client._get_by_key(headers, sdk_ws_client.HEADER_TYPE),
+    }
+
+
+def _resolve_ws_payload(client: Any, payload: bytes, headers: Mapping[str, str]) -> bytes | None:
+    """处理 SDK WebSocket 分片 payload，未收齐时返回空。"""
+    if int(headers["sum"]) <= 1:
+        return payload
+    return client._combine(
+        headers["message_id"],
+        int(headers["sum"]),
+        int(headers["seq"]),
+        payload,
+    )
+
+
+def _dispatch_ws_payload(client: Any, message_type: Any, payload: bytes, sdk_ws_client: Any) -> object:
+    """把普通 event 交给 SDK dispatcher，卡片回调直接交给接入层。"""
+    if message_type == sdk_ws_client.MessageType.EVENT:
+        if _is_card_action_payload(payload):
+            return _dispatch_card_payload(client, payload)
+        return client._event_handler.do_without_validation(payload)
+    if message_type == sdk_ws_client.MessageType.CARD:
+        return _dispatch_card_payload(client, payload)
+    return _UNHANDLED_WS_MESSAGE
+
+
+def _dispatch_card_payload(client: Any, payload: bytes) -> object:
+    """卡片回调绕过 SDK typed dispatcher，避免 SDK 时间戳反序列化异常。"""
+    card_handler = getattr(client._event_handler, "do_card_without_validation", None)
+    if callable(card_handler):
+        return card_handler(payload)
+    return client._event_handler.do_without_validation(payload)
+
+
+def _is_card_action_payload(payload: bytes) -> bool:
+    """判断原始 payload 是否为新旧版飞书卡片按钮回调。"""
+    parsed = _parse_raw_payload(payload)
+    header = parsed.get("header", {}) if isinstance(parsed.get("header"), Mapping) else {}
+    event_type = str(header.get("event_type", "") or parsed.get("type", "") or "")
+    return event_type in {"card.action.trigger", "card.action.trigger_v1"}
+
+
+def _append_biz_runtime_header(frame: Any, sdk_ws_client: Any, started_at: int) -> None:
+    """向响应 frame 追加飞书要求的业务处理耗时 header。"""
+    header = frame.headers.add()
+    header.key = sdk_ws_client.HEADER_BIZ_RT
+    header.value = str(_now_milliseconds() - started_at)
+
+
+def _log_ws_handler_error(
+    sdk_ws_client: Any,
+    headers: Mapping[str, str],
+    message_type: Any,
+    exc: Exception,
+) -> None:
+    """复用 SDK logger 记录 WebSocket 事件或卡片回调处理失败。"""
+    sdk_ws_client.logger.error(
+        "handle message failed, message_type: %s, message_id: %s, trace_id: %s, err: %s",
+        getattr(message_type, "value", str(message_type)),
+        headers.get("message_id", ""),
+        headers.get("trace_id", ""),
+        exc,
+    )
+
+
+def _now_milliseconds() -> int:
+    """返回当前毫秒时间戳，用于 WebSocket 响应耗时统计。"""
+    return int(round(time.time() * 1000))
+
+
 def _normalize_card_action_ack(handler_result: object) -> dict[str, Any]:
     """从接入层返回值中提取飞书卡片回调响应字段。"""
     if isinstance(handler_result, Mapping):
@@ -511,20 +644,18 @@ class _SdkEventHandlerBridge:
         self,
         dispatcher: object,
         summary_recorder: Callable[[Mapping[str, Any]], None],
+        raw_event_handler: Callable[[Mapping[str, Any]], object],
     ) -> None:
         """绑定官方 dispatcher，保留原始事件分发能力。"""
         self.dispatcher = dispatcher
         self.summary_recorder = summary_recorder
+        self.raw_event_handler = raw_event_handler
 
     def do_without_validation(self, payload: bytes) -> Any:
         """先打印原始事件帧摘要，再交给 SDK dispatcher。"""
         summary = _build_raw_payload_summary(payload)
         self.summary_recorder(summary)
-        print(
-            "\n[Feishu] raw event frame received\n"
-            + json.dumps(summary, ensure_ascii=False, indent=2),
-            flush=True,
-        )
+        _print_raw_event_summary(summary)
         try:
             return self.dispatcher.do_without_validation(payload)
         except Exception as exc:  # noqa: BLE001
@@ -536,6 +667,14 @@ class _SdkEventHandlerBridge:
             }
             print(json.dumps(error_payload, ensure_ascii=False, indent=2), flush=True)
             raise
+
+    def do_card_without_validation(self, payload: bytes) -> object:
+        """长连接卡片回调直接走原始接入层，兼容新版和旧版卡片结构。"""
+        summary = _build_raw_payload_summary(payload)
+        self.summary_recorder(summary)
+        _print_raw_event_summary(summary)
+        raw_event = _parse_raw_payload(payload)
+        return self.raw_event_handler(raw_event)
 
 
 def _build_raw_payload_summary(payload: bytes) -> dict[str, Any]:
@@ -559,13 +698,44 @@ def _build_raw_payload_summary(payload: bytes) -> dict[str, Any]:
     operator = event.get("operator", {}) if isinstance(event.get("operator"), Mapping) else {}
     operator_id = operator.get("operator_id", {}) if isinstance(operator.get("operator_id"), Mapping) else {}
     return {
-        "event_id": str(header.get("event_id", "") or ""),
-        "event_type": str(header.get("event_type", "") or ""),
-        "tenant_key": str(header.get("tenant_key", "") or ""),
-        "chat_id": str(message.get("chat_id", "") or context.get("open_chat_id", "") or ""),
+        "event_id": str(header.get("event_id", "") or parsed.get("uuid", "") or ""),
+        "event_type": str(header.get("event_type", "") or parsed.get("type", "") or ""),
+        "tenant_key": str(header.get("tenant_key", "") or parsed.get("tenant_key", "") or ""),
+        "chat_id": str(
+            message.get("chat_id", "")
+            or context.get("open_chat_id", "")
+            or parsed.get("open_chat_id", "")
+            or ""
+        ),
         "chat_type": str(message.get("chat_type", "") or ""),
-        "sender_open_id": str(sender_id.get("open_id", "") or operator.get("open_id", "") or operator_id.get("open_id", "") or ""),
+        "sender_open_id": str(
+            sender_id.get("open_id", "")
+            or operator.get("open_id", "")
+            or operator_id.get("open_id", "")
+            or parsed.get("open_id", "")
+            or ""
+        ),
     }
+
+
+def _print_raw_event_summary(summary: Mapping[str, Any]) -> None:
+    """在 CLI 中打印飞书原始帧摘要。"""
+    print(
+        "\n[Feishu] raw event frame received\n"
+        + json.dumps(dict(summary), ensure_ascii=False, indent=2),
+        flush=True,
+    )
+
+
+def _parse_raw_payload(payload: bytes) -> dict[str, Any]:
+    """把 WebSocket 原始 payload 转成字典，失败时保留文本预览。"""
+    try:
+        parsed = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"payload_preview": repr(payload[:240])}
+    if isinstance(parsed, Mapping):
+        return dict(parsed)
+    return {"payload_preview": str(parsed)[:240]}
 
 
 def _prepare_sdk_loop_for_thread(lark_module: Any) -> asyncio.AbstractEventLoop:

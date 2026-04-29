@@ -95,7 +95,7 @@ def _build_resume_input(raw_event: Mapping[str, Any], value: Mapping[str, str]) 
 def _extract_action_value(raw_event: Mapping[str, Any]) -> dict[str, str]:
     """从飞书卡片回调中提取 action.value。"""
     event = _mapping(raw_event.get("event"))
-    action = _mapping(event.get("action"))
+    action = _mapping(event.get("action")) or _mapping(raw_event.get("action"))
     value = action.get("value", {})
     if isinstance(value, str):
         return _parse_value_json(value)
@@ -124,13 +124,14 @@ def _extract_operator_open_id(raw_event: Mapping[str, Any]) -> str:
         operator.get("open_id"),
         operator_id.get("open_id"),
         _mapping(operator.get("user_id")).get("open_id"),
+        raw_event.get("open_id"),
     )
 
 
 def _extract_event_id(raw_event: Mapping[str, Any]) -> str:
     """从 header 中提取事件 ID。"""
     header = _mapping(raw_event.get("header"))
-    return _pick_text(header.get("event_id"), raw_event.get("event_id"))
+    return _pick_text(header.get("event_id"), raw_event.get("event_id"), raw_event.get("uuid"))
 
 
 def _normalize_decision(raw_value: str) -> str:

@@ -1033,6 +1033,13 @@ Demo 期最终必须实现以下完整链路：
 - 【已实现】同步点包括后台任务创建、定时任务到时入队、后台 worker 任务状态变化、审批进入等待、审批恢复决策、飞书主链事件与审批卡片事件处理。
 - 【边界】当前不让业务工具直接修改 `agent/state.py` 中的内存态；工具链仍通过 `ToolResultEnvelope` 和现有 AgentLoop 规则回写消息流。
 
+### 人工测试待修复问题
+
+- 【已修复】飞书审批卡片按钮曾返回错误 `200671`；根因是 SDK 长连接忽略 `card` frame，且真实测试中 `card.action.trigger` 也可能以 `event` frame 投递，SDK typed dispatcher 会因毫秒级或微秒级时间戳反序列化抛出 `year 58295 is out of range`。当前新旧卡片回调都会先识别原始 payload，再绕过 SDK typed dispatcher 进入接入层；人工复测已通过，`approval_a53408ffe67e` 已从 pending 转入 completed，关联任务 `task_5ad1cabd1a74` 已记录 `approval_status=approved`。
+- 【待修复】模型会生成过去时间作为 `expires_at` 或 `scheduled_for`，导致审批有效期和定时任务语义错误；后续需要在工具 contract 或服务层增加未来时间校验。
+- 【待修复】模型可能先调用 `create_approval_request` 并传入不存在的 task_id，再补创建任务；后续需要约束“先创建任务，再基于真实 task_id 发审批”的调用顺序。
+- 【待修复】后台任务即时回复存在过度承诺，例如“审批通过后将自动执行”，但真实后台 agent 执行器尚未接入；后续需要收紧 system prompt 或 fallback 文案边界。
+
 ### 涉及文件、类、方法、模块
 
 - `src/dutyflow/tasks/task_state.py`

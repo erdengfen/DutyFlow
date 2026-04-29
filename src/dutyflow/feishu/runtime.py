@@ -25,6 +25,8 @@ from dutyflow.perception.store import PerceptionRecordService
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
 
+_CARD_ACTION_EVENT_TYPES = frozenset({"card.action.trigger", "card.action.trigger_v1"})
+
 
 @dataclass(frozen=True)
 class FeishuIngressResult:
@@ -98,7 +100,7 @@ class FeishuIngressService:
         if duplicate is not None:
             self.latest_result = duplicate
             return duplicate
-        if envelope.event_type == "card.action.trigger":
+        if envelope.event_type in _CARD_ACTION_EVENT_TYPES:
             result = self._handle_approval_card_action(envelope, event_payload)
             self.latest_result = result
             self._sync_control_state(envelope.event_id)

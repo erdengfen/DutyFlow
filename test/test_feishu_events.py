@@ -204,6 +204,34 @@ class TestFeishuEvents(unittest.TestCase):
         self.assertEqual(task.status, "queued")
         self.assertEqual(task.approval_status, "approved")
 
+    def test_legacy_card_action_trigger_v1_resumes_approval(self) -> None:
+        """旧版卡片回调也应进入同一审批恢复链。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root, event_mode="fixture")
+            task_store = TaskStore(root)
+            created = _create_waiting_approval(root, task_store)
+            service = FeishuIngressService(root, config, adapter=FeishuEventAdapter())
+            result = service.handle_raw_event(
+                _legacy_card_action_event(created.approval_id, created.resume_token, "approved")
+            )
+            task = task_store.read_task(created.task_id)
+        self.assertEqual(result.action, "approval_resumed")
+        self.assertTrue(result.payload["card_action_ok"])
+        self.assertEqual(result.payload["event_type"], "card.action.trigger_v1")
+        self.assertIsNotNone(task)
+        assert task is not None
+        self.assertEqual(task.status, "queued")
+
+    def test_card_action_accepts_microsecond_create_time(self) -> None:
+        """卡片回调中的超长 create_time 不应导致时间戳越界。"""
+        adapter = FeishuEventAdapter()
+        raw_event = _card_action_event("approval_demo", "resume_demo", "approved")
+        raw_event["header"]["create_time"] = "1777475370918000"
+        envelope = adapter.build_event_envelope(raw_event)
+        self.assertEqual(envelope.event_type, "card.action.trigger")
+        self.assertTrue(envelope.received_at.startswith("2026-04-29"))
+
 
 def _write_env(root: Path, *, event_mode: str, bootstrap_owner: bool = False) -> object:
     """写入最小可用 .env，并返回解析后的配置对象。"""
@@ -272,6 +300,30 @@ def _card_action_event(approval_id: str, resume_token: str, decision_result: str
                     "decision_result": decision_result,
                 }
             },
+        },
+    }
+
+
+def _legacy_card_action_event(
+    approval_id: str,
+    resume_token: str,
+    decision_result: str,
+) -> dict[str, object]:
+    """构造旧版飞书 card.action.trigger_v1 原始事件。"""
+    return {
+        "uuid": f"uuid_card_{decision_result}",
+        "type": "card.action.trigger_v1",
+        "tenant_key": "tenant_demo",
+        "open_id": "ou_owner",
+        "open_chat_id": "oc_owner",
+        "open_message_id": f"om_card_{decision_result}",
+        "action": {
+            "value": {
+                "dutyflow_action": "approval_decision",
+                "approval_id": approval_id,
+                "resume_token": resume_token,
+                "decision_result": decision_result,
+            }
         },
     }
 

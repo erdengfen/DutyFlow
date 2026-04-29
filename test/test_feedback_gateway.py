@@ -89,7 +89,9 @@ class TestFeedbackGateway(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(client.sent_chat_id, "oc_owner")
         self.assertEqual(client.sent_msg_type, "interactive")
-        self.assertEqual(client.sent_card["elements"][1]["actions"][0]["value"]["decision_result"], "approved")
+        button = client.sent_card["elements"][1]["actions"][0]
+        self.assertEqual(button["behaviors"][0]["type"], "callback")
+        self.assertEqual(button["behaviors"][0]["value"]["decision_result"], "approved")
 
 
 class FakeFeedbackClient:

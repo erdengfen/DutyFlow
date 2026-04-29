@@ -67,16 +67,16 @@ class FeishuEventAdapter:
         sender_id = _mapping(sender.get("sender_id"))
         mentions = _normalize_mentions(message.get("mentions"))
         return FeishuEventEnvelope(
-            event_id=_pick_first_non_empty(header.get("event_id"), raw_event.get("event_id")),
+            event_id=_pick_first_non_empty(header.get("event_id"), raw_event.get("event_id"), raw_event.get("uuid")),
             event_type=_pick_first_non_empty(header.get("event_type"), raw_event.get("type")),
             tenant_key=_pick_first_non_empty(header.get("tenant_key"), raw_event.get("tenant_key")),
             app_id=_pick_first_non_empty(header.get("app_id"), raw_event.get("app_id")),
-            message_id=_as_text(message.get("message_id")),
-            chat_id=_as_text(message.get("chat_id")),
+            message_id=_pick_first_non_empty(message.get("message_id"), raw_event.get("open_message_id")),
+            chat_id=_pick_first_non_empty(message.get("chat_id"), raw_event.get("open_chat_id")),
             chat_type=_pick_first_non_empty(message.get("chat_type"), event.get("chat_type")),
             message_type=_pick_first_non_empty(message.get("message_type"), event.get("message_type")),
-            sender_open_id=_as_text(sender_id.get("open_id")),
-            sender_user_id=_as_text(sender_id.get("user_id")),
+            sender_open_id=_pick_first_non_empty(sender_id.get("open_id"), raw_event.get("open_id")),
+            sender_user_id=_pick_first_non_empty(sender_id.get("user_id"), raw_event.get("user_id")),
             sender_union_id=_as_text(sender_id.get("union_id")),
             message_text=_extract_message_text(message.get("content")),
             content_preview=_extract_content_preview(message.get("content")),
@@ -271,12 +271,21 @@ def _received_at_from_header(header: dict[str, Any]) -> str:
 
 
 def _timestamp_to_iso(value: str) -> str:
-    """把飞书毫秒或秒级时间戳转换为 ISO-8601。"""
-    scale = 1000 if len(value) > 10 else 1
-    timestamp = int(value) / scale
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone().isoformat(
-        timespec="seconds"
-    )
+    """把飞书秒、毫秒、微秒或纳秒时间戳转换为 ISO-8601。"""
+    seconds = _timestamp_seconds(value)
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone().isoformat(
+            timespec="seconds"
+        )
+    except (OverflowError, OSError, ValueError):
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _timestamp_seconds(value: str) -> int:
+    """飞书部分回调会传超长时间戳，统一截取前 10 位秒级时间。"""
+    if len(value) <= 10:
+        return int(value)
+    return int(value[:10])
 
 
 def _self_test() -> None:

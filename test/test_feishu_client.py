@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+from enum import Enum
+import json
 from pathlib import Path
 import sys
 import time
+from types import ModuleType
 import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +22,8 @@ from dutyflow.feishu.client import (  # noqa: E402
     FeishuClient,
     _SdkLongConnectionConnector,
     _SdkMissingConnector,
+    _SdkEventHandlerBridge,
+    _install_card_frame_handler_patch,
 )
 
 
@@ -94,6 +101,68 @@ class TestFeishuClient(unittest.TestCase):
         _FakeLarkModule.marshal_payload = ""
         self.assertEqual(captured[0]["header"]["event_id"], "evt_card")
         self.assertEqual(response["toast"]["content"], "ok")
+
+    def test_sdk_card_frame_is_dispatched_and_acknowledged(self) -> None:
+        """SDK WebSocket card 帧应进入卡片回调 dispatcher 并返回 ack。"""
+        captured: list[dict[str, object]] = []
+        fake_lark, cleanup = _install_fake_ws_sdk_module()
+        dispatcher = _FakeRawDispatcher(captured)
+        client = _FakeWsFrameClient(dispatcher)
+        _install_card_frame_handler_patch(client, fake_lark)
+        frame = _build_ws_data_frame("card", _card_action_payload())
+        try:
+            asyncio.run(client._handle_data_frame(frame))
+            response_payload = json.loads(client.sent_payloads[0].decode("utf-8"))
+            response_data = base64.b64decode(response_payload["data"]).decode("utf-8")
+            self.assertEqual(captured[0]["header"]["event_id"], "evt_card")
+            self.assertEqual(response_payload["code"], 200)
+            self.assertIn('"content": "ok"', response_data)
+        finally:
+            cleanup()
+
+    def test_legacy_card_frame_uses_raw_handler_and_acknowledges(self) -> None:
+        """旧版 card.action.trigger_v1 帧应绕过 SDK typed dispatcher 进入原始接入层。"""
+        captured: list[dict[str, object]] = []
+        fake_lark, cleanup = _install_fake_ws_sdk_module()
+        bridge = _SdkEventHandlerBridge(
+            _FailingRawDispatcher(),
+            lambda summary: None,
+            lambda event: captured.append(dict(event)) or {"toast": {"type": "success", "content": "ok"}},
+        )
+        client = _FakeWsFrameClient(bridge)
+        _install_card_frame_handler_patch(client, fake_lark)
+        frame = _build_ws_data_frame("card", _legacy_card_action_payload())
+        try:
+            asyncio.run(client._handle_data_frame(frame))
+            response_payload = json.loads(client.sent_payloads[0].decode("utf-8"))
+            response_data = base64.b64decode(response_payload["data"]).decode("utf-8")
+            self.assertEqual(captured[0]["type"], "card.action.trigger_v1")
+            self.assertEqual(response_payload["code"], 200)
+            self.assertIn('"content": "ok"', response_data)
+        finally:
+            cleanup()
+
+    def test_card_action_event_frame_bypasses_sdk_typed_dispatcher(self) -> None:
+        """event 类型的 card.action.trigger 也应绕过 SDK typed dispatcher。"""
+        captured: list[dict[str, object]] = []
+        fake_lark, cleanup = _install_fake_ws_sdk_module()
+        bridge = _SdkEventHandlerBridge(
+            _FailingRawDispatcher(),
+            lambda summary: None,
+            lambda event: captured.append(dict(event)) or {"toast": {"type": "success", "content": "ok"}},
+        )
+        client = _FakeWsFrameClient(bridge)
+        _install_card_frame_handler_patch(client, fake_lark)
+        frame = _build_ws_data_frame("event", _card_action_payload())
+        try:
+            asyncio.run(client._handle_data_frame(frame))
+            response_payload = json.loads(client.sent_payloads[0].decode("utf-8"))
+            response_data = base64.b64decode(response_payload["data"]).decode("utf-8")
+            self.assertEqual(captured[0]["header"]["event_type"], "card.action.trigger")
+            self.assertEqual(response_payload["code"], 200)
+            self.assertIn('"content": "ok"', response_data)
+        finally:
+            cleanup()
 
 
 class _FakeConnector:
@@ -367,6 +436,223 @@ class _FakeMessageResponse:
         self.code = 0
         self.msg = "ok"
         self.data = type("RespData", (), {"message_id": "om_reply"})()
+
+
+class _FakeWsFrameClient:
+    """模拟 SDK ws.Client 中 data frame 处理依赖的最小对象。"""
+
+    def __init__(self, event_handler) -> None:
+        """保存 dispatcher 和响应帧。"""
+        self._event_handler = event_handler
+        self.sent_payloads: list[bytes] = []
+
+    def _combine(self, message_id: str, sum_value: int, seq: int, payload: bytes) -> bytes:
+        """测试中不做分片合并，直接返回 payload。"""
+        del message_id, sum_value, seq
+        return payload
+
+    async def _write_message(self, data: bytes) -> None:
+        """记录待发送回飞书的响应 frame。"""
+        self.sent_payloads.append(data)
+
+
+class _FakeRawDispatcher:
+    """模拟 SDK dispatcher 的原始 payload 分发入口。"""
+
+    def __init__(self, captured: list[dict[str, object]]) -> None:
+        """保存捕获列表。"""
+        self.captured = captured
+
+    def do_without_validation(self, payload: bytes) -> dict[str, object]:
+        """解析原始 payload 并返回卡片回调 ack。"""
+        event = json.loads(payload.decode("utf-8"))
+        self.captured.append(event)
+        return {"toast": {"type": "success", "content": "ok"}}
+
+
+class _FailingRawDispatcher:
+    """确保旧版 card frame 测试不会误走 SDK typed dispatcher。"""
+
+    def do_without_validation(self, payload: bytes) -> dict[str, object]:
+        """旧版卡片帧如果进入这里，说明兼容链路失效。"""
+        del payload
+        raise AssertionError("legacy card frame should bypass SDK dispatcher")
+
+
+class _FakeMessageType(Enum):
+    """模拟 SDK WebSocket 消息类型枚举。"""
+
+    EVENT = "event"
+    CARD = "card"
+
+
+class _FakeWsResponse:
+    """模拟 SDK WebSocket 响应对象。"""
+
+    def __init__(self, code: int, data: bytes | None = None) -> None:
+        """保存响应码和可选 callback data。"""
+        self.code = code
+        self.data = data
+
+
+class _FakeWsJSON:
+    """模拟 SDK JSON 工具。"""
+
+    @staticmethod
+    def marshal(value) -> str:
+        """把响应对象和普通对象转换为 JSON。"""
+        if isinstance(value, _FakeWsResponse):
+            data = value.data.decode("utf-8") if value.data else ""
+            return json.dumps({"code": value.code, "data": data})
+        return json.dumps(value, ensure_ascii=False)
+
+
+class _FakeFrameHeader:
+    """模拟 SDK protobuf header 对象。"""
+
+    def __init__(self) -> None:
+        """初始化空 header。"""
+        self.key = ""
+        self.value = ""
+
+
+class _FakeFrameHeaders(list):
+    """模拟 SDK protobuf headers 容器。"""
+
+    def add(self) -> _FakeFrameHeader:
+        """追加并返回一个 header。"""
+        header = _FakeFrameHeader()
+        self.append(header)
+        return header
+
+
+class _FakeWsFrame:
+    """模拟 SDK WebSocket data frame。"""
+
+    def __init__(self) -> None:
+        """初始化 headers 和 payload。"""
+        self.headers = _FakeFrameHeaders()
+        self.payload = b""
+
+    def SerializeToString(self) -> bytes:
+        """测试中直接把响应 payload 作为发送内容。"""
+        return self.payload
+
+
+class _FakeWsLogger:
+    """模拟 SDK logger。"""
+
+    @staticmethod
+    def error(*args) -> None:
+        """测试中忽略错误日志。"""
+        del args
+
+
+def _install_fake_ws_sdk_module():
+    """安装一个临时 SDK ws.client 模块，供 card frame patch 测试导入。"""
+    root_name = "fake_lark_for_card_frame"
+    root = ModuleType(root_name)
+    root.__name__ = root_name
+    ws = ModuleType(root_name + ".ws")
+    client = ModuleType(root_name + ".ws.client")
+    _populate_fake_ws_client_module(client)
+    sys.modules[root_name] = root
+    sys.modules[root_name + ".ws"] = ws
+    sys.modules[root_name + ".ws.client"] = client
+
+    def _cleanup() -> None:
+        for name in (root_name + ".ws.client", root_name + ".ws", root_name):
+            sys.modules.pop(name, None)
+
+    return root, _cleanup
+
+
+def _populate_fake_ws_client_module(module: ModuleType) -> None:
+    """填充 card frame patch 所需的 SDK ws.client 字段。"""
+    module.MessageType = _FakeMessageType
+    module.Response = _FakeWsResponse
+    module.JSON = _FakeWsJSON
+    module.UTF_8 = "utf-8"
+    module.HEADER_MESSAGE_ID = "message_id"
+    module.HEADER_TRACE_ID = "trace_id"
+    module.HEADER_SUM = "sum"
+    module.HEADER_SEQ = "seq"
+    module.HEADER_TYPE = "type"
+    module.HEADER_BIZ_RT = "biz_rt"
+    module.logger = _FakeWsLogger()
+    module._get_by_key = _get_fake_header_by_key
+
+
+def _get_fake_header_by_key(headers: list[_FakeFrameHeader], key: str) -> str:
+    """按 key 读取 fake frame header。"""
+    for header in headers:
+        if header.key == key:
+            return header.value
+    raise KeyError(key)
+
+
+def _build_ws_data_frame(message_type: str, payload: dict[str, object]):
+    """构造 SDK WebSocket data frame 测试对象。"""
+    frame = _FakeWsFrame()
+    _add_frame_header(frame, "message_id", "msg_card")
+    _add_frame_header(frame, "trace_id", "trace_card")
+    _add_frame_header(frame, "sum", "1")
+    _add_frame_header(frame, "seq", "1")
+    _add_frame_header(frame, "type", message_type)
+    frame.payload = json.dumps(payload).encode("utf-8")
+    return frame
+
+
+def _add_frame_header(frame, key: str, value: str) -> None:
+    """向测试 frame 追加一个 header。"""
+    header = frame.headers.add()
+    header.key = key
+    header.value = value
+
+
+def _card_action_payload() -> dict[str, object]:
+    """构造飞书卡片按钮回调 payload。"""
+    return {
+        "schema": "2.0",
+        "header": {
+            "event_id": "evt_card",
+            "event_type": "card.action.trigger",
+            "tenant_key": "tenant_demo",
+            "token": "",
+        },
+        "event": {
+            "operator": {"open_id": "ou_owner"},
+            "context": {"open_chat_id": "oc_owner"},
+            "action": {
+                "value": {
+                    "dutyflow_action": "approval_decision",
+                    "approval_id": "approval_001",
+                    "resume_token": "resume_001",
+                    "decision_result": "approved",
+                }
+            },
+        },
+    }
+
+
+def _legacy_card_action_payload() -> dict[str, object]:
+    """构造旧版飞书卡片按钮回调 payload。"""
+    return {
+        "uuid": "uuid_card",
+        "type": "card.action.trigger_v1",
+        "tenant_key": "tenant_demo",
+        "open_id": "ou_owner",
+        "open_chat_id": "oc_owner",
+        "open_message_id": "om_card",
+        "action": {
+            "value": {
+                "dutyflow_action": "approval_decision",
+                "approval_id": "approval_001",
+                "resume_token": "resume_001",
+                "decision_result": "approved",
+            }
+        },
+    }
 
 
 def _config() -> EnvConfig:

@@ -153,12 +153,30 @@ def _build_approval_button(
         "tag": "button",
         "text": {"tag": "plain_text", "content": label},
         "type": button_type,
-        "value": {
-            "dutyflow_action": "approval_decision",
-            "approval_id": approval_id,
-            "resume_token": resume_token,
-            "decision_result": decision_result,
-        },
+        "behaviors": [
+            {
+                "type": "callback",
+                "value": _build_approval_callback_value(
+                    approval_id,
+                    resume_token,
+                    decision_result,
+                ),
+            }
+        ],
+    }
+
+
+def _build_approval_callback_value(
+    approval_id: str,
+    resume_token: str,
+    decision_result: str,
+) -> dict[str, str]:
+    """构造飞书卡片长连接回调所需的对象类型回传参数。"""
+    return {
+        "dutyflow_action": "approval_decision",
+        "approval_id": approval_id,
+        "resume_token": resume_token,
+        "decision_result": decision_result,
     }
 
 
@@ -167,7 +185,7 @@ def _self_test() -> None:
     text = _build_status_text("处理中", "已进入后台任务")
     assert text == "【处理中】\n已进入后台任务"
     card = _build_approval_card({"approval_id": "approval_001", "resume_token": "resume_001"})
-    assert card["elements"][1]["actions"][0]["value"]["decision_result"] == "approved"
+    assert card["elements"][1]["actions"][0]["behaviors"][0]["value"]["decision_result"] == "approved"
 
 
 if __name__ == "__main__":
