@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import os
 from typing import Any, Mapping, Sequence
 
+from dutyflow.agent.background_task_worker import BackgroundTaskWorker
 from dutyflow.agent.debug_chat_service import ChatDebugService, ChatDebugTask
 from dutyflow.agent.core_loop import AgentLoop, ChatDebugSession
 from dutyflow.agent.runtime_service import RuntimeService
@@ -32,6 +33,8 @@ from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
 from dutyflow.agent.tools.registry import create_runtime_tool_registry
+from dutyflow.tasks.task_scheduler import TaskDispatchItem, TaskSchedulerService
+from dutyflow.tasks.task_state import TaskStore
 
 
 @dataclass
@@ -72,6 +75,8 @@ class DutyFlowApp:
         self._feishu_ingress_service: FeishuIngressService | None = None
         self._runtime_service: RuntimeService | None = None
         self._runtime_loop: RuntimeAgentLoop | None = None
+        self._background_task_worker: BackgroundTaskWorker | None = None
+        self._task_scheduler_service: TaskSchedulerService | None = None
 
     def health_check(self) -> HealthStatus:
         """返回 Step 1 可验证的占位健康检查结果。"""
@@ -491,10 +496,33 @@ class DutyFlowApp:
         return self._runtime_loop
 
     def _bootstrap_background_services(self) -> None:
-        """在应用启动时静默拉起正式 runtime worker 和飞书监听。"""
+        """在应用启动时静默拉起正式 runtime、后台任务执行面、调度器和飞书监听。"""
         self._ensure_runtime_layout()
         self._get_or_create_runtime_service().start()
+        self._get_or_create_background_task_worker().start()
+        self._get_or_create_task_scheduler_service().start()
         self._get_or_create_feishu_ingress_service().start_long_connection()
+
+    def _get_or_create_background_task_worker(self) -> BackgroundTaskWorker:
+        """构造并复用正式 runtime 之外的后台任务 worker。"""
+        if self._background_task_worker is not None:
+            return self._background_task_worker
+        self._background_task_worker = BackgroundTaskWorker(TaskStore(self.project_root))
+        return self._background_task_worker
+
+    def _get_or_create_task_scheduler_service(self) -> TaskSchedulerService:
+        """构造并复用后台任务调度器，把到时任务送入独立 worker。"""
+        if self._task_scheduler_service is not None:
+            return self._task_scheduler_service
+        self._task_scheduler_service = TaskSchedulerService(
+            TaskStore(self.project_root),
+            self._enqueue_scheduled_task_to_background_worker,
+        )
+        return self._task_scheduler_service
+
+    def _enqueue_scheduled_task_to_background_worker(self, dispatch: TaskDispatchItem) -> None:
+        """把调度器发现的到时任务送入后台任务 worker。"""
+        self._get_or_create_background_task_worker().enqueue_task(dispatch.task_id, source="scheduler")
 
     def _prompt_cli_permission(
         self,

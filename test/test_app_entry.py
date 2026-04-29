@@ -54,16 +54,22 @@ class TestAppEntry(unittest.TestCase):
         bootstrap.assert_called_once()
         cli_start.assert_called_once_with(interactive=True)
 
-    def test_bootstrap_background_services_starts_runtime_and_feishu(self) -> None:
-        """后台服务启动应同时拉起 runtime worker 和飞书监听。"""
+    def test_bootstrap_background_services_starts_runtime_tasks_and_feishu(self) -> None:
+        """后台服务启动应同时拉起 runtime、任务执行面、调度器和飞书监听。"""
         app = DutyFlowApp(PROJECT_ROOT)
         runtime = _FakeRuntimeService()
+        background_worker = _FakeBackgroundTaskWorker()
+        scheduler = _FakeTaskSchedulerService()
         ingress = _FakeIngressService()
         with patch.object(app, "_ensure_runtime_layout"):
             with patch.object(app, "_get_or_create_runtime_service", return_value=runtime):
-                with patch.object(app, "_get_or_create_feishu_ingress_service", return_value=ingress):
-                    app._bootstrap_background_services()
+                with patch.object(app, "_get_or_create_background_task_worker", return_value=background_worker):
+                    with patch.object(app, "_get_or_create_task_scheduler_service", return_value=scheduler):
+                        with patch.object(app, "_get_or_create_feishu_ingress_service", return_value=ingress):
+                            app._bootstrap_background_services()
         self.assertTrue(runtime.started)
+        self.assertTrue(background_worker.started)
+        self.assertTrue(scheduler.started)
         self.assertTrue(ingress.started)
 
     def test_health_mode_does_not_bootstrap_background_services(self) -> None:
@@ -132,6 +138,32 @@ class _FakeRuntimeService:
 
     def start(self):
         """模拟 runtime worker 启动。"""
+        self.started = True
+        return object()
+
+
+class _FakeBackgroundTaskWorker:
+    """模拟可启动的后台任务 worker。"""
+
+    def __init__(self) -> None:
+        """记录是否已被启动。"""
+        self.started = False
+
+    def start(self):
+        """模拟后台任务 worker 启动。"""
+        self.started = True
+        return object()
+
+
+class _FakeTaskSchedulerService:
+    """模拟可启动的任务调度器。"""
+
+    def __init__(self) -> None:
+        """记录是否已被启动。"""
+        self.started = False
+
+    def start(self):
+        """模拟任务调度器启动。"""
         self.started = True
         return object()
 

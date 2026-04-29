@@ -125,13 +125,13 @@ class TaskSchedulerService:
         dispatches: list[TaskDispatchItem] = []
         for task in self.scan_due_tasks():
             dispatch = _build_dispatch_item(task)
-            self.dispatch_handler(dispatch)
             self.task_store.update_task(
                 task.task_id,
                 frontmatter_updates={"status": "queued"},
                 state_updates={"last_result_summary": "任务已到时，等待后台 worker 执行。"},
                 section_updates={"next_action": "等待后台 worker 拉起执行。"},
             )
+            self.dispatch_handler(dispatch)
             dispatches.append(dispatch)
             self._mark_dispatched(dispatch)
         return tuple(dispatches)
