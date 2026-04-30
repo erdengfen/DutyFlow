@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Protocol
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 
 from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.agent.skills import SkillRegistry
@@ -21,6 +21,7 @@ class ToolRegistryLike(Protocol):
 
     def has(self, name: str) -> bool:
         """返回指定工具名是否已存在于当前注册表。"""
+
 
 _FORBIDDEN_BACKGROUND_TOOLS = frozenset(
     {
@@ -75,12 +76,14 @@ class BackgroundTaskIntakeService:
         *,
         task_store: TaskStore | None = None,
         control_state_store: AgentControlStateStore | None = None,
+        time_provider: Callable[[], datetime] | None = None,
     ) -> None:
         """绑定工作区、可用工具注册表和技能注册表。"""
         self.project_root = Path(project_root).resolve()
         self.registry = registry
         self.skill_registry = skill_registry
         self.task_store = task_store or TaskStore(self.project_root)
+        self.time_provider = time_provider or _local_now
         self.control_state_store = control_state_store or AgentControlStateStore(
             self.project_root,
             task_store=self.task_store,
@@ -92,7 +95,7 @@ class BackgroundTaskIntakeService:
 
     def create_scheduled_task(self, tool_input: Mapping[str, object]) -> BackgroundTaskToolResult:
         """创建在未来指定时间运行的一次性定时任务。"""
-        scheduled_for = _require_iso_datetime(tool_input, "scheduled_for")
+        scheduled_for = _require_future_iso_datetime(tool_input, "scheduled_for", self.time_provider())
         return self._create_task(
             tool_input,
             status="scheduled",
@@ -112,7 +115,11 @@ class BackgroundTaskIntakeService:
         title = _require_non_empty(tool_input, "title")
         goal = _require_non_empty(tool_input, "goal")
         success_criteria = _require_non_empty(tool_input, "success_criteria")
-        summary = _read_text(tool_input, "user_visible_summary") or goal
+        summary = _build_user_visible_summary(
+            _read_text(tool_input, "user_visible_summary") or goal,
+            run_mode,
+            scheduled_for,
+        )
         context_refs = _normalize_csv(_read_text(tool_input, "context_refs"))
         capabilities = _normalize_csv(_read_text(tool_input, "capability_requirements"))
         resolved_skills = self._resolve_skills(_normalize_csv(_read_text(tool_input, "preferred_skills")))
@@ -194,14 +201,37 @@ def _require_non_empty(tool_input: Mapping[str, object], key: str) -> str:
     raise ValueError(f"{key} is required")
 
 
-def _require_iso_datetime(tool_input: Mapping[str, object], key: str) -> str:
-    """校验必填时间字段是否符合 ISO-8601。"""
+def _require_future_iso_datetime(tool_input: Mapping[str, object], key: str, reference_time: datetime) -> str:
+    """校验必填时间字段是带时区 ISO-8601 且晚于当前时间。"""
     value = _require_non_empty(tool_input, key)
+    parsed = _parse_required_iso_datetime(value, key)
+    if parsed <= _ensure_aware(reference_time):
+        raise ValueError(f"{key} must be later than current time: {_format_datetime(reference_time)}")
+    return _format_datetime(parsed)
+
+
+def _parse_required_iso_datetime(value: str, key: str) -> datetime:
+    """把模型传入的 ISO-8601 时间解析为带时区 datetime。"""
+    text = value.replace("Z", "+00:00") if value.endswith("Z") else value
     try:
-        datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(text)
     except ValueError as exc:
         raise ValueError(f"{key} must be an ISO-8601 datetime") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{key} must include timezone offset")
+    return parsed
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    """把参考时间规范为带时区时间，便于与模型时间比较。"""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.astimezone()
     return value
+
+
+def _format_datetime(value: datetime) -> str:
+    """统一输出秒级 ISO-8601 时间，避免任务文件出现多种精度。"""
+    return _ensure_aware(value).isoformat(timespec="seconds")
 
 
 def _normalize_csv(raw_value: str) -> tuple[str, ...]:
@@ -225,6 +255,16 @@ def _build_execution_profile(
     if run_mode == "run_at":
         return f"background_scheduled_{suffix}"
     return f"background_async_{suffix}"
+
+
+def _build_user_visible_summary(raw_summary: str, run_mode: str, scheduled_for: str) -> str:
+    """确保定时任务摘要包含绝对执行时间，避免只保存相对表述。"""
+    summary = raw_summary.replace("\n", " ").strip()
+    if run_mode != "run_at" or not scheduled_for:
+        return summary
+    if scheduled_for in summary:
+        return summary
+    return f"计划执行时间：{scheduled_for}。{summary}"
 
 
 def _build_resume_payload(
@@ -288,6 +328,11 @@ def _relative_path(project_root: Path, path: Path) -> str:
         return str(path.relative_to(project_root))
     except ValueError:
         return str(path)
+
+
+def _local_now() -> datetime:
+    """返回当前本地时区时间，供定时任务入参做未来时间校验。"""
+    return datetime.now().astimezone()
 
 
 def _self_test() -> None:

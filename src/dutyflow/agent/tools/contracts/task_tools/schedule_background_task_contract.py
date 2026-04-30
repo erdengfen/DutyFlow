@@ -11,7 +11,13 @@ SCHEDULE_BACKGROUND_TASK_TOOL_CONTRACT = {
                 "title": {"type": "string", "description": "任务标题，需直接说明任务主题。"},
                 "goal": {"type": "string", "description": "任务目标，说明后台完成后要达到什么结果。"},
                 "success_criteria": {"type": "string", "description": "成功标准，说明什么结果可视为任务完成。"},
-                "scheduled_for": {"type": "string", "description": "ISO-8601 格式的执行时间。"},
+                "scheduled_for": {
+                    "type": "string",
+                    "description": (
+                        "带时区的 ISO-8601 绝对执行时间，必须晚于当前消息接收时间和当前系统时间。"
+                        "如果用户说“明天”“稍后”“2分钟后”等相对时间，必须先换算成绝对时间。"
+                    ),
+                },
                 "user_visible_summary": {"type": "string", "description": "给用户看的简洁任务摘要；不传时默认使用 goal。"},
                 "context_refs": {"type": "string", "description": "英文逗号分隔的上下文引用，如 perception_id、event_id、task_id。"},
                 "capability_requirements": {"type": "string", "description": "英文逗号分隔的能力类别，如 identity_lookup、web_lookup、knowledge_write。"},

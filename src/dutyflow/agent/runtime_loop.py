@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -113,18 +114,19 @@ def _build_runtime_user_text(loop_input: Mapping[str, Any]) -> str:
     """把感知记录转换为正式 AgentLoop 的最小用户输入。"""
     raw_text = str(loop_input.get("raw_text", "")).strip()
     if raw_text:
-        return _wrap_user_message_for_runtime(raw_text)
+        return _wrap_user_message_for_runtime(raw_text, loop_input)
     content_preview = str(loop_input.get("content_preview", "")).strip()
     if content_preview:
         return _preview_fallback_text(loop_input, content_preview)
     return _empty_fallback_text(loop_input)
 
 
-def _wrap_user_message_for_runtime(raw_text: str) -> str:
+def _wrap_user_message_for_runtime(raw_text: str, loop_input: Mapping[str, Any]) -> str:
     """为正式 runtime 的用户消息补一层最小执行边界提示。"""
     return (
         "你正在处理一条实时飞书用户消息。优先直接回复用户；"
-        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        "只有在确实需要补充身份、来源、联系人知识、创建后台任务或发起审批时才调用工具。\n"
+        f"{_build_time_context(loop_input)}\n"
         f"用户原始消息：{raw_text}"
     )
 
@@ -135,7 +137,8 @@ def _preview_fallback_text(loop_input: Mapping[str, Any], content_preview: str) 
     trigger_kind = str(loop_input.get("trigger_kind", "")).strip() or "unknown"
     return (
         "你正在处理一条实时飞书用户消息。优先直接回复用户；"
-        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        "只有在确实需要补充身份、来源、联系人知识、创建后台任务或发起审批时才调用工具。\n"
+        f"{_build_time_context(loop_input)}\n"
         f"收到一条飞书 {trigger_kind} 消息，类型为 {message_type}，内容线索：{content_preview}"
     )
 
@@ -146,8 +149,20 @@ def _empty_fallback_text(loop_input: Mapping[str, Any]) -> str:
     chat_type = str(loop_input.get("chat_type", "")).strip() or "unknown"
     return (
         "你正在处理一条实时飞书用户消息。优先直接回复用户；"
-        "只有在确实需要补充身份、来源或联系人知识时才调用工具。\n"
+        "只有在确实需要补充身份、来源、联系人知识、创建后台任务或发起审批时才调用工具。\n"
+        f"{_build_time_context(loop_input)}\n"
         f"收到一条来自飞书 {chat_type} 会话的 {message_type} 消息，请结合当前工具链判断如何处理。"
+    )
+
+
+def _build_time_context(loop_input: Mapping[str, Any]) -> str:
+    """为模型解析相对时间提供稳定锚点。"""
+    received_at = str(loop_input.get("received_at", "")).strip() or "unknown"
+    return (
+        f"消息接收时间：{received_at}。"
+        f"当前本地系统时间：{_now_iso()}。"
+        "解析“明天”“稍后”“N 分钟后”等相对时间时，必须基于消息接收时间生成带时区的 ISO-8601 绝对时间；"
+        "不得生成过去时间。"
     )
 
 
@@ -199,6 +214,11 @@ _CLI_TOOL_NAMES = (
     "exec_cli_command",
     "close_cli_session",
 )
+
+
+def _now_iso() -> str:
+    """返回当前本地时区时间，供正式 runtime 注入时间锚点。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _self_test() -> None:

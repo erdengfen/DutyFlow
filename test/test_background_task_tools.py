@@ -58,11 +58,38 @@ class TestBackgroundTaskTools(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(payload["status"], "scheduled")
         self.assertEqual(payload["run_mode"], "run_at")
-        self.assertEqual(payload["scheduled_for"], "2026-04-30T09:00:00+08:00")
+        self.assertEqual(payload["scheduled_for"], "2099-04-30T09:00:00+08:00")
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.status, "scheduled")
-        self.assertEqual(record.scheduled_for, "2026-04-30T09:00:00+08:00")
+        self.assertEqual(record.scheduled_for, "2099-04-30T09:00:00+08:00")
+        self.assertIn("2099-04-30T09:00:00+08:00", record.summary)
+
+    def test_schedule_background_task_rejects_past_time(self) -> None:
+        """定时后台任务工具应拒绝模型生成的过去时间。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = _context(root)
+            result = ScheduleBackgroundTaskTool().handle(
+                _schedule_call(scheduled_for="2024-06-16T09:00:00+08:00"),
+                context,
+            )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "invalid_background_task_input")
+        self.assertIn("scheduled_for must be later than current time", result.content)
+
+    def test_schedule_background_task_requires_timezone(self) -> None:
+        """定时后台任务工具应拒绝没有时区的时间戳。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = _context(root)
+            result = ScheduleBackgroundTaskTool().handle(
+                _schedule_call(scheduled_for="2099-04-30T09:00:00"),
+                context,
+            )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "invalid_background_task_input")
+        self.assertIn("scheduled_for must include timezone offset", result.content)
 
     def test_forbidden_cli_tool_is_rejected(self) -> None:
         """后台任务入口工具应拒绝把 CLI tools 带入后台能力面。"""
@@ -113,7 +140,7 @@ def _create_call(
     )
 
 
-def _schedule_call() -> ToolCall:
+def _schedule_call(*, scheduled_for: str = "2099-04-30T09:00:00+08:00") -> ToolCall:
     """构造 schedule_background_task 调用。"""
     return ToolCall(
         "tool_bg_schedule_001",
@@ -122,7 +149,8 @@ def _schedule_call() -> ToolCall:
             "title": "明早跟进新人资料",
             "goal": "在明早检查资料补全情况",
             "success_criteria": "返回最新补全状态",
-            "scheduled_for": "2026-04-30T09:00:00+08:00",
+            "scheduled_for": scheduled_for,
+            "user_visible_summary": "明天上午9点执行新人资料跟进",
             "capability_requirements": "identity_lookup",
         },
         0,

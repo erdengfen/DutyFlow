@@ -126,6 +126,8 @@ class TestRuntimeLoop(unittest.TestCase):
             loop.handle_work_item(_work_item(record))
             self.assertIn("核心项目群（source_chat_001）里有人发消息", model.last_user_text)
             self.assertIn("发消息的人叫张三", model.last_user_text)
+            self.assertIn("消息接收时间：", model.last_user_text)
+            self.assertIn("不得生成过去时间", model.last_user_text)
 
 
 class _FakeModelClient:

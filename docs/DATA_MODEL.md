@@ -783,25 +783,46 @@ Frontmatter：
 schema: dutyflow.task_state.v1
 id: task_001
 title: ""
-status: pending
+status: queued
 weight_level: normal
 source_event_id: evt_001
 sender_contact_id: contact_001
 source_id: source_chat_001
 approval_id: ""
+run_mode: async_now
+scheduled_for: ""
+execution_profile: background_async_default
+requested_capabilities: ""
+resolved_skills: ""
+resolved_tools: ""
+resume_point: ""
+resume_payload: ""
+next_retry_at: ""
 created_at: 2026-04-16T00:00:00+08:00
 updated_at: 2026-04-16T00:00:00+08:00
 ```
 
 状态枚举：
 
-- `pending`
-- `in_progress`
+- `queued`
+- `scheduled`
+- `running`
 - `waiting_approval`
-- `deferred`
+- `blocked`
 - `completed`
-- `rejected`
 - `failed`
+- `cancelled`
+- `expired`
+
+运行字段说明：
+
+- `run_mode`：`async_now` 或 `run_at`。
+- `scheduled_for`：`run_at` 任务的绝对执行时间，必须是带时区 ISO-8601，且创建时必须晚于当前时间。
+- `execution_profile`：后台执行面裁决后的能力 profile，例如 `background_async_default`、`background_scheduled_selected`。
+- `requested_capabilities`：模型建议的能力类别，使用英文逗号分隔。
+- `resolved_skills` / `resolved_tools`：系统校验后的后台可用技能和工具，使用英文逗号分隔。
+- `resume_point` / `resume_payload`：审批、恢复或后续后台执行器继续任务所需的最小上下文。
+- `next_retry_at`：下一次允许恢复或重试的时间；无要求时为空。
 
 正文结构：
 
@@ -819,6 +840,8 @@ updated_at: 2026-04-16T00:00:00+08:00
 - attempt_count:
 - retry_status:
 - approval_status:
+- scheduled_for:
+- last_result_summary:
 
 ## Identity And Responsibility
 
