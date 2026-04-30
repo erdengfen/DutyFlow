@@ -887,7 +887,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 7: 任务状态、审批中断与恢复
 
-状态：进行中。已完成前 15 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入、后台 subagent 执行器、任务限定 tools / skills 能力面、后台任务结果占位 Markdown、worker 正式接入后台 subagent 执行器、后台任务完成结果系统层回推。本阶段测试已通过。
+状态：进行中。已完成前 16 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入、后台 subagent 执行器、任务限定 tools / skills 能力面、后台任务结果占位 Markdown、worker 正式接入后台 subagent 执行器、后台任务完成结果系统层回推、后台 subagent 执行链测试。本阶段测试已通过。
 
 ### 最终效果
 
@@ -1148,6 +1148,7 @@ Demo 期最终必须实现以下完整链路：
 - `test/test_task_result.py`
 - `test/test_task_state.py`
 - `test/test_agent_skills.py`
+- `test/test_background_subagent_chain.py`
 - `test/test_background_subagent_executor.py`
 - `test/test_approval_flow.py`
 - `test/test_task_interrupt.py`
@@ -1175,7 +1176,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 创建并维护后台任务结果占位 Markdown。
 - [x] 将 `BackgroundTaskWorker` 的占位 handler 替换为正式后台 subagent 执行器。
 - [x] 后台任务完成后通过 `FeedbackGateway` 回推用户，不开放飞书发信为模型自由工具。
-- [ ] 为后台 subagent 执行链补充任务状态、结果文件和飞书回推测试。
+- [x] 为后台 subagent 执行链补充任务状态、结果文件和飞书回推测试。
 - [ ] 后续拆分 `due_at` / `dispatch_at`，支持提前执行并到点发送结果。
 - [x] 为新增 `.py` 文件添加自测入口。
 - [x] 编写对应测试文件。
@@ -1481,7 +1482,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 4 | completed | 2026-04-25 | 已完成身份、来源、责任查询主链路，以及联系人知识两段式工具与对应测试。 |
 | Step 5 | in_progress | 2026-04-27 | 已完成真实 p2p 私聊链路、`/bind` 回填 `.env`、Bot 回信与 `/feishu doctor` 诊断；群聊 `@Bot` 与消息资源获取仍待补测。 |
 | Step 6 | completed | 2026-04-28 | 已完成正式 Agent Loop 与常驻运行编排；面向用户的硬规则判断与决策留痕延后到后续用户视角飞书事件接入后收口。 |
-| Step 7 | in_progress | 2026-04-30 | 已完成前 15 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面、结果占位 Markdown、worker 正式执行器接入和完成结果系统回推。 |
+| Step 7 | in_progress | 2026-04-30 | 已完成前 16 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面、结果占位 Markdown、worker 正式执行器接入、完成结果系统回推和执行链测试。 |
 | Step 8 | pending |  |  |
 | Step 9 | pending |  |  |
 | Step 10 | pending |  |  |
