@@ -18,6 +18,7 @@ from dutyflow.agent.skills import SkillRegistry  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
 from dutyflow.agent.tools import ToolResultEnvelope, ToolSpec  # noqa: E402
 from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
+from dutyflow.tasks.task_result import TaskResultStore  # noqa: E402
 from dutyflow.tasks.task_state import TaskStore  # noqa: E402
 
 
@@ -31,10 +32,16 @@ class TestBackgroundSubagentExecutor(unittest.TestCase):
             task = _create_task(root)
             model = _CapturingModelClient((_text_response("任务结果：已整理完成。"),))
             result = BackgroundSubagentExecutor(root, model).execute_task(task)
+            stored_result = TaskResultStore(root).read_result(task.task_id)
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.retry_status, "done")
         self.assertEqual(result.user_visible_final_text, "任务结果：已整理完成。")
         self.assertEqual(result.query_id, "bg_task_task_bg_001")
+        self.assertIsNotNone(stored_result)
+        assert stored_result is not None
+        self.assertEqual(stored_result.status, "completed")
+        self.assertEqual(stored_result.user_visible_final_text, "任务结果：已整理完成。")
+        self.assertEqual(stored_result.stop_reason, "stop")
         self.assertIn("resume_payload: goal=整理项目风险", model.last_user_text)
         self.assertIn("decision_trace:", model.last_user_text)
 
@@ -81,10 +88,16 @@ class TestBackgroundSubagentExecutor(unittest.TestCase):
             task = _create_task(root, resolved_tools="missing_tool")
             model = _CapturingModelClient((_text_response("不应调用"),))
             result = BackgroundSubagentExecutor(root, model, registry=_sample_tool_registry()).execute_task(task)
+            stored_result = TaskResultStore(root).read_result(task.task_id)
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.stop_reason, "capability_resolution_failed")
         self.assertEqual(model.call_count, 0)
         self.assertIn("unknown background tool", result.last_result_summary)
+        self.assertIsNotNone(stored_result)
+        assert stored_result is not None
+        self.assertEqual(stored_result.status, "failed")
+        self.assertEqual(stored_result.stop_reason, "capability_resolution_failed")
+        self.assertIn("unknown background tool", stored_result.summary)
 
     def test_executor_blocks_when_model_returns_no_visible_text(self) -> None:
         """模型没有生成最终文本时，executor 不应伪装任务完成。"""

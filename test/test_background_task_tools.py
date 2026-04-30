@@ -20,6 +20,7 @@ from dutyflow.agent.tools.logic.task_tools.schedule_background_task import Sched
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402
 from dutyflow.agent.skills import SkillRegistry  # noqa: E402
+from dutyflow.tasks.task_result import TaskResultStore  # noqa: E402
 from dutyflow.tasks.task_state import TaskStore  # noqa: E402
 
 
@@ -35,6 +36,7 @@ class TestBackgroundTaskTools(unittest.TestCase):
             result = CreateBackgroundTaskTool().handle(_create_call(), context)
             payload = _json_content(result)
             record = TaskStore(root).read_task(str(payload["task_id"]))
+            placeholder = TaskResultStore(root).read_result(str(payload["task_id"]))
         self.assertTrue(result.ok)
         self.assertEqual(payload["status"], "queued")
         self.assertEqual(payload["run_mode"], "async_now")
@@ -46,6 +48,10 @@ class TestBackgroundTaskTools(unittest.TestCase):
         self.assertEqual(record.execution_profile, "background_async_selected")
         self.assertEqual(record.resolved_skills, "doc_reader")
         self.assertEqual(record.resolved_tools, "lookup_contact_identity")
+        self.assertIsNotNone(placeholder)
+        assert placeholder is not None
+        self.assertEqual(placeholder.status, "placeholder")
+        self.assertEqual(placeholder.task_id, payload["task_id"])
 
     def test_schedule_background_task_writes_scheduled_task(self) -> None:
         """定时后台任务工具应创建 scheduled 任务并写入计划时间。"""
@@ -55,6 +61,7 @@ class TestBackgroundTaskTools(unittest.TestCase):
             result = ScheduleBackgroundTaskTool().handle(_schedule_call(), context)
             payload = _json_content(result)
             record = TaskStore(root).read_task(str(payload["task_id"]))
+            placeholder = TaskResultStore(root).read_result(str(payload["task_id"]))
         self.assertTrue(result.ok)
         self.assertEqual(payload["status"], "scheduled")
         self.assertEqual(payload["run_mode"], "run_at")
@@ -64,6 +71,10 @@ class TestBackgroundTaskTools(unittest.TestCase):
         self.assertEqual(record.status, "scheduled")
         self.assertEqual(record.scheduled_for, "2099-04-30T09:00:00+08:00")
         self.assertIn("2099-04-30T09:00:00+08:00", record.summary)
+        self.assertIsNotNone(placeholder)
+        assert placeholder is not None
+        self.assertEqual(placeholder.status, "placeholder")
+        self.assertEqual(placeholder.task_status, "scheduled")
 
     def test_schedule_background_task_rejects_past_time(self) -> None:
         """定时后台任务工具应拒绝模型生成的过去时间。"""

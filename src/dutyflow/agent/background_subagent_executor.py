@@ -17,6 +17,7 @@ from dutyflow.agent.model_client import ModelClient, ModelResponse
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.state import AgentContentBlock
 from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry
+from dutyflow.tasks.task_result import TaskResultStore
 from dutyflow.tasks.task_state import TaskRecord
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ class BackgroundSubagentExecutor:
         registry: ToolRegistry | None = None,
         skill_registry: SkillRegistry | None = None,
         audit_logger: "AuditLogger | None" = None,
+        result_store: TaskResultStore | None = None,
         max_turns: int = 30,
     ) -> None:
         """绑定后台执行所需的模型、工具注册表、技能注册表和工作目录。"""
@@ -67,17 +69,23 @@ class BackgroundSubagentExecutor:
         self.registry = registry or create_runtime_tool_registry()
         self.skill_registry = skill_registry or SkillRegistry(self.project_root / "skills")
         self.audit_logger = audit_logger
+        self.result_store = result_store or TaskResultStore(self.project_root)
         # 关键开关：后台 subagent 单任务最多允许 30 轮工具续转，避免长任务无限循环。
         self.max_turns = max_turns
 
     def execute_task(self, task: TaskRecord) -> BackgroundSubagentResult:
         """执行一条任务记录，并返回 worker 可写回的状态结果。"""
         query_id = _build_query_id(task)
+        self.result_store.create_placeholder(task)
         loop = self._build_task_loop(task, query_id)
         if isinstance(loop, BackgroundSubagentResult):
+            self._write_task_result(task, loop)
             return loop
+        self.result_store.mark_running(task, query_id=query_id)
         result = loop.run_until_stop(_build_task_prompt(task), query_id=query_id)
-        return _build_execution_result(query_id, result)
+        mapped_result = _build_execution_result(query_id, result)
+        self._write_task_result(task, mapped_result)
+        return mapped_result
 
     def _build_task_loop(self, task: TaskRecord, query_id: str) -> AgentLoop | BackgroundSubagentResult:
         """按任务字段构造隔离的 AgentLoop；能力面非法时直接失败。"""
@@ -98,6 +106,19 @@ class BackgroundSubagentExecutor:
             audit_logger=self.audit_logger,
             skill_registry=skill_registry,
             system_prompt_preamble=_BACKGROUND_SUBAGENT_SYSTEM_PROMPT,
+        )
+
+    def _write_task_result(self, task: TaskRecord, result: BackgroundSubagentResult) -> None:
+        """把后台 subagent 的最终结果写入独立结果 Markdown。"""
+        self.result_store.update_result(
+            task,
+            status=result.status,
+            summary=result.last_result_summary,
+            user_visible_final_text=result.user_visible_final_text,
+            stop_reason=result.stop_reason,
+            tool_result_count=result.tool_result_count,
+            query_id=result.query_id,
+            raw_result=result.user_visible_final_text,
         )
 
 

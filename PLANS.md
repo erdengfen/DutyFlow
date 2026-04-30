@@ -887,7 +887,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 7: 任务状态、审批中断与恢复
 
-状态：进行中。已完成前 10 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入。本阶段测试已通过；真实后台 subagent 执行器、任务结果文件和完成后飞书回推链路作为新增功能点继续推进。
+状态：进行中。已完成前 13 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入、后台 subagent 执行器、任务限定 tools / skills 能力面、后台任务结果占位 Markdown。本阶段测试已通过；将 worker 占位 handler 替换为正式后台 subagent 执行器、完成后飞书回推链路作为新增功能点继续推进。
 
 ### 最终效果
 
@@ -958,8 +958,8 @@ Demo 期最终必须实现以下完整链路：
   - 后台执行器只按裁决后的能力面构造过滤后的 `ToolRegistry` 和 `SkillRegistry`。
   - 开发期 CLI tools 不进入后台任务默认能力面。
 - 后台任务结果应有独立结果锚点：
-  - 创建任务时可生成任务结果占位文件。
-  - subagent 执行过程中更新结果文件。
+  - 【已实现】创建任务时同步生成 `data/tasks/results/result_<task_id>.md` 结果占位文件。
+  - 【已实现】后台 subagent 执行开始时更新为 `running`，结束后写入 `completed`、`blocked` 或 `failed`。
   - 任务完成后，结果文件作为最终回馈和审计依据。
 - 完成后飞书回推由系统层负责。
   - subagent 产出 `user_visible_final_text` 或等价结果摘要。
@@ -1099,6 +1099,11 @@ Demo 期最终必须实现以下完整链路：
   - `TaskStore`
   - `create_task`
   - `update_task_status`
+- `src/dutyflow/tasks/task_result.py`
+  - `TaskResultRecord`
+  - `TaskResultStore`
+  - `create_placeholder`
+  - `update_result`
 - `src/dutyflow/tasks/task_scheduler.py`
   - `TaskSchedulerService`
   - `scan_due_tasks`
@@ -1135,6 +1140,7 @@ Demo 期最终必须实现以下完整链路：
 - `data/approvals/pending/`
 - `data/approvals/completed/`
 - `test/test_task_scheduler.py`
+- `test/test_task_result.py`
 - `test/test_task_state.py`
 - `test/test_agent_skills.py`
 - `test/test_background_subagent_executor.py`
@@ -1161,7 +1167,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 接入 Agent State。
 - [x] 实现后台 subagent 执行器，复用 `AgentLoop` 共享核心。
 - [x] 按任务字段构造后台 subagent 的过滤后 tools / skills 能力面。
-- [ ] 创建并维护后台任务结果占位 Markdown。
+- [x] 创建并维护后台任务结果占位 Markdown。
 - [ ] 将 `BackgroundTaskWorker` 的占位 handler 替换为正式后台 subagent 执行器。
 - [ ] 后台任务完成后通过 `FeedbackGateway` 回推用户，不开放飞书发信为模型自由工具。
 - [ ] 为后台 subagent 执行链补充任务状态、结果文件和飞书回推测试。
@@ -1470,7 +1476,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 4 | completed | 2026-04-25 | 已完成身份、来源、责任查询主链路，以及联系人知识两段式工具与对应测试。 |
 | Step 5 | in_progress | 2026-04-27 | 已完成真实 p2p 私聊链路、`/bind` 回填 `.env`、Bot 回信与 `/feishu doctor` 诊断；群聊 `@Bot` 与消息资源获取仍待补测。 |
 | Step 6 | completed | 2026-04-28 | 已完成正式 Agent Loop 与常驻运行编排；面向用户的硬规则判断与决策留痕延后到后续用户视角飞书事件接入后收口。 |
-| Step 7 | in_progress | 2026-04-29 | 已完成前 9 个功能点：任务存储、调度器、审批记录、中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面和飞书卡片/按钮审批恢复链。 |
+| Step 7 | in_progress | 2026-04-30 | 已完成前 13 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面和结果占位 Markdown。 |
 | Step 8 | pending |  |  |
 | Step 9 | pending |  |  |
 | Step 10 | pending |  |  |

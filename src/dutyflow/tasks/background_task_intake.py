@@ -6,10 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
+import sys
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol
+
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[2]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
 
 from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.agent.skills import SkillRegistry
+from dutyflow.tasks.task_result import TaskResultStore
 from dutyflow.tasks.task_state import TaskStore
 
 if TYPE_CHECKING:
@@ -75,6 +82,7 @@ class BackgroundTaskIntakeService:
         skill_registry: SkillRegistry,
         *,
         task_store: TaskStore | None = None,
+        result_store: TaskResultStore | None = None,
         control_state_store: AgentControlStateStore | None = None,
         time_provider: Callable[[], datetime] | None = None,
     ) -> None:
@@ -83,6 +91,7 @@ class BackgroundTaskIntakeService:
         self.registry = registry
         self.skill_registry = skill_registry
         self.task_store = task_store or TaskStore(self.project_root)
+        self.result_store = result_store or TaskResultStore(self.project_root)
         self.time_provider = time_provider or _local_now
         self.control_state_store = control_state_store or AgentControlStateStore(
             self.project_root,
@@ -148,6 +157,7 @@ class BackgroundTaskIntakeService:
             next_action=_build_next_action(run_mode, scheduled_for),
             last_result_summary=_build_last_result_summary(run_mode, scheduled_for),
         )
+        self.result_store.create_placeholder(record)
         self.control_state_store.sync()
         return BackgroundTaskToolResult(
             task_id=record.task_id,

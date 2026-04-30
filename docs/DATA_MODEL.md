@@ -862,6 +862,66 @@ updated_at: 2026-04-16T00:00:00+08:00
 - 审批只暂停任务或动作，不暂停 Agent 主链路。
 - 任务进入 `waiting_approval` 时必须能恢复原动作。
 
+### 7.1 后台任务结果
+
+文件位置：
+
+```text
+data/tasks/results/result_<task_id>.md
+```
+
+Frontmatter：
+
+```yaml
+schema: dutyflow.task_result.v1
+id: result_task_001
+task_id: task_001
+status: placeholder
+task_status: queued
+source_task_file: data/tasks/task_001.md
+created_at: 2026-04-16T00:00:00+08:00
+updated_at: 2026-04-16T00:00:00+08:00
+```
+
+状态枚举：
+
+- `placeholder`
+- `running`
+- `completed`
+- `blocked`
+- `failed`
+
+正文结构：
+
+```md
+# Task Result result_task_001
+
+## Summary
+
+结果摘要或当前处理状态。
+
+## User Visible Final Text
+
+可直接通过飞书回推给用户的最终文本。
+
+## Execution Metadata
+
+- stop_reason:
+- tool_result_count:
+- query_id:
+
+## Raw Result
+
+后台 subagent 原始执行结果或调试摘要。
+```
+
+约束：
+
+- 创建 `task_<id>.md` 时同步创建结果占位文件。
+- 后台 subagent 执行中更新同一份结果文件，不新建多份结果。
+- 结果文件是完成后飞书回推和人工审计的主要依据。
+- `task_status` 记录写结果时任务主文件的状态；结果本身是否完成以 `status` 为准。
+
 ## 8. 审批记录与任务中断
 
 审批分为待审批和已完成：
