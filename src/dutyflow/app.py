@@ -30,6 +30,7 @@ from dutyflow.agent.skills import SkillRegistry
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
 from dutyflow.feishu.runtime import FeishuIngressService
+from dutyflow.feedback.gateway import FeedbackGateway
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownStore
@@ -488,6 +489,7 @@ class DutyFlowApp:
         self._background_task_worker = BackgroundTaskWorker(
             TaskStore(self.project_root),
             model_client=OpenAICompatibleModelClient(config),
+            feedback_gateway=FeedbackGateway(config),
         )
         return self._background_task_worker
 

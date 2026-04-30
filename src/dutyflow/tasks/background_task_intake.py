@@ -85,6 +85,8 @@ class BackgroundTaskIntakeService:
         result_store: TaskResultStore | None = None,
         control_state_store: AgentControlStateStore | None = None,
         time_provider: Callable[[], datetime] | None = None,
+        default_source_event_id: str = "",
+        default_source_id: str = "",
     ) -> None:
         """绑定工作区、可用工具注册表和技能注册表。"""
         self.project_root = Path(project_root).resolve()
@@ -93,6 +95,8 @@ class BackgroundTaskIntakeService:
         self.task_store = task_store or TaskStore(self.project_root)
         self.result_store = result_store or TaskResultStore(self.project_root)
         self.time_provider = time_provider or _local_now
+        self.default_source_event_id = default_source_event_id.strip()
+        self.default_source_id = default_source_id.strip()
         self.control_state_store = control_state_store or AgentControlStateStore(
             self.project_root,
             task_store=self.task_store,
@@ -137,6 +141,8 @@ class BackgroundTaskIntakeService:
         record = self.task_store.create_task(
             title=title,
             status=status,
+            source_event_id=self.default_source_event_id,
+            source_id=self.default_source_id,
             run_mode=run_mode,
             scheduled_for=scheduled_for,
             execution_profile=execution_profile,

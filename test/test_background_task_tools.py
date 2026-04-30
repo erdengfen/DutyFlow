@@ -76,6 +76,31 @@ class TestBackgroundTaskTools(unittest.TestCase):
         self.assertEqual(placeholder.status, "placeholder")
         self.assertEqual(placeholder.task_status, "scheduled")
 
+    def test_create_background_task_persists_runtime_feedback_context(self) -> None:
+        """后台任务入口应保存正式 runtime 注入的事件和会话锚点。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = _context(
+                root,
+                tool_content={
+                    "perception": {
+                        "source_event_id": "evt_runtime_001",
+                        "chat_id": "oc_runtime_chat",
+                    }
+                },
+            )
+            result = CreateBackgroundTaskTool().handle(
+                _create_call(preferred_skills="", preferred_tools=""),
+                context,
+            )
+            payload = _json_content(result)
+            record = TaskStore(root).read_task(str(payload["task_id"]))
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.source_event_id, "evt_runtime_001")
+        self.assertEqual(record.source_id, "oc_runtime_chat")
+
     def test_schedule_background_task_rejects_past_time(self) -> None:
         """定时后台任务工具应拒绝模型生成的过去时间。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -169,7 +194,7 @@ def _schedule_call(*, scheduled_for: str = "2099-04-30T09:00:00+08:00") -> ToolC
     )
 
 
-def _context(root: Path) -> ToolUseContext:
+def _context(root: Path, *, tool_content: dict[str, object] | None = None) -> ToolUseContext:
     """构造后台任务入口工具的测试上下文。"""
     registry = create_runtime_tool_registry()
     return ToolUseContext(
@@ -178,6 +203,7 @@ def _context(root: Path) -> ToolUseContext:
         create_initial_agent_state("query_background_task_001", "hello"),
         registry,
         skill_registry=SkillRegistry(root / "skills"),
+        tool_content=tool_content or {},
     )
 
 

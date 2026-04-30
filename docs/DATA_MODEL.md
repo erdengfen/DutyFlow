@@ -817,6 +817,7 @@ updated_at: 2026-04-16T00:00:00+08:00
 运行字段说明：
 
 - `run_mode`：`async_now` 或 `run_at`。
+- `source_event_id` / `source_id`：从正式 runtime 感知上下文写入；第一版后台任务完成回推时，`source_id` 优先保存飞书 `chat_id`。
 - `scheduled_for`：`run_at` 任务的绝对执行时间，必须是带时区 ISO-8601，且创建时必须晚于当前时间。
 - `execution_profile`：后台执行面裁决后的能力 profile，例如 `background_async_default`、`background_scheduled_selected`。
 - `requested_capabilities`：模型建议的能力类别，使用英文逗号分隔。

@@ -20,6 +20,7 @@ from dutyflow.agent.background_task_worker import (  # noqa: E402
 )
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
+from dutyflow.feedback.gateway import FeedbackResult  # noqa: E402
 from dutyflow.tasks.task_result import TaskResultStore  # noqa: E402
 from dutyflow.tasks.task_state import TaskRecord, TaskStore  # noqa: E402
 
@@ -92,7 +93,13 @@ class TestBackgroundTaskWorker(unittest.TestCase):
             store = TaskStore(root)
             store.create_task(title="subagent", task_id="task_subagent", status="queued")
             model = _FakeModelClient("后台 subagent 已完成任务。")
-            worker = BackgroundTaskWorker(store, model_client=model, queue_poll_seconds=0.01)
+            feedback = _FakeFeedbackGateway()
+            worker = BackgroundTaskWorker(
+                store,
+                model_client=model,
+                feedback_gateway=feedback,
+                queue_poll_seconds=0.01,
+            )
             worker.start()
             worker.enqueue_task("task_subagent", source="test")
             state = _wait_for_state(worker, lambda item: item.processed_count == 1)
@@ -109,6 +116,58 @@ class TestBackgroundTaskWorker(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.user_visible_final_text, "后台 subagent 已完成任务。")
+        self.assertEqual(feedback.sent_texts, [("owner", "后台 subagent 已完成任务。")])
+
+    def test_worker_sends_completion_feedback_to_task_source_chat(self) -> None:
+        """任务带 source_id 时，完成结果应回推到原始飞书会话。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = TaskStore(root)
+            store.create_task(
+                title="source chat",
+                task_id="task_source_chat",
+                status="queued",
+                source_id="oc_task_source",
+            )
+            feedback = _FakeFeedbackGateway()
+            worker = BackgroundTaskWorker(
+                store,
+                model_client=_FakeModelClient("这是后台任务结果。"),
+                feedback_gateway=feedback,
+                queue_poll_seconds=0.01,
+            )
+            worker.start()
+            worker.enqueue_task("task_source_chat", source="test")
+            _wait_for_state(worker, lambda item: item.processed_count == 1)
+            loaded = store.read_task("task_source_chat")
+            worker.stop()
+        self.assertEqual(feedback.sent_texts, [("oc_task_source", "这是后台任务结果。")])
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertIn("已通过飞书回推", loaded.next_action)
+
+    def test_feedback_failure_keeps_task_completed(self) -> None:
+        """结果回推失败时，不应把已完成任务改成执行失败。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = TaskStore(root)
+            store.create_task(title="feedback fail", task_id="task_feedback_fail", status="queued")
+            worker = BackgroundTaskWorker(
+                store,
+                model_client=_FakeModelClient("完成但发送失败。"),
+                feedback_gateway=_FailingFeedbackGateway(),
+                queue_poll_seconds=0.01,
+            )
+            worker.start()
+            worker.enqueue_task("task_feedback_fail", source="test")
+            state = _wait_for_state(worker, lambda item: item.processed_count == 1)
+            loaded = store.read_task("task_feedback_fail")
+            worker.stop()
+        self.assertEqual(state.failed_count, 0)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.status, "completed")
+        self.assertIn("结果回推失败", loaded.next_action)
 
     def test_default_worker_requires_model_client(self) -> None:
         """正式默认执行面缺少模型客户端时应显式失败，而不是退回占位 handler。"""
@@ -169,6 +228,37 @@ class _FakeModelClient:
         del state, tools
         self.call_count += 1
         return ModelResponse((AgentContentBlock(type="text", text=self.final_text),), "stop")
+
+
+class _FakeFeedbackGateway:
+    """记录后台任务 worker 的系统层飞书回推动作。"""
+
+    def __init__(self) -> None:
+        """初始化发送记录。"""
+        self.sent_texts: list[tuple[str, str]] = []
+
+    def send_text(self, chat_id: str, text: str) -> FeedbackResult:
+        """记录指定会话文本回推。"""
+        self.sent_texts.append((chat_id, text))
+        return FeedbackResult(ok=True, status="sent", detail="fake", payload={"chat_id": chat_id})
+
+    def send_owner_text(self, text: str) -> FeedbackResult:
+        """记录 owner 默认会话回推。"""
+        return self.send_text("owner", text)
+
+
+class _FailingFeedbackGateway:
+    """模拟飞书回推异常。"""
+
+    def send_text(self, chat_id: str, text: str) -> FeedbackResult:
+        """模拟指定会话发送失败。"""
+        del chat_id, text
+        raise RuntimeError("feishu unavailable")
+
+    def send_owner_text(self, text: str) -> FeedbackResult:
+        """模拟 owner 会话发送失败。"""
+        del text
+        raise RuntimeError("feishu unavailable")
 
 
 def _wait_for_state(worker: BackgroundTaskWorker, predicate) -> object:

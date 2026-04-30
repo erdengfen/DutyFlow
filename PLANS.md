@@ -887,7 +887,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 7: 任务状态、审批中断与恢复
 
-状态：进行中。已完成前 14 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入、后台 subagent 执行器、任务限定 tools / skills 能力面、后台任务结果占位 Markdown、worker 正式接入后台 subagent 执行器。本阶段测试已通过；完成后飞书回推链路作为新增功能点继续推进。
+状态：进行中。已完成前 15 个功能点：`TaskStore + task_<id>.md` 最小任务状态存储、`TaskSchedulerService` 到时扫描与入队信号发出、审批记录存储、任务中断记录、后台任务入口工具、审批创建工具、审批恢复工具、后台任务 worker 独立执行面、飞书卡片/按钮审批入口与恢复链、Agent State 控制快照接入、后台 subagent 执行器、任务限定 tools / skills 能力面、后台任务结果占位 Markdown、worker 正式接入后台 subagent 执行器、后台任务完成结果系统层回推。本阶段测试已通过。
 
 ### 最终效果
 
@@ -962,9 +962,10 @@ Demo 期最终必须实现以下完整链路：
   - 【已实现】后台 subagent 执行开始时更新为 `running`，结束后写入 `completed`、`blocked` 或 `failed`。
   - 任务完成后，结果文件作为最终回馈和审计依据。
 - 完成后飞书回推由系统层负责。
-  - subagent 产出 `user_visible_final_text` 或等价结果摘要。
-  - `FeedbackGateway` 负责发送给用户。
-  - 不把“发送飞书消息”开放成模型自由工具，也不要求 subagent 通知主 loop 再调用回信工具。
+  - 【已实现】subagent 产出 `user_visible_final_text` 或等价结果摘要。
+  - 【已实现】`BackgroundTaskWorker` 从任务来源会话 `source_id` 取回推目标，缺失时退回 owner 汇报会话。
+  - 【已实现】`FeedbackGateway` 负责发送给用户，不把“发送飞书消息”开放成模型自由工具。
+  - 【已实现】回推失败不会把已完成任务改成执行失败，而是写入 `next_action` 等待后续重试或人工检查。
 - 建议闭环：
   - 飞书消息进入前台正式 loop。
   - 模型判断需要后台任务。
@@ -1090,7 +1091,7 @@ Demo 期最终必须实现以下完整链路：
 - 【已修复】模型曾生成过去时间作为 `scheduled_for`，导致定时任务被调度器立即入队并进入 `blocked`；当前正式 runtime 已向模型注入消息接收时间和当前本地系统时间，`schedule_background_task` contract 已要求带时区的未来绝对时间，后台任务入口服务层也会拒绝非未来时间，定时任务摘要会写入绝对计划时间。
 - 【待修复】审批 `expires_at` 仍需要同样补充未来时间校验，避免审批有效期被模型写成过去时间。
 - 【待修复】模型可能先调用 `create_approval_request` 并传入不存在的 task_id，再补创建任务；后续需要约束“先创建任务，再基于真实 task_id 发审批”的调用顺序。
-- 【待修复】后台任务即时回复仍需避免过度承诺，尤其是“任务完成后会立即回推结果”这类表述；当前后台 subagent 执行器已接入，但完成后飞书回推链路尚未接入。
+- 【待修复】后台任务即时回复仍需避免过度承诺，尤其是“审批通过后无需人工介入一定能完成”这类表述；当前后台 subagent 执行器和完成后飞书回推链路已接入，但审批恢复后的真实续跑仍需单独验收。
 
 ### 涉及文件、类、方法、模块
 
@@ -1137,6 +1138,9 @@ Demo 期最终必须实现以下完整链路：
   - `create_background_task`
   - `schedule_background_task`
 - `src/dutyflow/feedback/gateway.py`
+  - `FeedbackGateway`
+  - `send_text`
+  - `send_owner_text`
 - `data/tasks/`
 - `data/approvals/pending/`
 - `data/approvals/completed/`
@@ -1170,7 +1174,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 按任务字段构造后台 subagent 的过滤后 tools / skills 能力面。
 - [x] 创建并维护后台任务结果占位 Markdown。
 - [x] 将 `BackgroundTaskWorker` 的占位 handler 替换为正式后台 subagent 执行器。
-- [ ] 后台任务完成后通过 `FeedbackGateway` 回推用户，不开放飞书发信为模型自由工具。
+- [x] 后台任务完成后通过 `FeedbackGateway` 回推用户，不开放飞书发信为模型自由工具。
 - [ ] 为后台 subagent 执行链补充任务状态、结果文件和飞书回推测试。
 - [ ] 后续拆分 `due_at` / `dispatch_at`，支持提前执行并到点发送结果。
 - [x] 为新增 `.py` 文件添加自测入口。
@@ -1477,7 +1481,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 4 | completed | 2026-04-25 | 已完成身份、来源、责任查询主链路，以及联系人知识两段式工具与对应测试。 |
 | Step 5 | in_progress | 2026-04-27 | 已完成真实 p2p 私聊链路、`/bind` 回填 `.env`、Bot 回信与 `/feishu doctor` 诊断；群聊 `@Bot` 与消息资源获取仍待补测。 |
 | Step 6 | completed | 2026-04-28 | 已完成正式 Agent Loop 与常驻运行编排；面向用户的硬规则判断与决策留痕延后到后续用户视角飞书事件接入后收口。 |
-| Step 7 | in_progress | 2026-04-30 | 已完成前 14 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面、结果占位 Markdown 和 worker 正式执行器接入。 |
+| Step 7 | in_progress | 2026-04-30 | 已完成前 15 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面、结果占位 Markdown、worker 正式执行器接入和完成结果系统回推。 |
 | Step 8 | pending |  |  |
 | Step 9 | pending |  |  |
 | Step 10 | pending |  |  |

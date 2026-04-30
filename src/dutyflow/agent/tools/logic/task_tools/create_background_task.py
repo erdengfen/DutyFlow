@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import sys
+from typing import Mapping
+
+if __package__ in {None, ""}:
+    _SRC_ROOT = Path(__file__).resolve().parents[5]
+    if str(_SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(_SRC_ROOT))
 
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.tools.contracts.task_tools.create_background_task_contract import (
@@ -45,7 +53,22 @@ class CreateBackgroundTaskTool:
 def _build_service(tool_use_context) -> BackgroundTaskIntakeService:
     """根据工具上下文构造后台任务入口服务。"""
     skill_registry = tool_use_context.skill_registry or SkillRegistry(tool_use_context.cwd / "skills")
-    return BackgroundTaskIntakeService(tool_use_context.cwd, tool_use_context.registry, skill_registry)
+    perception = _read_perception_context(tool_use_context)
+    return BackgroundTaskIntakeService(
+        tool_use_context.cwd,
+        tool_use_context.registry,
+        skill_registry,
+        default_source_event_id=str(perception.get("source_event_id", "")).strip(),
+        default_source_id=str(perception.get("chat_id", "")).strip(),
+    )
+
+
+def _read_perception_context(tool_use_context) -> Mapping[str, object]:
+    """从正式 runtime 注入的 tool_content 中读取任务回推所需上下文。"""
+    perception = tool_use_context.tool_content.get("perception", {})
+    if isinstance(perception, Mapping):
+        return perception
+    return {}
 
 
 def _self_test() -> None:

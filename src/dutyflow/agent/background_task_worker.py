@@ -23,6 +23,8 @@ from dutyflow.agent.background_subagent_executor import (
 )
 from dutyflow.agent.control_state_store import AgentControlStateStore
 from dutyflow.agent.model_client import ModelClient
+from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
+from dutyflow.tasks.task_result import TaskResultRecord, TaskResultStore
 from dutyflow.tasks.task_state import TaskRecord, TaskStore
 
 
@@ -50,6 +52,7 @@ class BackgroundTaskExecutionResult:
     retry_status: str
     last_result_summary: str
     next_action: str
+    user_visible_final_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,8 @@ class BackgroundTaskWorker:
         *,
         model_client: ModelClient | None = None,
         task_executor: BackgroundSubagentExecutor | None = None,
+        feedback_gateway: FeedbackGateway | None = None,
+        result_store: TaskResultStore | None = None,
         queue_poll_seconds: float = 0.1,
         ready_scan_interval_seconds: float = 1.0,
         control_state_store: AgentControlStateStore | None = None,
@@ -91,6 +96,8 @@ class BackgroundTaskWorker:
             model_client,
             task_executor,
         )
+        self.feedback_gateway = feedback_gateway
+        self.result_store = result_store or TaskResultStore(task_store.project_root)
         self.control_state_store = control_state_store or AgentControlStateStore(
             task_store.project_root,
             task_store=task_store,
@@ -227,6 +234,7 @@ class BackgroundTaskWorker:
             task = self._mark_task_running(work_item)
             result = self._task_handler(task)
             self._apply_execution_result(task.task_id, result)
+            self._send_completion_feedback(task, result)
         except Exception as exc:  # noqa: BLE001
             self._mark_task_failed(work_item, str(exc))
             self._queue.task_done()
@@ -265,6 +273,26 @@ class BackgroundTaskWorker:
             },
             section_updates={"next_action": result.next_action},
         )
+        self.control_state_store.sync()
+
+    def _send_completion_feedback(
+        self,
+        task: TaskRecord,
+        result: BackgroundTaskExecutionResult,
+    ) -> None:
+        """后台任务完成后通过系统反馈出口回推用户可见结果。"""
+        if result.status != "completed" or self.feedback_gateway is None:
+            return
+        feedback_text = _build_feedback_text(task, result, self.result_store.read_result(task.task_id))
+        if not feedback_text:
+            return
+        feedback = _safe_send_feedback(self.feedback_gateway, task.source_id, feedback_text)
+        self._record_feedback_result(task.task_id, feedback)
+
+    def _record_feedback_result(self, task_id: str, feedback: FeedbackResult) -> None:
+        """把后台任务完成结果回推状态写回任务 Markdown。"""
+        next_action = _feedback_next_action(feedback)
+        self.task_store.update_task(task_id, section_updates={"next_action": next_action})
         self.control_state_store.sync()
 
     def _mark_task_failed(self, work_item: BackgroundTaskWorkItem, error_message: str) -> None:
@@ -469,7 +497,46 @@ def _to_worker_execution_result(result: BackgroundSubagentResult) -> BackgroundT
         retry_status=result.retry_status,
         last_result_summary=result.last_result_summary,
         next_action=result.next_action,
+        user_visible_final_text=result.user_visible_final_text,
     )
+
+
+def _build_feedback_text(
+    task: TaskRecord,
+    result: BackgroundTaskExecutionResult,
+    task_result: TaskResultRecord | None,
+) -> str:
+    """生成系统回推给用户的后台任务完成文本。"""
+    if task_result is not None and task_result.user_visible_final_text.strip():
+        return task_result.user_visible_final_text.strip()
+    if result.user_visible_final_text.strip():
+        return result.user_visible_final_text.strip()
+    if result.last_result_summary.strip():
+        return f"{task.title}：{result.last_result_summary.strip()}"
+    return ""
+
+
+def _send_feedback(gateway: FeedbackGateway, chat_id: str, text: str) -> FeedbackResult:
+    """按任务来源会话优先回推，缺失时退回 owner 汇报会话。"""
+    clean_chat_id = chat_id.strip()
+    if clean_chat_id:
+        return gateway.send_text(clean_chat_id, text)
+    return gateway.send_owner_text(text)
+
+
+def _safe_send_feedback(gateway: FeedbackGateway, chat_id: str, text: str) -> FeedbackResult:
+    """发送后台任务回推，并把异常收敛为可写回任务状态的结果。"""
+    try:
+        return _send_feedback(gateway, chat_id, text)
+    except Exception as exc:  # noqa: BLE001
+        return FeedbackResult(ok=False, status="send_failed", detail=str(exc))
+
+
+def _feedback_next_action(feedback: FeedbackResult) -> str:
+    """把反馈发送结果转换为任务下一步说明。"""
+    if feedback.ok:
+        return "后台任务已完成，结果已通过飞书回推给用户。"
+    return f"后台任务已完成，但结果回推失败：{feedback.status}。等待后续重试或人工检查。"
 
 
 _QUEUE_STOP = object()
