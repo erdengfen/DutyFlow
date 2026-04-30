@@ -71,6 +71,18 @@ class TestSkillRegistry(unittest.TestCase):
             self.assertIn("- doc-cleanup: Clean up document notes", summary)
             self.assertNotIn("secret detail", summary)
 
+    def test_registry_select_returns_filtered_skill_set(self) -> None:
+        """后台 subagent 可基于任务字段获得过滤后的 skill 注册表。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skills_dir = Path(temp_dir) / "skills"
+            _write_skill(skills_dir, "alpha_skill", "Alpha skill", "# Alpha\n\nbody")
+            _write_skill(skills_dir, "beta_skill", "Beta skill", "# Beta\n\nbody")
+            selected = SkillRegistry(skills_dir).select(("alpha_skill",))
+            self.assertTrue(selected.has("alpha_skill"))
+            self.assertFalse(selected.has("beta_skill"))
+            self.assertIn("alpha_skill", selected.system_prompt_text())
+            self.assertNotIn("beta_skill", selected.system_prompt_text())
+
 
 class TestLoadSkillTool(unittest.TestCase):
     """验证 load_skill 工具从 SkillRegistry 读取完整正文。"""

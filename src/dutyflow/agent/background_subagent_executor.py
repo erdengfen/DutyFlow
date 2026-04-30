@@ -16,7 +16,7 @@ from dutyflow.agent.core_loop import AgentLoop, AgentLoopResult
 from dutyflow.agent.model_client import ModelClient, ModelResponse
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.state import AgentContentBlock
-from dutyflow.agent.tools.registry import ToolRegistry
+from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry
 from dutyflow.tasks.task_state import TaskRecord
 
 if TYPE_CHECKING:
@@ -25,6 +25,13 @@ if TYPE_CHECKING:
 
 # 关键开关：写回任务状态表的结果摘要最多保留 500 字，完整结果后续由结果 Markdown 承载。
 _RESULT_SUMMARY_MAX_CHARS = 500
+_FORBIDDEN_BACKGROUND_TOOLS = frozenset(
+    {
+        "open_cli_session",
+        "exec_cli_command",
+        "close_cli_session",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -57,30 +64,39 @@ class BackgroundSubagentExecutor:
         """绑定后台执行所需的模型、工具注册表、技能注册表和工作目录。"""
         self.project_root = Path(project_root).resolve()
         self.model_client = model_client
-        self.registry = registry or ToolRegistry()
-        self.skill_registry = skill_registry or SkillRegistry.empty(self.project_root / "skills")
+        self.registry = registry or create_runtime_tool_registry()
+        self.skill_registry = skill_registry or SkillRegistry(self.project_root / "skills")
         self.audit_logger = audit_logger
         # 关键开关：后台 subagent 单任务最多允许 30 轮工具续转，避免长任务无限循环。
         self.max_turns = max_turns
 
     def execute_task(self, task: TaskRecord) -> BackgroundSubagentResult:
         """执行一条任务记录，并返回 worker 可写回的状态结果。"""
-        loop = self._build_loop()
         query_id = _build_query_id(task)
+        loop = self._build_task_loop(task, query_id)
+        if isinstance(loop, BackgroundSubagentResult):
+            return loop
         result = loop.run_until_stop(_build_task_prompt(task), query_id=query_id)
         return _build_execution_result(query_id, result)
 
-    def _build_loop(self) -> AgentLoop:
-        """为单个后台任务构造隔离的 AgentLoop。"""
+    def _build_task_loop(self, task: TaskRecord, query_id: str) -> AgentLoop | BackgroundSubagentResult:
+        """按任务字段构造隔离的 AgentLoop；能力面非法时直接失败。"""
+        try:
+            registry = _select_task_tool_registry(task, self.registry)
+            skill_registry = _select_task_skill_registry(task, self.skill_registry)
+        except ValueError as exc:
+            return _capability_error_result(query_id, str(exc))
+        except KeyError as exc:
+            return _capability_error_result(query_id, str(exc))
         return AgentLoop(
             self.model_client,
-            self.registry,
+            registry,
             self.project_root,
             max_turns=self.max_turns,
             permission_mode="auto",
             approval_requester=None,
             audit_logger=self.audit_logger,
-            skill_registry=self.skill_registry,
+            skill_registry=skill_registry,
             system_prompt_preamble=_BACKGROUND_SUBAGENT_SYSTEM_PROMPT,
         )
 
@@ -119,6 +135,33 @@ def _build_task_prompt(task: TaskRecord) -> str:
     )
 
 
+def _select_task_tool_registry(task: TaskRecord, base_registry: ToolRegistry) -> ToolRegistry:
+    """根据任务 resolved_tools 构造后台 subagent 可见工具注册表。"""
+    selected = ToolRegistry()
+    for name in _split_csv(task.resolved_tools):
+        if name in _FORBIDDEN_BACKGROUND_TOOLS:
+            raise ValueError(f"forbidden background tool: {name}")
+        if not base_registry.has(name):
+            raise ValueError(f"unknown background tool: {name}")
+        selected.register(base_registry.get(name), base_registry.get_handler(name))
+    return selected
+
+
+def _select_task_skill_registry(task: TaskRecord, base_registry: SkillRegistry) -> SkillRegistry:
+    """根据任务 resolved_skills 构造后台 subagent 可见技能注册表。"""
+    return base_registry.select(_split_csv(task.resolved_skills))
+
+
+def _split_csv(raw_value: str) -> tuple[str, ...]:
+    """解析任务 frontmatter 中的英文逗号分隔字段并去重。"""
+    items: list[str] = []
+    for item in raw_value.split(","):
+        normalized = item.strip()
+        if normalized and normalized not in items:
+            items.append(normalized)
+    return tuple(items)
+
+
 def _build_execution_result(query_id: str, result: AgentLoopResult) -> BackgroundSubagentResult:
     """把 AgentLoopResult 转换成后台任务 worker 可消费的执行结果。"""
     final_text = result.final_text.strip()
@@ -127,6 +170,20 @@ def _build_execution_result(query_id: str, result: AgentLoopResult) -> Backgroun
     if result.pending_restarts or not final_text:
         return _blocked_result(query_id, result)
     return _failed_result(query_id, result)
+
+
+def _capability_error_result(query_id: str, message: str) -> BackgroundSubagentResult:
+    """生成任务能力面构造失败结果，不启动模型调用。"""
+    return BackgroundSubagentResult(
+        status="failed",
+        retry_status="failed",
+        last_result_summary=f"后台 subagent 能力面构造失败：{message}",
+        next_action="等待人工检查任务 resolved_tools / resolved_skills 后决定是否重试。",
+        user_visible_final_text="",
+        stop_reason="capability_resolution_failed",
+        tool_result_count=0,
+        query_id=query_id,
+    )
 
 
 def _completed_result(

@@ -14,6 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from dutyflow.agent.background_subagent_executor import BackgroundSubagentExecutor  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
+from dutyflow.agent.skills import SkillRegistry  # noqa: E402
 from dutyflow.agent.state import AgentContentBlock  # noqa: E402
 from dutyflow.agent.tools import ToolResultEnvelope, ToolSpec  # noqa: E402
 from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
@@ -41,7 +42,7 @@ class TestBackgroundSubagentExecutor(unittest.TestCase):
         """executor 应复用 AgentLoop 的多轮工具调用能力。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            task = _create_task(root)
+            task = _create_task(root, resolved_tools="sample_tool")
             model = _CapturingModelClient((_tool_response(), _text_response("工具结果已处理。")))
             result = BackgroundSubagentExecutor(
                 root,
@@ -51,6 +52,39 @@ class TestBackgroundSubagentExecutor(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.tool_result_count, 1)
         self.assertEqual(result.user_visible_final_text, "工具结果已处理。")
+        self.assertEqual(model.seen_tool_names[0], ("sample_tool",))
+
+    def test_executor_filters_unlisted_tools_and_skills(self) -> None:
+        """executor 只应暴露任务 resolved 字段列出的工具和技能。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            skills_dir = root / "skills"
+            _write_skill(skills_dir, "alpha_skill", "Alpha skill")
+            _write_skill(skills_dir, "beta_skill", "Beta skill")
+            task = _create_task(root, resolved_tools="sample_tool", resolved_skills="alpha_skill")
+            model = _CapturingModelClient((_text_response("已完成。"),))
+            result = BackgroundSubagentExecutor(
+                root,
+                model,
+                registry=_two_tool_registry(),
+                skill_registry=SkillRegistry(skills_dir),
+            ).execute_task(task)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(model.seen_tool_names[0], ("sample_tool",))
+        self.assertIn("alpha_skill", model.first_system_text)
+        self.assertNotIn("beta_skill", model.first_system_text)
+
+    def test_executor_fails_before_model_call_for_unknown_capability(self) -> None:
+        """任务字段引用未知工具或技能时，不应启动模型调用。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            task = _create_task(root, resolved_tools="missing_tool")
+            model = _CapturingModelClient((_text_response("不应调用"),))
+            result = BackgroundSubagentExecutor(root, model, registry=_sample_tool_registry()).execute_task(task)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.stop_reason, "capability_resolution_failed")
+        self.assertEqual(model.call_count, 0)
+        self.assertIn("unknown background tool", result.last_result_summary)
 
     def test_executor_blocks_when_model_returns_no_visible_text(self) -> None:
         """模型没有生成最终文本时，executor 不应伪装任务完成。"""
@@ -73,11 +107,16 @@ class _CapturingModelClient:
         """保存预设响应列表。"""
         self.responses = list(responses)
         self.last_user_text = ""
+        self.first_system_text = ""
+        self.seen_tool_names: list[tuple[str, ...]] = []
+        self.call_count = 0
 
     def call_model(self, state, tools) -> ModelResponse:
         """记录用户输入并返回下一条响应。"""
-        del tools
+        self.call_count += 1
         self.last_user_text = _latest_user_text(state)
+        self.first_system_text = _first_system_text(state)
+        self.seen_tool_names.append(tuple(tool.name for tool in tools))
         if not self.responses:
             raise RuntimeError("fake responses exhausted")
         item = self.responses.pop(0)
@@ -86,7 +125,7 @@ class _CapturingModelClient:
         return item
 
 
-def _create_task(root: Path):
+def _create_task(root: Path, *, resolved_tools: str = "", resolved_skills: str = ""):
     """创建一条带恢复载荷和决策记录的后台任务。"""
     return TaskStore(root).create_task(
         title="整理项目风险",
@@ -95,7 +134,8 @@ def _create_task(root: Path):
         run_mode="async_now",
         execution_profile="background_async_selected",
         requested_capabilities="content_summarization",
-        resolved_tools="sample_tool",
+        resolved_skills=resolved_skills,
+        resolved_tools=resolved_tools,
         summary="整理本周项目风险并给出简要结论。",
         resume_payload="goal=整理项目风险; success_criteria=输出简要结论; context_refs=per_001",
         decision_trace='{"source":"unit-test"}',
@@ -107,6 +147,16 @@ def _sample_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(
         ToolSpec("sample_tool", "Return text.", {"required": ["text"]}, is_concurrency_safe=True),
+        _sample_handler,
+    )
+    return registry
+
+
+def _two_tool_registry() -> ToolRegistry:
+    """构造包含一个允许工具和一个未授权工具的测试注册表。"""
+    registry = _sample_tool_registry()
+    registry.register(
+        ToolSpec("other_tool", "Other text.", {"required": ["text"]}, is_concurrency_safe=True),
         _sample_handler,
     )
     return registry
@@ -144,6 +194,23 @@ def _latest_user_text(state) -> str:
         if message.role == "user":
             return "\n".join(block.text for block in message.content if block.type == "text" and block.text)
     return ""
+
+
+def _first_system_text(state) -> str:
+    """提取 AgentState 顶部 system message。"""
+    if not state.messages or state.messages[0].role != "system":
+        return ""
+    return "\n".join(block.text for block in state.messages[0].content if block.type == "text" and block.text)
+
+
+def _write_skill(skills_dir: Path, name: str, description: str) -> None:
+    """写入测试用 skill 文档。"""
+    path = skills_dir / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nbody",
+        encoding="utf-8",
+    )
 
 
 def _self_test() -> None:

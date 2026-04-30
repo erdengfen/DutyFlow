@@ -57,6 +57,15 @@ class SkillRegistry:
         """返回按名称排序的 manifest 列表。"""
         return tuple(self._skills[name].manifest for name in sorted(self._skills))
 
+    def select(self, names: tuple[str, ...]) -> "SkillRegistry":
+        """按名称生成只包含指定技能的新注册表。"""
+        selected = SkillRegistry.empty(self.skills_dir)
+        for name in names:
+            if name not in self._skills:
+                raise KeyError(f"Skill is not registered: {name}")
+            selected._skills[name] = self._skills[name]
+        return selected
+
     def describe_available(self) -> str:
         """返回适合拼入 system message 的可用技能摘要。"""
         manifests = self.list_manifests()
@@ -142,6 +151,7 @@ def _self_test() -> None:
     assert meta["name"] == "demo-skill"
     assert body.startswith("# Demo")
     assert registry.describe_available() == "(none)"
+    assert registry.select(()).describe_available() == "(none)"
 
 
 if __name__ == "__main__":
