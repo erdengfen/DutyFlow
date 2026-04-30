@@ -1116,6 +1116,9 @@ Demo 期最终必须实现以下完整链路：
   - `BackgroundTaskWorker`
   - `run_task`
   - `resume_task`
+- `src/dutyflow/agent/background_subagent_executor.py`
+  - `BackgroundSubagentExecutor`
+  - `execute_task`
 - `src/dutyflow/agent/control_state_store.py`
   - `AgentControlStateStore`
   - `sync_agent_control_state`
@@ -1131,6 +1134,7 @@ Demo 期最终必须实现以下完整链路：
 - `data/approvals/completed/`
 - `test/test_task_scheduler.py`
 - `test/test_task_state.py`
+- `test/test_background_subagent_executor.py`
 - `test/test_approval_flow.py`
 - `test/test_task_interrupt.py`
 
@@ -1152,7 +1156,7 @@ Demo 期最终必须实现以下完整链路：
 - [x] 将后台任务 worker 接入正式 runtime 之外的独立执行面。
 - [x] 将飞书卡片/按钮审批接入反馈与恢复链。
 - [x] 接入 Agent State。
-- [ ] 实现后台 subagent 执行器，复用 `AgentLoop` 共享核心。
+- [x] 实现后台 subagent 执行器，复用 `AgentLoop` 共享核心。
 - [ ] 按任务字段构造后台 subagent 的过滤后 tools / skills 能力面。
 - [ ] 创建并维护后台任务结果占位 Markdown。
 - [ ] 将 `BackgroundTaskWorker` 的占位 handler 替换为正式后台 subagent 执行器。
