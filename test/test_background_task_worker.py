@@ -18,6 +18,9 @@ from dutyflow.agent.background_task_worker import (  # noqa: E402
     BackgroundTaskExecutionResult,
     BackgroundTaskWorker,
 )
+from dutyflow.agent.model_client import ModelResponse  # noqa: E402
+from dutyflow.agent.state import AgentContentBlock  # noqa: E402
+from dutyflow.tasks.task_result import TaskResultStore  # noqa: E402
 from dutyflow.tasks.task_state import TaskRecord, TaskStore  # noqa: E402
 
 
@@ -27,7 +30,11 @@ class TestBackgroundTaskWorker(unittest.TestCase):
     def test_start_exposes_running_worker_state(self) -> None:
         """启动后应暴露后台 worker 已运行的状态快照。"""
         with tempfile.TemporaryDirectory() as temp_dir:
-            worker = BackgroundTaskWorker(TaskStore(Path(temp_dir)), queue_poll_seconds=0.01)
+            worker = BackgroundTaskWorker(
+                TaskStore(Path(temp_dir)),
+                _completed_handler(threading.Event()),
+                queue_poll_seconds=0.01,
+            )
             state = worker.start()
             worker.stop()
         self.assertEqual(state.status, "running")
@@ -78,6 +85,37 @@ class TestBackgroundTaskWorker(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(loaded.status, "completed")
 
+    def test_default_worker_runs_background_subagent_executor(self) -> None:
+        """未注入测试 handler 时，worker 应通过后台 subagent executor 执行任务。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = TaskStore(root)
+            store.create_task(title="subagent", task_id="task_subagent", status="queued")
+            model = _FakeModelClient("后台 subagent 已完成任务。")
+            worker = BackgroundTaskWorker(store, model_client=model, queue_poll_seconds=0.01)
+            worker.start()
+            worker.enqueue_task("task_subagent", source="test")
+            state = _wait_for_state(worker, lambda item: item.processed_count == 1)
+            loaded = store.read_task("task_subagent")
+            result = TaskResultStore(root).read_result("task_subagent")
+            worker.stop()
+        self.assertEqual(state.latest_action, "processed")
+        self.assertEqual(model.call_count, 1)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.status, "completed")
+        self.assertEqual(loaded.retry_status, "done")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.user_visible_final_text, "后台 subagent 已完成任务。")
+
+    def test_default_worker_requires_model_client(self) -> None:
+        """正式默认执行面缺少模型客户端时应显式失败，而不是退回占位 handler。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                BackgroundTaskWorker(TaskStore(Path(temp_dir)))
+
     def test_handler_failure_marks_task_failed_but_keeps_worker_alive(self) -> None:
         """执行器异常时任务应变为 failed，worker 线程不应退出。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -116,6 +154,21 @@ def _completed_handler(done: threading.Event):
 def _failing_handler(task: TaskRecord) -> BackgroundTaskExecutionResult:
     """构造测试用失败执行器。"""
     raise RuntimeError(f"boom {task.task_id}")
+
+
+class _FakeModelClient:
+    """为默认 worker 路径提供最小模型响应。"""
+
+    def __init__(self, final_text: str) -> None:
+        """保存固定最终文本。"""
+        self.final_text = final_text
+        self.call_count = 0
+
+    def call_model(self, state, tools) -> ModelResponse:
+        """返回固定文本并记录调用次数。"""
+        del state, tools
+        self.call_count += 1
+        return ModelResponse((AgentContentBlock(type="text", text=self.final_text),), "stop")
 
 
 def _wait_for_state(worker: BackgroundTaskWorker, predicate) -> object:

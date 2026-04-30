@@ -1,4 +1,4 @@
-# 本文件负责 Step 7 第一版后台任务 worker 的独立队列、状态流转和占位执行面。
+# 本文件负责 Step 7 后台任务 worker 的独立队列、状态流转和 subagent 执行面。
 
 from __future__ import annotations
 
@@ -17,7 +17,12 @@ if __package__ in {None, ""}:
     if str(_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(_SRC_ROOT))
 
+from dutyflow.agent.background_subagent_executor import (
+    BackgroundSubagentExecutor,
+    BackgroundSubagentResult,
+)
 from dutyflow.agent.control_state_store import AgentControlStateStore
+from dutyflow.agent.model_client import ModelClient
 from dutyflow.tasks.task_state import TaskRecord, TaskStore
 
 
@@ -73,13 +78,19 @@ class BackgroundTaskWorker:
         task_store: TaskStore,
         task_handler: Callable[[TaskRecord], BackgroundTaskExecutionResult] | None = None,
         *,
+        model_client: ModelClient | None = None,
+        task_executor: BackgroundSubagentExecutor | None = None,
         queue_poll_seconds: float = 0.1,
         ready_scan_interval_seconds: float = 1.0,
         control_state_store: AgentControlStateStore | None = None,
     ) -> None:
         """绑定任务存储、执行器和线程控制对象。"""
         self.task_store = task_store
-        self._task_handler = task_handler or _placeholder_task_handler
+        self._task_handler = task_handler or _build_subagent_task_handler(
+            task_store,
+            model_client,
+            task_executor,
+        )
         self.control_state_store = control_state_store or AgentControlStateStore(
             task_store.project_root,
             task_store=task_store,
@@ -419,14 +430,45 @@ def _next_attempt_count(raw_value: str) -> int:
     return current + 1
 
 
-def _placeholder_task_handler(task: TaskRecord) -> BackgroundTaskExecutionResult:
-    """默认执行器只证明独立执行面已接入，不伪装完成真实后台任务。"""
-    del task
+def _build_subagent_task_handler(
+    task_store: TaskStore,
+    model_client: ModelClient | None,
+    task_executor: BackgroundSubagentExecutor | None,
+) -> Callable[[TaskRecord], BackgroundTaskExecutionResult]:
+    """构造默认后台任务执行器，正式路径不再使用占位 handler。"""
+    executor = task_executor or _create_subagent_executor(task_store, model_client)
+    return _SubagentTaskHandler(executor)
+
+
+def _create_subagent_executor(
+    task_store: TaskStore,
+    model_client: ModelClient | None,
+) -> BackgroundSubagentExecutor:
+    """根据 worker 依赖创建后台 subagent executor。"""
+    if model_client is None:
+        raise ValueError("model_client is required when task_handler is not provided")
+    return BackgroundSubagentExecutor(task_store.project_root, model_client)
+
+
+class _SubagentTaskHandler:
+    """把 BackgroundSubagentExecutor 适配为 worker 可消费的任务 handler。"""
+
+    def __init__(self, executor: BackgroundSubagentExecutor) -> None:
+        """保存后台 subagent executor。"""
+        self.executor = executor
+
+    def __call__(self, task: TaskRecord) -> BackgroundTaskExecutionResult:
+        """执行任务并转换为 worker 状态写回结构。"""
+        return _to_worker_execution_result(self.executor.execute_task(task))
+
+
+def _to_worker_execution_result(result: BackgroundSubagentResult) -> BackgroundTaskExecutionResult:
+    """把 subagent 执行结果转换成 worker 任务状态更新。"""
     return BackgroundTaskExecutionResult(
-        status="blocked",
-        retry_status="blocked",
-        last_result_summary="后台任务 worker 已接入独立执行面；真实后台 agent 执行器尚未接入。",
-        next_action="等待后续后台 agent 执行器接入后恢复处理该任务。",
+        status=result.status,
+        retry_status=result.retry_status,
+        last_result_summary=result.last_result_summary,
+        next_action=result.next_action,
     )
 
 

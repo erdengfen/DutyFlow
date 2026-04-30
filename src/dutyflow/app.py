@@ -484,7 +484,11 @@ class DutyFlowApp:
         """构造并复用正式 runtime 之外的后台任务 worker。"""
         if self._background_task_worker is not None:
             return self._background_task_worker
-        self._background_task_worker = BackgroundTaskWorker(TaskStore(self.project_root))
+        config = load_env_config(self.project_root)
+        self._background_task_worker = BackgroundTaskWorker(
+            TaskStore(self.project_root),
+            model_client=OpenAICompatibleModelClient(config),
+        )
         return self._background_task_worker
 
     def _get_or_create_task_scheduler_service(self) -> TaskSchedulerService:
