@@ -80,8 +80,55 @@ class TestRuntimeContextManager(unittest.TestCase):
         manager = RuntimeContextManager()
         manager.project(state)
         self.assertIsNotNone(manager.latest_working_set)
+        self.assertIsNotNone(manager.latest_state_delta)
         assert manager.latest_working_set is not None
+        assert manager.latest_state_delta is not None
         self.assertEqual(manager.latest_working_set.latest_user_text, "hello")
+        self.assertEqual(manager.latest_state_delta.new_user_text, "hello")
+
+    def test_build_state_delta_detects_runtime_changes(self) -> None:
+        """State Delta 应只描述两次 Working Set 之间的新增和变化。"""
+        manager = RuntimeContextManager()
+        previous = manager.build_working_set(create_initial_agent_state("ctx_working", "旧任务"))
+        current = manager.build_working_set(_working_set_state())
+        delta = manager.build_state_delta(previous, current)
+        self.assertEqual(delta.previous_turn_count, 1)
+        self.assertEqual(delta.current_turn_count, 2)
+        self.assertTrue(delta.turn_advanced)
+        self.assertEqual(delta.new_user_text, "请处理这个任务")
+        self.assertEqual(delta.new_assistant_text, "工具结果已收到")
+        self.assertEqual(delta.new_tool_result_ids, ("tool_1",))
+        self.assertEqual(delta.new_recent_tool_use_ids, ("tool_1",))
+        self.assertEqual(delta.new_recent_tool_names, ("sample_tool",))
+        self.assertEqual(
+            delta.task_control_changed_fields,
+            ("task_weight_level", "approval_status", "retry_status", "next_action"),
+        )
+        self.assertEqual(delta.recovery_changed_fields, ("latest_interruption_reason", "latest_resume_point"))
+        self.assertEqual(delta.new_waiting_recovery_scope_ids, ("tool_1",))
+        self.assertEqual(delta.to_dict()["new_recent_tool_names"], ["sample_tool"])
+
+    def test_build_state_delta_detects_resolved_tool_calls(self) -> None:
+        """State Delta 应能识别上轮等待、本轮已完成的工具调用。"""
+        manager = RuntimeContextManager()
+        pending_state = _pending_tool_state()
+        resolved_state = append_tool_results(
+            pending_state,
+            (
+                AgentContentBlock(
+                    type="tool_result",
+                    tool_use_id="tool_1",
+                    tool_name="sample_tool",
+                    content="ok",
+                ),
+            ),
+        )
+        previous = manager.build_working_set(pending_state)
+        current = manager.build_working_set(resolved_state)
+        delta = manager.build_state_delta(previous, current)
+        self.assertEqual(delta.resolved_tool_use_ids, ("tool_1",))
+        self.assertEqual(delta.new_tool_result_ids, ("tool_1",))
+        self.assertEqual(delta.new_pending_tool_use_ids, ())
 
 
 class _MarkerRuntimeContextManager(RuntimeContextManager):
@@ -129,6 +176,22 @@ def _working_set_state() -> AgentState:
     state = _append_tool_exchange(state)
     state = append_assistant_message(state, (AgentContentBlock(type="text", text="工具结果已收到"),))
     return _attach_control_state(state)
+
+
+def _pending_tool_state() -> AgentState:
+    """构造仍有未完成工具调用的测试状态。"""
+    state = create_initial_agent_state("ctx_pending", "请处理这个任务")
+    return append_assistant_message(
+        state,
+        (
+            AgentContentBlock(
+                type="tool_use",
+                tool_use_id="tool_1",
+                tool_name="sample_tool",
+                tool_input={"text": "hello"},
+            ),
+        ),
+    )
 
 
 def _append_tool_exchange(state: AgentState) -> AgentState:

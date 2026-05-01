@@ -38,6 +38,36 @@ class WorkingSet:
         return payload
 
 
+@dataclass(frozen=True)
+class StateDelta:
+    """表示两次 Working Set 之间的最小运行时增量。"""
+
+    query_id: str
+    previous_turn_count: int
+    current_turn_count: int
+    turn_advanced: bool
+    transition_changed: bool
+    new_user_text: str
+    new_assistant_text: str
+    current_event_id_changed: bool
+    current_task_id_changed: bool
+    new_pending_tool_use_ids: tuple[str, ...]
+    resolved_tool_use_ids: tuple[str, ...]
+    new_tool_result_ids: tuple[str, ...]
+    new_recent_tool_use_ids: tuple[str, ...]
+    new_recent_tool_names: tuple[str, ...]
+    task_control_changed_fields: tuple[str, ...]
+    recovery_changed_fields: tuple[str, ...]
+    new_waiting_recovery_scope_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        """返回可用于测试和后续日志记录的稳定字典。"""
+        payload = asdict(self)
+        for key in _STATE_DELTA_TUPLE_FIELDS:
+            payload[key] = list(payload[key])
+        return payload
+
+
 _WORKING_SET_TUPLE_FIELDS = frozenset(
     {
         "pending_tool_use_ids",
@@ -45,6 +75,18 @@ _WORKING_SET_TUPLE_FIELDS = frozenset(
         "recent_tool_use_ids",
         "recent_tool_names",
         "waiting_recovery_scope_ids",
+    }
+)
+_STATE_DELTA_TUPLE_FIELDS = frozenset(
+    {
+        "new_pending_tool_use_ids",
+        "resolved_tool_use_ids",
+        "new_tool_result_ids",
+        "new_recent_tool_use_ids",
+        "new_recent_tool_names",
+        "task_control_changed_fields",
+        "recovery_changed_fields",
+        "new_waiting_recovery_scope_ids",
     }
 )
 
@@ -55,10 +97,13 @@ class RuntimeContextManager:
     def __init__(self) -> None:
         """初始化最近一次工作集快照。"""
         self.latest_working_set: WorkingSet | None = None
+        self.latest_state_delta: StateDelta | None = None
 
     def project(self, state: AgentState) -> tuple[AgentMessage, ...]:
         """返回 ModelContextView 概念层对应的现有 messages 表示。"""
-        self.latest_working_set = self.build_working_set(state)
+        working_set = self.build_working_set(state)
+        self.latest_state_delta = self.build_state_delta(self.latest_working_set, working_set)
+        self.latest_working_set = working_set
         return self.project_messages(state)
 
     def build_working_set(self, state: AgentState) -> WorkingSet:
@@ -84,6 +129,28 @@ class RuntimeContextManager:
             waiting_recovery_scope_ids=_waiting_recovery_scope_ids(state),
         )
 
+    def build_state_delta(self, previous: WorkingSet | None, current: WorkingSet) -> StateDelta:
+        """对比两次 Working Set，构造模型下一步可用的状态增量。"""
+        return StateDelta(
+            query_id=current.query_id,
+            previous_turn_count=previous.turn_count if previous else 0,
+            current_turn_count=current.turn_count,
+            turn_advanced=_field_changed(previous, current, "turn_count"),
+            transition_changed=_field_changed(previous, current, "transition_reason"),
+            new_user_text=_changed_text(previous, current, "latest_user_text"),
+            new_assistant_text=_changed_text(previous, current, "latest_assistant_text"),
+            current_event_id_changed=_field_changed(previous, current, "current_event_id"),
+            current_task_id_changed=_field_changed(previous, current, "current_task_id"),
+            new_pending_tool_use_ids=_new_values(previous, current, "pending_tool_use_ids"),
+            resolved_tool_use_ids=_resolved_values(previous, current, "pending_tool_use_ids"),
+            new_tool_result_ids=_new_values(previous, current, "last_tool_result_ids"),
+            new_recent_tool_use_ids=_new_values(previous, current, "recent_tool_use_ids"),
+            new_recent_tool_names=_new_values(previous, current, "recent_tool_names"),
+            task_control_changed_fields=_changed_fields(previous, current, _TASK_CONTROL_FIELDS),
+            recovery_changed_fields=_changed_fields(previous, current, _RECOVERY_FIELDS),
+            new_waiting_recovery_scope_ids=_new_values(previous, current, "waiting_recovery_scope_ids"),
+        )
+
     def project_messages(self, state: AgentState) -> tuple[AgentMessage, ...]:
         """返回模型下一次调用应看到的 AgentMessage 序列。"""
         return state.messages
@@ -105,6 +172,49 @@ def _latest_text_by_role(messages: tuple[AgentMessage, ...], role: str) -> str:
         if text:
             return text
     return ""
+
+
+def _field_changed(previous: WorkingSet | None, current: WorkingSet, field_name: str) -> bool:
+    """判断 Working Set 的指定字段是否发生变化。"""
+    if previous is None:
+        return bool(getattr(current, field_name))
+    return getattr(previous, field_name) != getattr(current, field_name)
+
+
+def _changed_text(previous: WorkingSet | None, current: WorkingSet, field_name: str) -> str:
+    """返回发生变化的短文本字段；无变化时返回空字符串。"""
+    current_value = str(getattr(current, field_name))
+    if previous is None:
+        return current_value
+    if getattr(previous, field_name) == current_value:
+        return ""
+    return current_value
+
+
+def _new_values(previous: WorkingSet | None, current: WorkingSet, field_name: str) -> tuple[str, ...]:
+    """返回当前 tuple 字段中相对上次新增的值。"""
+    current_values = tuple(getattr(current, field_name))
+    if previous is None:
+        return current_values
+    previous_values = set(getattr(previous, field_name))
+    return tuple(value for value in current_values if value not in previous_values)
+
+
+def _resolved_values(previous: WorkingSet | None, current: WorkingSet, field_name: str) -> tuple[str, ...]:
+    """返回上次存在而当前已经消失的 tuple 字段值。"""
+    if previous is None:
+        return ()
+    current_values = set(getattr(current, field_name))
+    return tuple(value for value in getattr(previous, field_name) if value not in current_values)
+
+
+def _changed_fields(
+    previous: WorkingSet | None,
+    current: WorkingSet,
+    field_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    """返回一组字段中发生变化的字段名。"""
+    return tuple(name for name in field_names if _field_changed(previous, current, name))
 
 
 def _message_text(message: AgentMessage) -> str:
@@ -145,6 +255,10 @@ def _waiting_recovery_scope_ids(state: AgentState) -> tuple[str, ...]:
     return tuple(scope.scope_id for scope in state.recovery.recovery_scopes if scope.status == "waiting")
 
 
+_TASK_CONTROL_FIELDS = ("task_weight_level", "approval_status", "retry_status", "next_action")
+_RECOVERY_FIELDS = ("latest_interruption_reason", "latest_resume_point")
+
+
 def _self_test() -> None:
     """验证第一版投影层保持 messages 结构不变。"""
     from dutyflow.agent.state import create_initial_agent_state
@@ -152,10 +266,12 @@ def _self_test() -> None:
     state = create_initial_agent_state("ctx_self_test", "hello")
     manager = RuntimeContextManager()
     projected = manager.project_state_for_model(state)
-    assert manager.project(state) == state.messages
     assert projected.messages == state.messages
     assert manager.latest_working_set is not None
     assert manager.latest_working_set.latest_user_text == "hello"
+    assert manager.latest_state_delta is not None
+    assert manager.latest_state_delta.new_user_text == "hello"
+    assert manager.project_messages(state) == state.messages
 
 
 if __name__ == "__main__":

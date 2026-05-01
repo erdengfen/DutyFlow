@@ -310,7 +310,38 @@ updated_at: 2026-04-16T00:00:00+08:00
 - 第一版 `WorkingSet` 构造不得调用模型，不得产生外部副作用。
 - 后续压缩策略可以基于 `WorkingSet` 生成模型可见 messages，但不得丢失 `task_id`、`approval_id`、`perception_id`、`event_id`、`tool_use_id` 等关键锚点。
 
-### 2.6 中断原因与恢复点枚举
+### 2.6 Runtime Context State Delta
+
+`StateDelta` 是 `RuntimeContextManager` 对比上一次 `WorkingSet` 和当前 `WorkingSet` 后得到的增量视图。它是内存结构，不是新的持久化文件；后续如落盘，应写入上下文日志或压缩日志。
+
+第一版字段：
+
+- `query_id`：当前 query 稳定 ID。
+- `previous_turn_count`：上一次 Working Set 的轮数；首次构造时为 0。
+- `current_turn_count`：当前 Working Set 的轮数。
+- `turn_advanced`：轮数是否推进。
+- `transition_changed`：状态转移原因是否变化。
+- `new_user_text`：最近用户文本相对上次是否新增或变化；无变化时为空。
+- `new_assistant_text`：最近 assistant 文本相对上次是否新增或变化；无变化时为空。
+- `current_event_id_changed`：当前事件锚点是否变化。
+- `current_task_id_changed`：当前任务锚点是否变化。
+- `new_pending_tool_use_ids`：本次新增的等待工具调用 ID。
+- `resolved_tool_use_ids`：上次等待、本次已不等待的工具调用 ID。
+- `new_tool_result_ids`：本次新增的工具结果 ID。
+- `new_recent_tool_use_ids`：本次新增进入最近工具调用集合的工具调用 ID。
+- `new_recent_tool_names`：本次新增进入最近工具集合的工具名。
+- `task_control_changed_fields`：任务控制面发生变化的字段名。
+- `recovery_changed_fields`：恢复控制面发生变化的字段名。
+- `new_waiting_recovery_scope_ids`：本次新增的等待恢复 scope ID。
+
+约束：
+
+- `StateDelta` 不保存长文本、长工具结果或外部 payload。
+- `StateDelta` 只描述变化，不作为完整状态来源；完整状态仍以 `AgentState`、任务文件、审批文件和审计日志为准。
+- 第一版 `StateDelta` 构造不得调用模型，不得产生外部副作用。
+- `StateDelta` 的 ID 字段必须保持原始锚点值，不得摘要化或重写。
+
+### 2.7 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 
