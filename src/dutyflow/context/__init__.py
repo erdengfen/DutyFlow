@@ -7,6 +7,14 @@ from dutyflow.context.context_budget import (
     ContextBudgetReport,
 )
 from dutyflow.context.evidence_store import EvidenceRecord, EvidenceStore
+from dutyflow.context.phase_summary import (
+    PhaseBoundaryDetector,
+    PhaseSummaryPolicy,
+    PhaseSummaryRecord,
+    PhaseSummaryService,
+    PhaseSummaryStore,
+    PhaseSummaryTrigger,
+)
 from dutyflow.context.runtime_context import RuntimeContextManager, StateDelta, WorkingSet
 from dutyflow.context.tool_receipt import ToolReceipt, ToolReceiptBuilder
 
@@ -17,6 +25,12 @@ __all__ = [
     "ContextBudgetReport",
     "EvidenceRecord",
     "EvidenceStore",
+    "PhaseBoundaryDetector",
+    "PhaseSummaryPolicy",
+    "PhaseSummaryRecord",
+    "PhaseSummaryService",
+    "PhaseSummaryStore",
+    "PhaseSummaryTrigger",
     "RuntimeContextManager",
     "StateDelta",
     "ToolReceipt",
@@ -33,6 +47,12 @@ def _self_test() -> None:
     assert ContextBudgetReport is not None
     assert EvidenceRecord is not None
     assert EvidenceStore is not None
+    assert PhaseBoundaryDetector is not None
+    assert PhaseSummaryPolicy is not None
+    assert PhaseSummaryRecord is not None
+    assert PhaseSummaryService is not None
+    assert PhaseSummaryStore is not None
+    assert PhaseSummaryTrigger is not None
     assert RuntimeContextManager is not None
     assert StateDelta is not None
     assert ToolReceipt is not None

@@ -1373,6 +1373,24 @@ Step 8 需要接入 LLM Phase Summary，但不能做每 N 轮滚动总结。LLM 
 - 用户确认
 - 后台任务完成
 
+第一版触发规则必须明确，不按消息轮数触发：
+
+- `context_overflow`：硬触发，进入 emergency mode，必须尝试生成阶段摘要记录。
+- 预算硬阈值：当 `ContextBudget.total_estimated_tokens` 达到硬阈值时触发 LLM 阶段摘要。
+- 阶段边界 + 预算软阈值：检测到阶段边界且预算达到软阈值时触发 LLM 阶段摘要。
+- 手动压缩：后续 `/compress` 进入时可显式触发 LLM 阶段摘要。
+- 普通阶段结束：如果低于软阈值，只记录阶段边界，不调用 LLM。
+
+第一版阶段边界检测优先基于确定性信号：
+
+- 新用户请求或用户继续补充。
+- 身份、来源、责任、联系人知识相关工具完成。
+- 工具调用失败、审批等待、审批拒绝或恢复点变化。
+- 创建审批请求或收到审批恢复。
+- 创建后台任务、后台任务完成或任务状态变化。
+
+第一版阈值以常量形式落在代码旁并用中文注释说明用途；测试可通过低阈值配置覆盖。阶段摘要生成后先写入 `data/contexts/ctx_<id>.md` 并记录到运行时调试状态，但在 Context Health Check 实现前，不直接替换下一轮模型上下文，避免未经校验的 LLM 摘要污染主链路。
+
 实现顺序上先完成确定性投影、Tool Receipt 和预算，再在 Step 8 内接入 LLM Phase Summary。
 
 ### Compression Journal
@@ -1471,6 +1489,12 @@ emergency compact
 - `src/dutyflow/context/evidence_store.py`
   - `EvidenceRecord`
   - `EvidenceStore`
+- `src/dutyflow/context/phase_summary.py`
+  - `PhaseSummaryTrigger`
+  - `PhaseSummaryRecord`
+  - `PhaseBoundaryDetector`
+  - `PhaseSummaryService`
+  - `PhaseSummaryStore`
 - `src/dutyflow/context/compression_journal.py`
   - `CompressionJournalRecord`
   - `CompressionJournalStore`
@@ -1514,7 +1538,7 @@ emergency compact
 - [x] 实现旧 tool result 的确定性 micro-compact。
 - [x] 实现 Evidence Store，用于外置长工具结果和大对象摘要，不主动索引全部感知结果。
 - [x] 实现 Context Budget，第一版输出估算 token。
-- [ ] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
+- [x] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
 - [ ] 实现 Compression Journal。
 - [ ] 实现 Context Health Check。
 - [ ] 接入 `context_overflow` emergency compact recovery。

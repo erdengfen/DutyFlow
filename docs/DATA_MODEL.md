@@ -954,6 +954,21 @@ task_id: task_001
 event_ids: evt_001
 created_at: 2026-04-16T00:00:00+08:00
 compact_level: short
+summary_kind: phase_summary
+phase: completed_context_lookup
+trigger_reason: phase_boundary_budget
+trigger_mode: normal
+source_query_id: query_001
+source_message_count: 12
+estimated_tokens: 7200
+soft_token_limit: 6000
+hard_token_limit: 10000
+phase_boundary_detected: true
+requires_llm: true
+anchor_task_ids: task_001
+anchor_event_ids: evt_001
+anchor_tool_use_ids: tool_001
+anchor_approval_ids: approval_001
 ```
 
 正文结构：
@@ -986,6 +1001,12 @@ compact_level: short
 
 - 上下文摘要用于继续任务，不是长期记忆。
 - 摘要必须保留当前目标、关键事实、责任关系和下一步。
+- `summary_kind` 第一版可取 `phase_summary`，表示由运行时阶段边界或预算触发生成。
+- `trigger_reason` 第一版可取 `context_overflow`、`budget_hard_limit`、`phase_boundary_budget`、`manual_compress`、`phase_boundary_only`、`none`。
+- `trigger_mode` 第一版可取 `emergency`、`normal`、`manual`、`record_only`、`none`。
+- `phase_boundary_only` 只记录边界，不要求 LLM 摘要正文。
+- `anchor_*` 字段必须保留可追溯锚点；摘要可以压缩文本，但不能丢失 `task_id`、`event_id`、`tool_use_id`、`approval_id` 等稳定引用。
+- Context Health Check 完成前，LLM 生成的阶段摘要只允许记录和调试查看，不直接替换下一轮模型上下文。
 
 ## 6.1 长期记忆的边界
 

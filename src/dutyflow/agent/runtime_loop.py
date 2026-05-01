@@ -102,11 +102,18 @@ class RuntimeAgentLoop:
         state = loop_result.state
         projected_messages = _project_messages_for_debug(self.agent_loop, state)
         budget = self.agent_loop.runtime_context_manager.estimate_budget(projected_messages)
+        phase_summary = _phase_summary_debug(self.agent_loop.runtime_context_manager)
         return {
             "status": "ok",
             "action": "agent_state",
             "detail": "latest formal runtime agent state debug view",
-            "payload": _agent_state_debug_payload(state, loop_result, projected_messages, budget.to_dict()),
+            "payload": _agent_state_debug_payload(
+                state,
+                loop_result,
+                projected_messages,
+                budget.to_dict(),
+                phase_summary,
+            ),
         }
 
     def _require_loop_input(self, perception_id: str) -> dict[str, Any]:
@@ -248,17 +255,30 @@ def _agent_state_debug_payload(
     loop_result: AgentLoopResult,
     projected_messages: tuple[AgentMessage, ...],
     budget_report: Mapping[str, Any],
+    phase_summary: Mapping[str, Any],
 ) -> dict[str, Any]:
     """组装正式 runtime AgentState 的调试 payload。"""
     return {
         "state": _state_debug_summary(state),
         "latest_result": _loop_result_debug(loop_result),
         "compression": _compression_debug(state.messages, projected_messages),
+        "phase_summary": dict(phase_summary),
         "budget_report": budget_report,
         "messages": {
             "canonical": _messages_debug(state.messages),
             "projected": _messages_debug(projected_messages),
         },
+    }
+
+
+def _phase_summary_debug(manager) -> dict[str, Any]:
+    """返回最近一次阶段摘要触发与落盘状态。"""
+    trigger = getattr(manager, "latest_phase_summary_trigger", None)
+    record = getattr(manager, "latest_phase_summary_record", None)
+    return {
+        "trigger": trigger.to_dict() if trigger is not None else {},
+        "record": record.to_dict() if record is not None else {},
+        "error": getattr(manager, "latest_phase_summary_error", ""),
     }
 
 

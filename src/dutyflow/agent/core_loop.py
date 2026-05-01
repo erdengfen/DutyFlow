@@ -35,6 +35,7 @@ from dutyflow.agent.tools.executor import ToolExecutor
 from dutyflow.agent.tools.registry import ToolRegistry
 from dutyflow.agent.tools.router import ToolRouter
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope
+from dutyflow.context.phase_summary import PhaseSummaryService, PhaseSummaryStore
 from dutyflow.context.runtime_context import RuntimeContextManager
 
 
@@ -100,6 +101,7 @@ class AgentLoop:
         skill_registry: SkillRegistry | None = None,
         system_prompt_preamble: str = "",
         runtime_context_manager: RuntimeContextManager | None = None,
+        phase_summary_service: PhaseSummaryService | None = None,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -114,6 +116,9 @@ class AgentLoop:
         self.skill_registry = skill_registry or SkillRegistry.empty(cwd / "skills")
         self.system_prompt_preamble = system_prompt_preamble.strip()
         self.runtime_context_manager = runtime_context_manager or RuntimeContextManager()
+        self.phase_summary_service = phase_summary_service or PhaseSummaryService(
+            store=PhaseSummaryStore(self.cwd),
+        )
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
@@ -134,11 +139,15 @@ class AgentLoop:
         model_transport_attempts = 0
         active_recovery_ids: list[str] = []
         while True:
+            model_state: AgentState | None = None
             try:
                 model_state = self.runtime_context_manager.project_state_for_model(state)
+                self._maybe_create_phase_summary(state, model_state)
                 response = self.model_client.call_model(model_state, self.registry.list_specs())
             except Exception as exc:  # noqa: BLE001
                 failure_kind = self._classify_model_failure(exc)
+                if failure_kind == "context_overflow" and model_state is not None:
+                    self._maybe_create_phase_summary(state, model_state, forced_reason="context_overflow")
                 state, decision, recovery_id = self._register_model_recovery(
                     state=state,
                     failure_kind=failure_kind,
@@ -266,6 +275,33 @@ class AgentLoop:
                 return state
             return replace(state, messages=(system_message,) + state.messages[1:])
         return replace(state, messages=(system_message,) + state.messages)
+
+    def _maybe_create_phase_summary(
+        self,
+        state: AgentState,
+        model_state: AgentState,
+        *,
+        forced_reason: str = "",
+    ) -> None:
+        """按 Step 8 策略生成阶段摘要记录；当前不把摘要注入下一轮上下文。"""
+        working_set = self.runtime_context_manager.latest_working_set
+        if working_set is None:
+            return
+        try:
+            trigger, record = self.phase_summary_service.maybe_create_summary(
+                model_client=self.model_client,
+                state=state,
+                projected_messages=model_state.messages,
+                working_set=working_set,
+                delta=self.runtime_context_manager.latest_state_delta,
+                budget=self.runtime_context_manager.latest_budget_report,
+                forced_reason=forced_reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Phase Summary 尚未通过 Health Check 接管上下文，生成失败不能阻断主 loop。
+            self.runtime_context_manager.record_phase_summary(None, error=str(exc))
+            return
+        self.runtime_context_manager.record_phase_summary(trigger, record)
 
     def _register_model_recovery(
         self,

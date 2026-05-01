@@ -100,6 +100,9 @@ class RuntimeContextManager:
         self.latest_working_set: WorkingSet | None = None
         self.latest_state_delta: StateDelta | None = None
         self.latest_budget_report: ContextBudgetReport | None = None
+        self.latest_phase_summary_trigger = None
+        self.latest_phase_summary_record = None
+        self.latest_phase_summary_error = ""
         self.budget_estimator = ContextBudgetEstimator()
 
     def project(self, state: AgentState) -> tuple[AgentMessage, ...]:
@@ -192,6 +195,13 @@ class RuntimeContextManager:
         if projected_messages is state.messages:
             return state
         return replace(state, messages=projected_messages)
+
+    def record_phase_summary(self, trigger, record=None, error: str = "") -> None:
+        """记录最近一次阶段摘要触发状态，供 `/agent state` 等调试入口查看。"""
+        self.latest_phase_summary_trigger = trigger
+        if record is not None:
+            self.latest_phase_summary_record = record
+        self.latest_phase_summary_error = str(error)
 
 
 def _latest_text_by_role(messages: tuple[AgentMessage, ...], role: str) -> str:
