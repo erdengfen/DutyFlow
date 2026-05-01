@@ -22,6 +22,7 @@ from dutyflow.agent.state import (  # noqa: E402
     AgentState,
     append_assistant_message,
     append_tool_results,
+    append_user_message,
     create_initial_agent_state,
 )
 from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
@@ -129,6 +130,75 @@ class TestRuntimeContextManager(unittest.TestCase):
         self.assertEqual(delta.resolved_tool_use_ids, ("tool_1",))
         self.assertEqual(delta.new_tool_result_ids, ("tool_1",))
         self.assertEqual(delta.new_pending_tool_use_ids, ())
+
+    def test_micro_compact_keeps_fresh_tool_result_raw(self) -> None:
+        """刚写回的 tool_result 下一轮必须保持原文，供模型消费。"""
+        state = append_tool_results(
+            _pending_tool_state(),
+            (
+                AgentContentBlock(
+                    type="tool_result",
+                    tool_use_id="tool_1",
+                    tool_name="sample_tool",
+                    content="fresh raw result",
+                ),
+            ),
+        )
+        projected = RuntimeContextManager().project_state_for_model(state)
+        self.assertIs(projected, state)
+        self.assertEqual(projected.messages[-1].content[0].content, "fresh raw result")
+
+    def test_micro_compact_replaces_old_tool_result_without_mutating_source(self) -> None:
+        """被后续消息越过的旧 tool_result 应只在投影副本中收据化。"""
+        raw_content = (
+            '{"task_id":"task_777","file_path":"data/out.md","payload":"'
+            + ("x" * 1000)
+            + '"}'
+        )
+        state = append_tool_results(
+            _pending_tool_state(),
+            (
+                AgentContentBlock(
+                    type="tool_result",
+                    tool_use_id="tool_1",
+                    tool_name="sample_tool",
+                    content=raw_content,
+                ),
+            ),
+        )
+        continued = append_user_message(state, "继续处理")
+        projected = RuntimeContextManager().project_state_for_model(continued)
+        original_block = continued.messages[-2].content[0]
+        compacted_block = projected.messages[-2].content[0]
+        self.assertEqual(original_block.content, raw_content)
+        self.assertEqual(compacted_block.type, "tool_result")
+        self.assertEqual(compacted_block.tool_use_id, "tool_1")
+        self.assertEqual(compacted_block.tool_name, "sample_tool")
+        self.assertTrue(compacted_block.content.startswith("ToolReceipt("))
+        self.assertIn("tool_use_id=tool_1", compacted_block.content)
+        self.assertIn("ref=agent_state_tool_result:tool_1", compacted_block.content)
+        self.assertLess(len(compacted_block.content), len(raw_content))
+
+    def test_micro_compact_is_idempotent(self) -> None:
+        """已经收据化的 tool_result 不应被重复包裹。"""
+        state = append_tool_results(
+            _pending_tool_state(),
+            (
+                AgentContentBlock(
+                    type="tool_result",
+                    tool_use_id="tool_1",
+                    tool_name="sample_tool",
+                    content="old raw result",
+                ),
+            ),
+        )
+        continued = append_user_message(state, "继续处理")
+        projected_once = RuntimeContextManager().project_state_for_model(continued)
+        projected_twice = RuntimeContextManager().project_state_for_model(projected_once)
+        self.assertEqual(
+            projected_once.messages[-2].content[0].content,
+            projected_twice.messages[-2].content[0].content,
+        )
 
 
 class _MarkerRuntimeContextManager(RuntimeContextManager):

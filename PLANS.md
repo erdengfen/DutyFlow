@@ -1193,7 +1193,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 8: Runtime Context 与上下文投影
 
-状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束、`ModelContextView` 概念层第一版、Working Set 确定性构造、State Delta 构造和 Tool Receipt 数据结构与构造器。
+状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束、`ModelContextView` 概念层第一版、Working Set 确定性构造、State Delta 构造、Tool Receipt 数据结构与构造器，以及旧 `tool_result` 的确定性 micro-compact。
 
 ### 最终效果
 
@@ -1214,7 +1214,8 @@ Demo 期最终必须实现以下完整链路：
 - 【已完成】当前 `AgentLoop` 模型调用前已通过 `RuntimeContextManager` 做第一版 messages 投影。
 - 当前审计日志记录 tool input / tool result 的 preview，不保存完整 tool result。
 - 当前飞书事件、感知记录、任务、审批、后台任务结果等关键业务事实已经分别落盘。
-- 当前还没有工具结果收据化、上下文预算或压缩日志。
+- 【已完成】旧 `tool_result` 已在模型可见投影中确定性收据化；最新刚写回、下一轮必须消费的工具结果仍保留原文。
+- 当前还没有上下文预算或压缩日志。
 - 【已完成】主 Agent 和后台 subagent 的纯 system prompt 已收束到统一 prompt 配置。
 - `context_overflow`、`compact_attempts`、`context_compaction_pending` 等恢复字段已有概念位，但尚未接入真实压缩恢复。
 
@@ -1506,7 +1507,7 @@ emergency compact
 - [x] 实现 Working Set 构造。
 - [x] 实现 State Delta 构造。
 - [x] 实现 Tool Receipt 数据结构和构造器。
-- [ ] 实现旧 tool result 的确定性 micro-compact。
+- [x] 实现旧 tool result 的确定性 micro-compact。
 - [ ] 实现 Evidence Store，用于外置长工具结果和大对象摘要，不主动索引全部感知结果。
 - [ ] 实现 Context Budget，第一版输出估算 token。
 - [ ] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。

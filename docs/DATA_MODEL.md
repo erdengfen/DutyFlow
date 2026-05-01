@@ -374,6 +374,20 @@ updated_at: 2026-04-16T00:00:00+08:00
 - `summary` 可以有损，`tool_use_id`、`task_id`、`approval_id`、`perception_id`、`event_id` 和文件路径不得有损。
 - 第一版构造器只做确定性解析，不调用模型，不产生外部副作用。
 
+#### Micro Compact 投影规则
+
+旧 `tool_result` 的 micro-compact 是运行时投影规则，不是新的持久化数据结构。
+
+第一版规则：
+
+- 只在 `RuntimeContextManager` 生成模型可见 messages 时执行。
+- 不修改 canonical `AgentState.messages`，只返回可供模型客户端消费的投影副本。
+- 最近刚写回、下一轮模型必须消费的 `tool_result` 原文必须保留。
+- 已被后续用户消息或 assistant 消息越过的旧 `tool_result` 可以替换为 `ToolReceipt.to_context_text()`。
+- 替换后仍保持 `AgentContentBlock.type=tool_result`、`tool_use_id`、`tool_name` 和 `is_error`，避免破坏模型客户端的工具结果协议。
+- 已经收据化的 `tool_result` 必须保持幂等，不得重复包裹成新的 receipt。
+- 第一版 micro-compact 不调用模型、不落盘、不外置文件；Evidence Store 和 Compression Journal 后续接入。
+
 ### 2.8 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：

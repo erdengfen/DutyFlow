@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 
-from dutyflow.agent.state import AgentMessage, AgentState
+from dutyflow.agent.state import AgentContentBlock, AgentMessage, AgentState
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,7 @@ class RuntimeContextManager:
         working_set = self.build_working_set(state)
         self.latest_state_delta = self.build_state_delta(self.latest_working_set, working_set)
         self.latest_working_set = working_set
-        return self.project_messages(state)
+        return self.project_messages(state, working_set=working_set)
 
     def build_working_set(self, state: AgentState) -> WorkingSet:
         """从 AgentState 确定性构造当前模型调用前的工作集。"""
@@ -151,9 +151,31 @@ class RuntimeContextManager:
             new_waiting_recovery_scope_ids=_new_values(previous, current, "waiting_recovery_scope_ids"),
         )
 
-    def project_messages(self, state: AgentState) -> tuple[AgentMessage, ...]:
+    def project_messages(
+        self,
+        state: AgentState,
+        working_set: WorkingSet | None = None,
+    ) -> tuple[AgentMessage, ...]:
         """返回模型下一次调用应看到的 AgentMessage 序列。"""
-        return state.messages
+        return self.micro_compact_messages(state, working_set=working_set)
+
+    def micro_compact_messages(
+        self,
+        state: AgentState,
+        working_set: WorkingSet | None = None,
+    ) -> tuple[AgentMessage, ...]:
+        """把旧 tool_result 原文确定性替换为 Tool Receipt，不修改源状态。"""
+        active_working_set = working_set or self.build_working_set(state)
+        fresh_tool_result_ids = _fresh_tool_result_ids(state.messages)
+        compacted_messages: list[AgentMessage] = []
+        changed = False
+        for message in state.messages:
+            compacted = _micro_compact_message(message, active_working_set, fresh_tool_result_ids)
+            changed = changed or compacted is not message
+            compacted_messages.append(compacted)
+        if not changed:
+            return state.messages
+        return tuple(compacted_messages)
 
     def project_state_for_model(self, state: AgentState) -> AgentState:
         """把投影后的 messages 渲染回现有 AgentState 结构供模型客户端消费。"""
@@ -255,13 +277,68 @@ def _waiting_recovery_scope_ids(state: AgentState) -> tuple[str, ...]:
     return tuple(scope.scope_id for scope in state.recovery.recovery_scopes if scope.status == "waiting")
 
 
+def _fresh_tool_result_ids(messages: tuple[AgentMessage, ...]) -> frozenset[str]:
+    """识别下一轮模型必须原文消费的最新 tool_result。"""
+    if not messages:
+        return frozenset()
+    latest = messages[-1]
+    if latest.role != "user" or not latest.content:
+        return frozenset()
+    if not all(block.type == "tool_result" for block in latest.content):
+        return frozenset()
+    return frozenset(block.tool_use_id for block in latest.content if block.tool_use_id)
+
+
+def _micro_compact_message(
+    message: AgentMessage,
+    working_set: WorkingSet,
+    fresh_tool_result_ids: frozenset[str],
+) -> AgentMessage:
+    """压缩单条消息里的旧 tool_result block。"""
+    compacted_blocks: list[AgentContentBlock] = []
+    changed = False
+    for block in message.content:
+        compacted = _micro_compact_block(block, working_set, fresh_tool_result_ids)
+        changed = changed or compacted is not block
+        compacted_blocks.append(compacted)
+    if not changed:
+        return message
+    return replace(message, content=tuple(compacted_blocks))
+
+
+def _micro_compact_block(
+    block: AgentContentBlock,
+    working_set: WorkingSet,
+    fresh_tool_result_ids: frozenset[str],
+) -> AgentContentBlock:
+    """把旧工具结果块替换为单行 Tool Receipt。"""
+    if block.type != "tool_result" or block.tool_use_id in fresh_tool_result_ids:
+        return block
+    if _is_tool_receipt_text(block.content):
+        return block
+    from dutyflow.context.tool_receipt import ToolReceiptBuilder
+
+    receipt = ToolReceiptBuilder().from_agent_block(block, working_set=working_set)
+    return replace(block, content=receipt.to_context_text())
+
+
+def _is_tool_receipt_text(content: str) -> bool:
+    """判断工具结果是否已经被收据化，确保 micro-compact 幂等。"""
+    return str(content).strip().startswith("ToolReceipt(")
+
+
 _TASK_CONTROL_FIELDS = ("task_weight_level", "approval_status", "retry_status", "next_action")
 _RECOVERY_FIELDS = ("latest_interruption_reason", "latest_resume_point")
 
 
 def _self_test() -> None:
     """验证第一版投影层保持 messages 结构不变。"""
-    from dutyflow.agent.state import create_initial_agent_state
+    from dutyflow.agent.state import (
+        append_assistant_message,
+        append_tool_results,
+        append_user_message,
+        create_initial_agent_state,
+    )
 
     state = create_initial_agent_state("ctx_self_test", "hello")
     manager = RuntimeContextManager()
@@ -272,6 +349,25 @@ def _self_test() -> None:
     assert manager.latest_state_delta is not None
     assert manager.latest_state_delta.new_user_text == "hello"
     assert manager.project_messages(state) == state.messages
+    state = append_assistant_message(
+        state,
+        (AgentContentBlock(type="tool_use", tool_use_id="tool_1", tool_name="sample_tool"),),
+    )
+    state = append_tool_results(
+        state,
+        (
+            AgentContentBlock(
+                type="tool_result",
+                tool_use_id="tool_1",
+                tool_name="sample_tool",
+                content="raw result",
+            ),
+        ),
+    )
+    assert manager.project_state_for_model(state).messages[-1].content[0].content == "raw result"
+    state = append_user_message(state, "continue")
+    compacted = manager.project_state_for_model(state)
+    assert compacted.messages[-2].content[0].content.startswith("ToolReceipt(")
 
 
 if __name__ == "__main__":
