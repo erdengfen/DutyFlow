@@ -1193,7 +1193,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 8: Runtime Context 与上下文投影
 
-状态：进行中。已完成第 1 个功能点：主 Agent 和后台 subagent 的纯 system prompt 已移动到 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
+状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束，以及 `ModelContextView` 概念层第一版：模型调用前通过 Runtime Context 投影，输出仍为现有 `AgentMessage` / messages。
 
 ### 最终效果
 
@@ -1211,10 +1211,10 @@ Demo 期最终必须实现以下完整链路：
 
 ### 当前现状
 
-- 当前 `AgentLoop` 仍直接把 `AgentState.messages` 传给模型客户端。
+- 【已完成】当前 `AgentLoop` 模型调用前已通过 `RuntimeContextManager` 做第一版 messages 投影。
 - 当前审计日志记录 tool input / tool result 的 preview，不保存完整 tool result。
 - 当前飞书事件、感知记录、任务、审批、后台任务结果等关键业务事实已经分别落盘。
-- 当前还没有运行时上下文投影、工具结果收据化、上下文预算或压缩日志。
+- 当前还没有工具结果收据化、上下文预算或压缩日志。
 - 【已完成】主 Agent 和后台 subagent 的纯 system prompt 已收束到统一 prompt 配置。
 - `context_overflow`、`compact_attempts`、`context_compaction_pending` 等恢复字段已有概念位，但尚未接入真实压缩恢复。
 
@@ -1496,13 +1496,13 @@ emergency compact
 - Context Budget 第一版使用估算 token。
 - LLM Phase Summary 在 Step 8 内接入，但不做 rolling summary。
 - 主 Agent 和后台 subagent 的纯文本 system prompt 统一移动到 `src/dutyflow/config/prompt_config/` 管理；动态注入的 skills / tools 列表不放入该静态 prompt 配置。
+- 开发任何新增 context、receipt、evidence、journal 数据结构前，先更新 `docs/DATA_MODEL.md`。
 
 ### 任务清单
 
 - [x] 将主 Agent 和后台 subagent 的纯 system prompt 移入 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
-- [ ] 开发任何新增 context、receipt、evidence、journal 数据结构前，先更新 `docs/DATA_MODEL.md`。
-- [ ] 实现 `ModelContextView` 概念层，第一版直接输出现有 `AgentMessage` / messages，不新增独立结构。
-- [ ] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
+- [x] 实现 `ModelContextView` 概念层，第一版直接输出现有 `AgentMessage` / messages，不新增独立结构。
+- [x] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
 - [ ] 实现 Working Set 构造。
 - [ ] 实现 State Delta 构造。
 - [ ] 实现 Tool Receipt 数据结构和构造器。

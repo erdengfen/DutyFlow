@@ -35,6 +35,7 @@ from dutyflow.agent.tools.executor import ToolExecutor
 from dutyflow.agent.tools.registry import ToolRegistry
 from dutyflow.agent.tools.router import ToolRouter
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope
+from dutyflow.context.runtime_context import RuntimeContextManager
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class AgentLoop:
         max_model_recovery_attempts: int = 3,
         skill_registry: SkillRegistry | None = None,
         system_prompt_preamble: str = "",
+        runtime_context_manager: RuntimeContextManager | None = None,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -111,6 +113,7 @@ class AgentLoop:
         self.audit_logger = audit_logger
         self.skill_registry = skill_registry or SkillRegistry.empty(cwd / "skills")
         self.system_prompt_preamble = system_prompt_preamble.strip()
+        self.runtime_context_manager = runtime_context_manager or RuntimeContextManager()
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
@@ -132,7 +135,8 @@ class AgentLoop:
         active_recovery_ids: list[str] = []
         while True:
             try:
-                response = self.model_client.call_model(state, self.registry.list_specs())
+                model_state = self.runtime_context_manager.project_state_for_model(state)
+                response = self.model_client.call_model(model_state, self.registry.list_specs())
             except Exception as exc:  # noqa: BLE001
                 failure_kind = self._classify_model_failure(exc)
                 state, decision, recovery_id = self._register_model_recovery(
