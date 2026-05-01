@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -104,6 +105,30 @@ class TestRuntimeLoop(unittest.TestCase):
             self.assertEqual(loop.latest_result.final_text, "done")
             self.assertEqual(loop.latest_result.tool_result_count, 1)
             self.assertEqual(feedback.sent_texts, [("oc_fixture_chat", "done")])
+
+    def test_runtime_loop_exposes_agent_state_debug_payload(self) -> None:
+        """正式 runtime loop 应能暴露 canonical/projected messages 和预算报告。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _write_env(root)
+            perception = PerceptionRecordService(root)
+            record = _create_perception_record(perception, "run", message_id="msg_state_debug")
+            loop = RuntimeAgentLoop(
+                root,
+                config,
+                model_client=_FakeModelClient((_tool_response(), _text_response("done"))),
+                registry=_tool_test_registry(),
+                feedback_gateway=_FakeFeedbackGateway(),
+                perception_service=perception,
+            )
+            loop.handle_work_item(_work_item(record))
+            debug = loop.build_agent_state_debug_payload()
+        payload = debug["payload"]
+        self.assertEqual(debug["action"], "agent_state")
+        self.assertTrue(payload["compression"]["projected_changed"])
+        self.assertGreater(payload["budget_report"]["total_estimated_tokens"], 0)
+        self.assertIn("ToolReceipt(", json.dumps(payload["messages"]["projected"], ensure_ascii=False))
+        self.assertIn("hello", json.dumps(payload["messages"]["canonical"], ensure_ascii=False))
 
     def test_runtime_loop_receives_full_multiline_perception_text(self) -> None:
         """正式 runtime loop 读取 perception 时应拿到完整多行消息，而不是只剩第一行。"""

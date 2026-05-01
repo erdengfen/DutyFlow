@@ -20,6 +20,9 @@ class HealthCheckProvider(Protocol):
     def get_latest_chat_debug(self) -> str:
         """查看最近一条 /chat 调试任务结果。"""
 
+    def get_agent_state_debug(self) -> str:
+        """查看最近一次正式 runtime AgentState 调试视图。"""
+
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """运行本地飞书 fixture 接入调试。"""
 
@@ -60,6 +63,8 @@ class CliConsole:
             return self._format_health()
         if normalized == "/chat" or normalized.startswith("/chat "):
             return self._handle_chat(normalized)
+        if normalized == "/agent" or normalized.startswith("/agent "):
+            return self._handle_agent(normalized)
         if normalized == "/feishu" or normalized.startswith("/feishu "):
             return self._handle_feishu(normalized)
         if normalized in {"/help", "help", ""}:
@@ -105,6 +110,19 @@ class CliConsole:
             return self.app.submit_chat_debug_task(user_text)
         user_text = normalized.removeprefix("/chat").strip()
         return self.app.submit_chat_debug_task(user_text)
+
+    def _handle_agent(self, command: str) -> str:
+        """执行正式 Agent runtime 的只读调试命令。"""
+        normalized = command.strip()
+        if normalized in {"/agent", "/agent help"}:
+            return _agent_help_text()
+        if normalized == "/agent state":
+            return self.app.get_agent_state_debug()
+        return (
+            "Unsupported agent command: "
+            f"{normalized}\n"
+            f"{_agent_help_text()}"
+        )
 
     def _feishu_doctor_loop(self) -> bool:
         """进入飞书 doctor 诊断子会话，不承担启动监听语义。"""
@@ -175,6 +193,7 @@ class CliConsole:
             "/chat run 用户输入 - 提交一条非阻塞调试任务\n"
             "/chat status - 查看 /chat 调试 worker 状态\n"
             "/chat latest - 查看最近一条 /chat 调试结果\n"
+            "/agent state - 查看最近一次正式 runtime AgentState、projected messages 和 token budget\n"
             "/feishu - 查看当前飞书监听状态\n"
             "/feishu status - 查看当前飞书监听状态\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -193,6 +212,15 @@ def _chat_help_text() -> str:
         "/chat status - 查看调试 worker 状态\n"
         "/chat latest - 查看最近一条调试结果\n"
         "/chat help - 查看本说明"
+    )
+
+
+def _agent_help_text() -> str:
+    """返回正式 Agent runtime 调试命令说明。"""
+    return (
+        "Agent commands:\n"
+        "/agent state - 查看最近一次正式 runtime AgentState、projected messages 和 token budget\n"
+        "/agent help - 查看本说明"
     )
 
 
@@ -248,6 +276,10 @@ class _SelfTestApp:
         """返回自测最近 chat 结果。"""
         return '{"action": "completed", "payload": {"result_text": "chat=ok"}}'
 
+    def get_agent_state_debug(self) -> str:
+        """返回自测 AgentState 调试视图。"""
+        return '{"action": "agent_state", "payload": {"budget_report": {"total_estimated_tokens": 1}}}'
+
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """返回自测飞书 fixture 结果。"""
         return f'{{"action": "fixture", "detail": "{user_text}"}}'
@@ -275,6 +307,7 @@ def _self_test() -> None:
     assert "status=ok" in cli.handle_command("/health")
     assert "Supported commands" in cli.handle_command("/help")
     assert '"action": "accepted"' in cli.handle_command("/chat ping")
+    assert '"action": "agent_state"' in cli.handle_command("/agent state")
     assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
 

@@ -23,6 +23,7 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("/chat run", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/chat status", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/chat latest", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/agent state", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu status", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
@@ -38,6 +39,12 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"action": "accepted"', cli.handle_command("/chat run first"))
         self.assertIn('"action": "worker_status"', cli.handle_command("/chat status"))
         self.assertIn('"action": "completed"', cli.handle_command("/chat latest"))
+
+    def test_agent_state_command_is_available(self) -> None:
+        """CLI 应暴露正式 runtime AgentState 调试视图。"""
+        output = CliConsole(_FakeApp()).handle_command("/agent state")
+        self.assertIn('"action": "agent_state"', output)
+        self.assertIn('"budget_report"', output)
 
     def test_interactive_chat_no_longer_enters_blocking_sub_session(self) -> None:
         """交互式输入 /chat 时应立即返回结果，而不是进入 Chat> 子会话。"""
@@ -107,6 +114,10 @@ class _FakeApp:
     def get_latest_chat_debug(self) -> str:
         """返回最近一条调试任务结果。"""
         return '{"action": "completed", "payload": {"result_text": "pong"}}'
+
+    def get_agent_state_debug(self) -> str:
+        """返回测试 AgentState 调试视图。"""
+        return '{"action": "agent_state", "payload": {"budget_report": {"total_estimated_tokens": 1}}}'
 
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """返回测试飞书 fixture 结果。"""

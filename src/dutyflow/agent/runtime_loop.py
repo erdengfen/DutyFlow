@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from dutyflow.agent.core_loop import AgentLoop, AgentLoopResult
 from dutyflow.agent.model_client import ModelClient, OpenAICompatibleModelClient
 from dutyflow.agent.runtime_service import RuntimeWorkItem
 from dutyflow.agent.skills import SkillRegistry
+from dutyflow.agent.state import AgentMessage, AgentState
 from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry
 from dutyflow.config.env import EnvConfig
 from dutyflow.config.prompt_config import get_main_agent_system_prompt
@@ -64,6 +66,7 @@ class RuntimeAgentLoop:
             system_prompt_preamble=get_main_agent_system_prompt(),
         )
         self.latest_result: RuntimeLoopExecutionResult | None = None
+        self.latest_agent_loop_result: AgentLoopResult | None = None
 
     def handle_work_item(self, work_item: RuntimeWorkItem) -> None:
         """消费一条 runtime work item，并把结果通过统一反馈接口发回会话。"""
@@ -73,6 +76,7 @@ class RuntimeAgentLoop:
             query_id=work_item.work_id,
             tool_content=_build_runtime_tool_content(work_item, loop_input),
         )
+        self.latest_agent_loop_result = loop_result
         feedback = self._send_feedback(loop_input, loop_result)
         self.latest_result = RuntimeLoopExecutionResult(
             work_id=work_item.work_id,
@@ -84,6 +88,26 @@ class RuntimeAgentLoop:
             feedback_status=feedback.status,
             feedback_ok=feedback.ok,
         )
+
+    def build_agent_state_debug_payload(self) -> dict[str, Any]:
+        """返回最近一次正式 runtime AgentState 的只读调试视图。"""
+        if self.latest_agent_loop_result is None:
+            return {
+                "status": "empty",
+                "action": "no_agent_state",
+                "detail": "formal runtime has not completed an agent loop yet",
+                "payload": {},
+            }
+        loop_result = self.latest_agent_loop_result
+        state = loop_result.state
+        projected_messages = _project_messages_for_debug(self.agent_loop, state)
+        budget = self.agent_loop.runtime_context_manager.estimate_budget(projected_messages)
+        return {
+            "status": "ok",
+            "action": "agent_state",
+            "detail": "latest formal runtime agent state debug view",
+            "payload": _agent_state_debug_payload(state, loop_result, projected_messages, budget.to_dict()),
+        }
 
     def _require_loop_input(self, perception_id: str) -> dict[str, Any]:
         """按 perception_id 读取正式 loop 所需的标准输入。"""
@@ -207,6 +231,147 @@ _CLI_TOOL_NAMES = (
     "exec_cli_command",
     "close_cli_session",
 )
+
+# 关键开关：CLI 查看 AgentState 时每个 block 只展示 600 字，避免调试输出再次膨胀。
+STATE_DEBUG_BLOCK_PREVIEW_CHARS = 600
+
+
+def _project_messages_for_debug(agent_loop: AgentLoop, state: AgentState) -> tuple[AgentMessage, ...]:
+    """构造调试用投影 messages，不写回 canonical AgentState。"""
+    manager = agent_loop.runtime_context_manager
+    working_set = manager.build_working_set(state)
+    return manager.project_messages(state, working_set=working_set)
+
+
+def _agent_state_debug_payload(
+    state: AgentState,
+    loop_result: AgentLoopResult,
+    projected_messages: tuple[AgentMessage, ...],
+    budget_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """组装正式 runtime AgentState 的调试 payload。"""
+    return {
+        "state": _state_debug_summary(state),
+        "latest_result": _loop_result_debug(loop_result),
+        "compression": _compression_debug(state.messages, projected_messages),
+        "budget_report": budget_report,
+        "messages": {
+            "canonical": _messages_debug(state.messages),
+            "projected": _messages_debug(projected_messages),
+        },
+    }
+
+
+def _state_debug_summary(state: AgentState) -> dict[str, Any]:
+    """返回 AgentState 的控制面摘要。"""
+    return {
+        "query_id": state.query_id,
+        "turn_count": state.turn_count,
+        "transition_reason": state.transition_reason,
+        "current_event_id": state.current_event_id,
+        "current_task_id": state.current_task_id,
+        "pending_tool_use_ids": list(state.pending_tool_use_ids),
+        "last_tool_result_ids": list(state.last_tool_result_ids),
+        "message_count": len(state.messages),
+        "created_at": state.created_at,
+        "updated_at": state.updated_at,
+    }
+
+
+def _loop_result_debug(loop_result: AgentLoopResult) -> dict[str, Any]:
+    """返回最近一次 AgentLoopResult 的简要调试信息。"""
+    return {
+        "final_text": loop_result.final_text,
+        "stop_reason": loop_result.stop_reason,
+        "turn_count": loop_result.turn_count,
+        "tool_result_count": loop_result.tool_result_count,
+        "pending_restart_count": len(loop_result.pending_restarts),
+    }
+
+
+def _compression_debug(
+    canonical_messages: tuple[AgentMessage, ...],
+    projected_messages: tuple[AgentMessage, ...],
+) -> dict[str, Any]:
+    """返回 canonical 与 projected messages 的压缩差异摘要。"""
+    return {
+        "projected_changed": projected_messages != canonical_messages,
+        "canonical_message_count": len(canonical_messages),
+        "projected_message_count": len(projected_messages),
+        "canonical_tool_result_count": _tool_result_count(canonical_messages),
+        "projected_tool_receipt_count": _tool_receipt_count(projected_messages),
+        "projected_active_tool_result_count": _active_tool_result_count(projected_messages),
+    }
+
+
+def _messages_debug(messages: tuple[AgentMessage, ...]) -> list[dict[str, Any]]:
+    """把 messages 转为可读调试列表。"""
+    return [_message_debug(index, message) for index, message in enumerate(messages)]
+
+
+def _message_debug(index: int, message: AgentMessage) -> dict[str, Any]:
+    """把单条 AgentMessage 转为可读调试字典。"""
+    return {
+        "index": index,
+        "role": message.role,
+        "block_count": len(message.content),
+        "content": [_block_debug(block_index, block) for block_index, block in enumerate(message.content)],
+    }
+
+
+def _block_debug(index: int, block) -> dict[str, Any]:
+    """把单个 content block 转为可读调试字典。"""
+    content = _block_debug_content(block)
+    return {
+        "index": index,
+        "type": block.type,
+        "tool_use_id": block.tool_use_id,
+        "tool_name": block.tool_name,
+        "is_error": block.is_error,
+        "content_chars": len(content),
+        "content_preview": _preview(content, STATE_DEBUG_BLOCK_PREVIEW_CHARS),
+    }
+
+
+def _block_debug_content(block) -> str:
+    """提取 block 在调试视图中的主要内容。"""
+    if block.type == "text":
+        return block.text
+    if block.type == "tool_result":
+        return block.content
+    if block.type == "tool_use":
+        return json.dumps(dict(block.tool_input), ensure_ascii=False, sort_keys=True)
+    return block.text or block.content
+
+
+def _tool_result_count(messages: tuple[AgentMessage, ...]) -> int:
+    """统计 messages 中 tool_result block 数量。"""
+    return sum(1 for message in messages for block in message.content if block.type == "tool_result")
+
+
+def _tool_receipt_count(messages: tuple[AgentMessage, ...]) -> int:
+    """统计 projected messages 中 ToolReceipt 数量。"""
+    return sum(1 for message in messages for block in message.content if _is_tool_receipt_block(block))
+
+
+def _active_tool_result_count(messages: tuple[AgentMessage, ...]) -> int:
+    """统计 projected messages 中仍保留原文的 tool_result 数量。"""
+    return sum(
+        1 for message in messages for block in message.content if block.type == "tool_result" and not _is_tool_receipt_block(block)
+    )
+
+
+def _is_tool_receipt_block(block) -> bool:
+    """判断 block 是否是已收据化的工具结果。"""
+    return block.type == "tool_result" and str(block.content).strip().startswith("ToolReceipt(")
+
+
+def _preview(text: str, max_chars: int) -> str:
+    """返回单行预览文本。"""
+    normalized = " ".join(str(text).split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[: max_chars - 3] + "..."
 
 
 def _now_iso() -> str:

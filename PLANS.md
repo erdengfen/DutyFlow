@@ -1217,6 +1217,7 @@ Demo 期最终必须实现以下完整链路：
 - 【已完成】旧 `tool_result` 已在模型可见投影中确定性收据化；最新刚写回、下一轮必须消费的工具结果仍保留原文。
 - 【已完成】Evidence Store 已支持把显式传入的长工具结果和大对象内容外置到 `data/contexts/evidence/`，不主动索引感知记录。
 - 【已完成】Context Budget 已能对投影后的 messages 输出估算 token、lane 聚合和最大条目预览。
+- 【已完成】CLI 已提供 `/agent state` 查看最近一次正式 runtime AgentState、projected messages 和 token budget。
 - 当前还没有压缩日志。
 - 【已完成】主 Agent 和后台 subagent 的纯 system prompt 已收束到统一 prompt 配置。
 - `context_overflow`、`compact_attempts`、`context_compaction_pending` 等恢复字段已有概念位，但尚未接入真实压缩恢复。
@@ -1437,6 +1438,7 @@ emergency compact
 
 - `/compress`：触发 RuntimeContextManager 对当前 debug session 或指定 task scope 做一次手动投影 / 压缩。
 - `/clear`：只清理允许清理的临时上下文，不删除事件、感知、审计、任务、审批、结果和上下文日志。
+- `/agent state`：查看最近一次正式 runtime 的 canonical messages、projected messages、压缩差异摘要和 token budget。
 - 正式 runtime 不依赖 CLI 命令才能进行自动上下文管理。
 
 ### 验收标准

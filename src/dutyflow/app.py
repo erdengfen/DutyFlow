@@ -230,6 +230,22 @@ class DutyFlowApp:
             payload=payload,
         )
 
+    def get_agent_state_debug(self) -> str:
+        """返回最近一次正式 runtime AgentState 和上下文预算调试视图。"""
+        if self._runtime_loop is None:
+            payload = {
+                "status": "empty",
+                "action": "no_runtime_loop",
+                "detail": "formal runtime loop has not started yet",
+                "payload": {},
+            }
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(
+            self._runtime_loop.build_agent_state_debug_payload(),
+            ensure_ascii=False,
+            indent=2,
+        )
+
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """使用本地 fixture 事件验证 Step 5 接入链路。"""
         if not user_text.strip():

@@ -107,6 +107,13 @@ class TestAppEntry(unittest.TestCase):
         self.assertEqual(payload["status"], "empty")
         self.assertEqual(payload["action"], "no_worker")
 
+    def test_agent_state_debug_is_empty_before_runtime_loop_start(self) -> None:
+        """正式 runtime loop 尚未创建时，AgentState 调试视图应明确返回 empty。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        payload = json.loads(app.get_agent_state_debug())
+        self.assertEqual(payload["status"], "empty")
+        self.assertEqual(payload["action"], "no_runtime_loop")
+
     def test_submit_chat_debug_task_eventually_produces_latest_result(self) -> None:
         """提交非阻塞 /chat 任务后，应能轮询拿到最近结果。"""
         app = DutyFlowApp(PROJECT_ROOT)
