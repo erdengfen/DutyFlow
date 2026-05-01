@@ -56,7 +56,7 @@ class TestRuntimeLoop(unittest.TestCase):
             loop = RuntimeAgentLoop(root, config, feedback_gateway=_FakeFeedbackGateway())
             state = loop.agent_loop._prepare_state("hello", "q_runtime", None)
             system_text = state.messages[0].content[0].text
-            self.assertIn("You are a personal assistant designed for workplace scenarios.", system_text)
+            self.assertIn("You are DutyFlow, a personal assistant designed for workplace scenarios.", system_text)
             self.assertIn("Always respond in Chinese", system_text)
             self.assertIn("Skills available:", system_text)
             self.assertIn("alpha_skill", system_text)

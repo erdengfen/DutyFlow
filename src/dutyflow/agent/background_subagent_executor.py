@@ -17,6 +17,7 @@ from dutyflow.agent.model_client import ModelClient, ModelResponse
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.state import AgentContentBlock
 from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry
+from dutyflow.config.prompt_config import get_background_subagent_system_prompt
 from dutyflow.tasks.task_result import TaskResultStore
 from dutyflow.tasks.task_state import TaskRecord
 
@@ -105,7 +106,7 @@ class BackgroundSubagentExecutor:
             approval_requester=None,
             audit_logger=self.audit_logger,
             skill_registry=skill_registry,
-            system_prompt_preamble=_BACKGROUND_SUBAGENT_SYSTEM_PROMPT,
+            system_prompt_preamble=get_background_subagent_system_prompt(),
         )
 
     def _write_task_result(self, task: TaskRecord, result: BackgroundSubagentResult) -> None:
@@ -268,15 +269,6 @@ def _trim_summary(text: str) -> str:
     if len(normalized) <= _RESULT_SUMMARY_MAX_CHARS:
         return normalized
     return normalized[: _RESULT_SUMMARY_MAX_CHARS - 3] + "..."
-
-
-_BACKGROUND_SUBAGENT_SYSTEM_PROMPT = (
-    "You are a DutyFlow background subagent. "
-    "Execute exactly one persisted background task at a time. "
-    "Use only the tools and skills exposed to this task. "
-    "Do not claim completion when required context, permissions, or approvals are missing. "
-    "Always respond in Chinese with a concise user-visible final result."
-)
 
 
 def _self_test() -> None:

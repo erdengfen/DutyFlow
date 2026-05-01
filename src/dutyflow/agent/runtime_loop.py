@@ -13,6 +13,7 @@ from dutyflow.agent.runtime_service import RuntimeWorkItem
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.agent.tools.registry import ToolRegistry, create_runtime_tool_registry
 from dutyflow.config.env import EnvConfig
+from dutyflow.config.prompt_config import get_main_agent_system_prompt
 from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.logging.audit_log import AuditLogger
 from dutyflow.perception.store import PerceptionRecordService
@@ -60,7 +61,7 @@ class RuntimeAgentLoop:
             approval_requester=None,
             audit_logger=audit_logger,
             skill_registry=skill_registry or SkillRegistry(self.project_root / "skills"),
-            system_prompt_preamble=_RUNTIME_SYSTEM_PROMPT,
+            system_prompt_preamble=get_main_agent_system_prompt(),
         )
         self.latest_result: RuntimeLoopExecutionResult | None = None
 
@@ -201,14 +202,6 @@ def _build_empty_reply_summary(loop_result: AgentLoopResult) -> str:
     return "已收到消息，当前未生成直接回复文本。"
 
 
-_RUNTIME_SYSTEM_PROMPT = (
-    "You are a personal assistant designed for workplace scenarios. "
-    "Use the available skills and tools to infer and refine relationship context from the local knowledge base, "
-    "then help the user handle work items or provide practical recommendations. "
-    "Do not use Markdown in user-facing replies. "
-    "Always respond in Chinese with clear meaning and well-structured logic."
-)
-
 _CLI_TOOL_NAMES = (
     "open_cli_session",
     "exec_cli_command",
@@ -225,9 +218,7 @@ def _self_test() -> None:
     """验证正式 runtime loop 可消费一条感知记录并走到统一反馈出口。"""
     from tempfile import TemporaryDirectory
 
-    from dutyflow.agent.model_client import ModelResponse
     from dutyflow.agent.runtime_service import RuntimeLoopInput
-    from dutyflow.agent.state import AgentContentBlock
     from dutyflow.feishu.events import FeishuEventAdapter
 
     with TemporaryDirectory() as temp_dir:
@@ -287,6 +278,10 @@ class _SelfTestModelClient:
     """为 runtime loop 自测提供最小文本响应。"""
 
     def call_model(self, state, tools) -> object:
+        """返回固定文本响应，避免触发真实模型调用。"""
+        from dutyflow.agent.model_client import ModelResponse
+        from dutyflow.agent.state import AgentContentBlock
+
         del state, tools
         return ModelResponse((AgentContentBlock(type="text", text="ok"),), "stop")
 

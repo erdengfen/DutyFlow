@@ -1193,7 +1193,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 8: Runtime Context 与上下文投影
 
-状态：待开始。本阶段不再把目标定义为简单压缩 `messages`，而是建立运行时上下文层，把完整运行历史转化为下一次模型调用真正需要的工作视图。
+状态：进行中。已完成第 1 个功能点：主 Agent 和后台 subagent 的纯 system prompt 已移动到 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
 
 ### 最终效果
 
@@ -1215,7 +1215,7 @@ Demo 期最终必须实现以下完整链路：
 - 当前审计日志记录 tool input / tool result 的 preview，不保存完整 tool result。
 - 当前飞书事件、感知记录、任务、审批、后台任务结果等关键业务事实已经分别落盘。
 - 当前还没有运行时上下文投影、工具结果收据化、上下文预算或压缩日志。
-- 当前主 Agent 和后台 subagent 的纯 system prompt 仍散落在调用侧，需要收束到统一 prompt 配置。
+- 【已完成】主 Agent 和后台 subagent 的纯 system prompt 已收束到统一 prompt 配置。
 - `context_overflow`、`compact_attempts`、`context_compaction_pending` 等恢复字段已有概念位，但尚未接入真实压缩恢复。
 
 ### 核心设计
@@ -1499,7 +1499,7 @@ emergency compact
 
 ### 任务清单
 
-- [ ] 将主 Agent 和后台 subagent 的纯 system prompt 移入 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
+- [x] 将主 Agent 和后台 subagent 的纯 system prompt 移入 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
 - [ ] 开发任何新增 context、receipt、evidence、journal 数据结构前，先更新 `docs/DATA_MODEL.md`。
 - [ ] 实现 `ModelContextView` 概念层，第一版直接输出现有 `AgentMessage` / messages，不新增独立结构。
 - [ ] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
