@@ -388,7 +388,71 @@ updated_at: 2026-04-16T00:00:00+08:00
 - 已经收据化的 `tool_result` 必须保持幂等，不得重复包裹成新的 receipt。
 - 第一版 micro-compact 不调用模型、不落盘、不外置文件；Evidence Store 和 Compression Journal 后续接入。
 
-### 2.8 中断原因与恢复点枚举
+### 2.8 Runtime Context Evidence Record
+
+`EvidenceRecord` 是运行时上下文把长工具结果或大对象摘要外置到本地 Markdown 后形成的证据记录。它只保存调用方显式传入的内容，不主动扫描、复制或索引飞书原始事件、感知记录、审批记录和任务记录。
+
+存储位置：
+
+```text
+data/contexts/evidence/evid_<id>.md
+```
+
+Frontmatter 字段：
+
+- `schema`：固定为 `dutyflow.context_evidence.v1`。
+- `id`：证据 ID，格式为 `evid_<id>`。
+- `source_type`：来源类型，第一版建议值为 `tool_result`、`file_result`、`observation`、`manual`。
+- `source_id`：来源对象 ID，例如 `tool_use_id`、文件 ID 或外部观察 ID。
+- `tool_use_id`：相关工具调用 ID，可为空。
+- `tool_name`：相关工具名，可为空。
+- `task_id`：相关任务 ID，可为空。
+- `event_id`：相关事件 ID，可为空。
+- `source_path`：来源文件或对象路径，可为空。
+- `content_format`：内容格式，第一版建议值为 `text`、`json`、`markdown`。
+- `content_size`：原始内容字符数。
+- `content_sha256`：原始内容 SHA-256，用于校验证据内容是否变化。
+- `created_at`：创建时间。
+- `summary_preview`：短摘要预览，仅用于列表查看。
+
+正文结构：
+
+```markdown
+# Evidence evid_xxx
+
+## Summary
+
+短摘要。
+
+## Source
+
+- source_type: tool_result
+- source_id: tool_1
+- tool_use_id: tool_1
+- tool_name: lookup_contact_identity
+- task_id: task_1
+- event_id: evt_1
+- source_path:
+- content_format: json
+- content_size: 1234
+- content_sha256: ...
+
+## Content
+
+<!-- dutyflow:evidence-content:start -->
+完整长内容
+<!-- dutyflow:evidence-content:end -->
+```
+
+约束：
+
+- Evidence Store 只负责外置调用方传入的长内容，不主动建立全局索引。
+- `content_sha256` 必须基于原始 content 计算，不能基于摘要计算。
+- `summary_preview` 可以有损，`id`、`source_id`、`tool_use_id`、`task_id`、`event_id`、`source_path` 和 `content_sha256` 不得有损。
+- 证据正文可以保存完整长工具结果；模型上下文只引用 `evidence:data/contexts/evidence/evid_<id>.md` 一类句柄。
+- 第一版 Evidence Store 不调用模型、不做摘要生成；摘要由调用方提供，缺省时使用确定性截断。
+
+### 2.9 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 
