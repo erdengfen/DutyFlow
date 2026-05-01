@@ -452,7 +452,57 @@ Frontmatter 字段：
 - 证据正文可以保存完整长工具结果；模型上下文只引用 `evidence:data/contexts/evidence/evid_<id>.md` 一类句柄。
 - 第一版 Evidence Store 不调用模型、不做摘要生成；摘要由调用方提供，缺省时使用确定性截断。
 
-### 2.9 中断原因与恢复点枚举
+### 2.9 Runtime Context Budget
+
+`ContextBudgetReport` 是 `RuntimeContextManager` 对模型可见 messages 做出的上下文预算估算。它是内存结构，第一版不新增持久化文件；后续如落盘，应写入 `Compression Journal` 或 context 预算日志。
+
+第一版只做估算和分类，不改变 messages，不触发压缩，不调用模型。
+
+字段：
+
+- `total_estimated_tokens`：总估算 token 数。
+- `total_chars`：参与估算的可见文本字符数。
+- `message_count`：参与估算的消息数。
+- `block_count`：参与估算的内容块数。
+- `lane_usages`：按上下文 lane 聚合的估算用量。
+- `largest_items`：估算 token 最高的若干 message/block 条目，用于后续可视化和定位膨胀来源。
+- `estimator_version`：估算器版本，例如 `heuristic_cjk_v1`。
+
+`ContextBudgetLaneUsage` 字段：
+
+- `lane`：上下文 lane，第一版建议值为 `system_instructions`、`latest_user_input`、`active_tool_result`、`tool_receipt`、`assistant_context`、`history`、`unknown`。
+- `estimated_tokens`：该 lane 的估算 token 数。
+- `chars`：该 lane 的文本字符数。
+- `message_count`：该 lane 涉及的消息数。
+- `block_count`：该 lane 涉及的内容块数。
+
+`ContextBudgetItem` 字段：
+
+- `message_index`：消息序号。
+- `block_index`：block 序号。
+- `role`：消息角色。
+- `block_type`：block 类型。
+- `lane`：该条目归属 lane。
+- `tool_use_id`：相关工具调用 ID，可为空。
+- `tool_name`：相关工具名，可为空。
+- `estimated_tokens`：该条目估算 token 数。
+- `chars`：该条目可见文本字符数。
+- `preview`：短预览，用于调试和可视化。
+
+估算规则：
+
+- 中文、日文、韩文等 CJK 字符按 1 字符约 1 token 估算。
+- 非 CJK 文本按约 4 字符 1 token 估算。
+- 每条 message 和每个 block 叠加固定结构开销，反映 provider 消息包装成本。
+- 估算结果只用于预算、可视化和后续触发压缩的参考，不作为计费或模型真实 token 统计。
+
+约束：
+
+- `ContextBudgetReport` 只能基于模型可见 messages 计算，不应读取未投影的完整历史。
+- 第一版不得因为预算超限自动删除内容；压缩动作由后续 Step 8 的 health check、journal 和 recovery 链路统一接入。
+- `preview` 可以有损，`message_index`、`block_index`、`tool_use_id` 和 `tool_name` 不得有损。
+
+### 2.10 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 

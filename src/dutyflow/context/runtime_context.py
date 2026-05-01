@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 
 from dutyflow.agent.state import AgentContentBlock, AgentMessage, AgentState
+from dutyflow.context.context_budget import ContextBudgetEstimator, ContextBudgetReport
 
 
 @dataclass(frozen=True)
@@ -98,13 +99,17 @@ class RuntimeContextManager:
         """初始化最近一次工作集快照。"""
         self.latest_working_set: WorkingSet | None = None
         self.latest_state_delta: StateDelta | None = None
+        self.latest_budget_report: ContextBudgetReport | None = None
+        self.budget_estimator = ContextBudgetEstimator()
 
     def project(self, state: AgentState) -> tuple[AgentMessage, ...]:
         """返回 ModelContextView 概念层对应的现有 messages 表示。"""
         working_set = self.build_working_set(state)
         self.latest_state_delta = self.build_state_delta(self.latest_working_set, working_set)
         self.latest_working_set = working_set
-        return self.project_messages(state, working_set=working_set)
+        projected_messages = self.project_messages(state, working_set=working_set)
+        self.latest_budget_report = self.estimate_budget(projected_messages)
+        return projected_messages
 
     def build_working_set(self, state: AgentState) -> WorkingSet:
         """从 AgentState 确定性构造当前模型调用前的工作集。"""
@@ -158,6 +163,10 @@ class RuntimeContextManager:
     ) -> tuple[AgentMessage, ...]:
         """返回模型下一次调用应看到的 AgentMessage 序列。"""
         return self.micro_compact_messages(state, working_set=working_set)
+
+    def estimate_budget(self, messages: tuple[AgentMessage, ...]) -> ContextBudgetReport:
+        """估算模型可见 messages 的上下文预算占用。"""
+        return self.budget_estimator.estimate_messages(messages)
 
     def micro_compact_messages(
         self,
@@ -348,6 +357,8 @@ def _self_test() -> None:
     assert manager.latest_working_set.latest_user_text == "hello"
     assert manager.latest_state_delta is not None
     assert manager.latest_state_delta.new_user_text == "hello"
+    assert manager.latest_budget_report is not None
+    assert manager.latest_budget_report.total_estimated_tokens > 0
     assert manager.project_messages(state) == state.messages
     state = append_assistant_message(
         state,
