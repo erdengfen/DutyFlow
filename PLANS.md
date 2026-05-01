@@ -1191,41 +1191,328 @@ Demo 期最终必须实现以下完整链路：
 - [x] 确认第一版后台任务即时确认文案风格。
   - 风格为简洁、稳重。
 
-## Step 8: 上下文摘要、清理与压缩
+## Step 8: Runtime Context 与上下文投影
+
+状态：待开始。本阶段不再把目标定义为简单压缩 `messages`，而是建立运行时上下文层，把完整运行历史转化为下一次模型调用真正需要的工作视图。
 
 ### 最终效果
 
-系统可保存近场上下文、生成轻量摘要、处理 `/clear` 和 `/compress` CLI 命令，并保证上下文压缩不会丢失任务目标、关键事实、责任关系和下一步。
+正式 AgentLoop 不再把内部 `AgentState.messages` 原样视为模型输入。系统在每次模型调用前由 `RuntimeContextManager` 生成经过投影、压缩和重排后的 messages，只把当前决策所需的信息投影给模型，同时把原始事实、运行审计、工具结果和大对象保留在本地文件锚点中。
+
+第一版 `ModelContextView` 只作为概念名称，不新增独立数据结构；压缩层输出仍直接渲染为现有 `AgentMessage` / `state.messages` 可消费的 messages。
+
+核心原则：
+
+- 上下文压缩不是丢信息，而是改表示。
+- 运行时上下文管理不是 token 优化，而是责任链保护。
+- 原始事实尽量落盘，运行历史可审计，当前工作视图保持短、准、可行动。
+- 可以压缩文本，但不能压缩丢失锚点。
+- `task_id`、`approval_id`、`perception_id`、`event_id`、`tool_use_id`、文件路径、用户确认状态、错误类型和最终动作必须无损保留。
+
+### 当前现状
+
+- 当前 `AgentLoop` 仍直接把 `AgentState.messages` 传给模型客户端。
+- 当前审计日志记录 tool input / tool result 的 preview，不保存完整 tool result。
+- 当前飞书事件、感知记录、任务、审批、后台任务结果等关键业务事实已经分别落盘。
+- 当前还没有运行时上下文投影、工具结果收据化、上下文预算或压缩日志。
+- 当前主 Agent 和后台 subagent 的纯 system prompt 仍散落在调用侧，需要收束到统一 prompt 配置。
+- `context_overflow`、`compact_attempts`、`context_compaction_pending` 等恢复字段已有概念位，但尚未接入真实压缩恢复。
+
+### 核心设计
+
+新增运行时上下文层：
+
+```text
+AgentState
+  ↓
+RuntimeContextManager.project()
+  ↓
+Projected messages / ModelContextView 概念层
+  ↓
+ModelClient
+```
+
+`AgentState.messages` 是内部运行历史，不等于下一次模型调用上下文。`ModelContextView` 是面向下一次模型调用的工作视图概念，第一版不新增 class 或 provider-neutral message 结构。
+
+`RuntimeContextManager` 第一版职责：
+
+- `project`：从 `AgentState`、任务状态、审批状态、感知记录和工具收据生成模型可见视图。
+- `micro_compact`：确定性压缩旧 tool result，把原文替换为 Tool Receipt。
+- `offload`：把大对象、长工具输出或长文件内容外置到本地 Markdown 证据文件。
+- `budget`：按上下文价值分配模型输入预算，而不是只按轮数截断。
+- `recover`：在 `context_overflow` 后执行应急压缩并重试。
+- `journal`：记录每次上下文投影、压缩、外置和恢复动作。
+
+### 五层上下文模型
+
+模型输入优先由以下五层组成：
+
+```text
+L0 Immutable Instructions
+    系统规则、权限边界、工具使用规则
+
+L1 Current Mission
+    当前用户目标、当前任务、当前阶段、成功标准
+
+L2 Active Working Set
+    最近必要消息、待审批项、活跃工具收据、当前事件和当前文件
+
+L3 Compressed History
+    阶段摘要、历史决策、失败与恢复摘要
+
+L4 External Evidence
+    本地文件、审计日志、事件原文、工具完整结果、任务结果、知识库和 agent wiki
+```
+
+每轮模型调用主要使用：
+
+```text
+L0 + L1 + L2 + 必要 L3 + L4 索引
+```
+
+不再默认使用完整历史重放。
+
+### Tool Receipt
+
+旧 tool result 不应长期保留完整原文在模型上下文中。系统应把旧工具结果改写为 Tool Receipt。
+
+第一版 Tool Receipt 必须至少保留：
+
+- 工具名
+- `tool_use_id`
+- 执行结果：成功、失败、被拒绝、等待审批
+- 错误类型或 stop reason
+- 关键摘要
+- 相关锚点：`task_id`、`approval_id`、`perception_id`、`event_id`、文件路径
+- 完整结果位置或重取方式
+- 是否影响当前决策
+
+约束：
+
+- Tool Receipt 不是简单 placeholder。
+- 模型必须能从 receipt 理解“发生过什么、是否可靠、去哪追溯”。
+- 能重取的内容可以只保留引用；不能重取且影响决策的内容必须写入业务文件或 evidence 文件。
+
+### Evidence Vault
+
+对上下文窗口不友好的大内容进入外置证据层。
+
+第一版 Evidence Vault 只保存运行过程中的长工具结果和大对象摘要，不主动复制或索引全部飞书事件、感知记录、审批记录和任务结果。已有事件、感知、任务、审批文件仍作为业务锚点存在，但不由 Step 8 主动探索和重建索引。
+
+第一版证据来源：
+
+- 长工具输出：`data/contexts/evidence/`
+- 大文件读取结果摘要：`data/contexts/evidence/`
+- 需要从模型上下文外置的长 observation：`data/contexts/evidence/`
+
+模型上下文只保留证据索引：
+
+- 证据 ID
+- 来源类型
+- 来源路径
+- 简短摘要
+- 可信级别或来源说明
+- 是否与当前任务相关
+- 可重取方式
+
+### Working Set 与 State Delta
+
+`RuntimeContextManager` 每轮要维护当前 Working Set，而不是线性聊天记录。
+
+Working Set 至少包括：
+
+- 当前目标和当前任务
+- 最新用户输入
+- 当前阶段状态
+- 活跃任务
+- 待审批动作
+- 最近失败和恢复点
+- 关键权限边界
+- 最近必要 Tool Receipt
+- 必要证据索引
+
+State Delta 用于避免重复注入历史。每轮模型调用前只补充：
+
+- 上一次模型调用后新增的用户消息
+- 新增或变化的任务状态
+- 新增或变化的审批状态
+- 新增工具结果或工具收据
+- 新增失败、恢复、回推结果
+
+### Context Budget
+
+上下文预算不按“超过 N 轮”单一规则处理，而是按价值分配。
+
+预算优先级：
+
+- 系统规则和权限边界：不可压缩。
+- 最新用户输入：高优先级，不压缩。
+- 当前任务目标、任务状态、审批状态：高优先级，短格式。
+- 当前 Working Set：高优先级。
+- 最近必要消息和 Tool Receipt：中优先级。
+- 阶段摘要：中低优先级。
+- 原始工具结果、长文件正文、旧对话：默认不进入模型上下文。
+
+第一版直接使用估算 token，便于后续做上下文占用可视化；不要求引入复杂 tokenizer，可先使用轻量估算函数。
+
+### Phase Summary
+
+Step 8 需要接入 LLM Phase Summary，但不能做每 N 轮滚动总结。LLM 总结应采用阶段摘要，并且必须通过 Context Health Check 后才能进入下一轮模型上下文。
+
+阶段边界示例：
+
+- 收到用户请求
+- 完成身份和来源查询
+- 完成工具读取
+- 工具失败并进入恢复
+- 创建审批请求
+- 用户确认
+- 后台任务完成
+
+实现顺序上先完成确定性投影、Tool Receipt 和预算，再在 Step 8 内接入 LLM Phase Summary。
+
+### Compression Journal
+
+上下文压缩和投影会改变模型可见信息，因此必须可审计。
+
+每次压缩或投影变更应写入上下文日志：
+
+```text
+data/contexts/journal/ctxj_<id>.md
+```
+
+记录内容：
+
+- 发生时间
+- 触发原因：预算超限、工具结果过大、context_overflow、阶段结束、用户手动压缩
+- 被压缩范围
+- 保留锚点
+- 生成的 Tool Receipt
+- 外置证据文件路径
+- 是否使用 LLM 总结
+- 压缩后健康检查结果
+
+### Context Health Check
+
+每次压缩后必须先做健康检查，再继续模型调用。
+
+检查项：
+
+- 当前任务目标仍存在。
+- 最新用户指令仍存在。
+- 待审批动作仍存在。
+- 未完成任务仍存在。
+- 失败原因和恢复点仍存在。
+- 权限边界仍存在。
+- 所有关键锚点仍可追踪。
+
+健康检查失败时，不进入下一轮模型调用，应返回 `context_compaction_failed` 或进入人工检查。
+
+### Context Overflow Recovery
+
+当模型调用失败并被归类为 `context_overflow` 时：
+
+```text
+context_overflow
+  ↓
+emergency compact
+  ↓
+清理旧 tool result
+  ↓
+生成极简 Current Mission + Working Set
+  ↓
+记录 Compression Journal
+  ↓
+重试模型调用
+```
+
+应急压缩比常规压缩更激进，但仍不得丢失关键锚点。
+
+### CLI 边界
+
+`/compress` 和 `/clear` 是调试入口，不是 Step 8 的核心目标。
+
+- `/compress`：触发 RuntimeContextManager 对当前 debug session 或指定 task scope 做一次手动投影 / 压缩。
+- `/clear`：只清理允许清理的临时上下文，不删除事件、感知、审计、任务、审批、结果和上下文日志。
+- 正式 runtime 不依赖 CLI 命令才能进行自动上下文管理。
 
 ### 验收标准
 
-- 上下文摘要写入 `data/contexts/`。
-- `/compress` 可生成或刷新上下文摘要。
-- `/clear` 只清理允许清理的临时上下文，不删除审计链路。
-- 压缩结果保留当前目标、已知事实、身份责任、决策上下文和下一步。
+- `AgentLoop` 模型调用前通过 `RuntimeContextManager` 生成投影后的 messages。
+- `ModelContextView` 作为概念层不新增独立数据结构，第一版直接渲染回现有 messages。
+- 旧 tool result 可被替换为 Tool Receipt。
+- Tool Receipt 保留工具名、结果状态、关键摘要和无损锚点。
+- 大内容可外置为 evidence 文件，模型上下文只保留索引。
+- Context Budget 可输出估算 token，供后续可视化使用。
+- LLM Phase Summary 在 Step 8 内接入，且压缩后通过 Context Health Check。
+- 投影和压缩行为写入 Compression Journal。
+- 压缩后执行 Context Health Check。
+- `context_overflow` 可触发应急压缩并重试。
+- 不因压缩丢失任务目标、审批状态、权限边界、责任判断和下一步。
+- `/compress` 和 `/clear` 作为 CLI 调试入口接入，但不作为正式 runtime 的唯一触发方式。
 
 ### 涉及文件、类、方法、模块
 
-- `src/dutyflow/context/short_context.py`
-  - `ContextSummary`
-  - `ContextManager`
-  - `save_summary`
-  - `compress_context`
-  - `clear_transient_context`
+- `src/dutyflow/context/runtime_context.py`
+  - `RuntimeContextManager`
+  - projected messages / `ModelContextView` 概念层
+  - `WorkingSet`
+  - `StateDelta`
+  - `ContextBudget`
+  - `ContextHealthCheck`
+- `src/dutyflow/context/tool_receipt.py`
+  - `ToolReceipt`
+  - `ToolReceiptBuilder`
+- `src/dutyflow/context/evidence_store.py`
+  - `EvidenceRecord`
+  - `EvidenceStore`
+- `src/dutyflow/context/compression_journal.py`
+  - `CompressionJournalRecord`
+  - `CompressionJournalStore`
+- `src/dutyflow/agent/core_loop.py`
+  - 模型调用前接入 `RuntimeContextManager.project`
+  - `context_overflow` 后接入 emergency compact
+- `src/dutyflow/agent/model_client.py`
+  - 接收 Runtime Context 投影后的 messages
+- `src/dutyflow/config/prompt_config/`
+  - 主 Agent 纯 system prompt
+  - 后台 subagent 纯 system prompt
+  - 不包含动态注入的 skills / tools 列表
 - `src/dutyflow/cli/main.py`
-- `data/contexts/`
-- `test/test_context_short_context.py`
+  - `/compress`
+  - `/clear`
+- `data/contexts/evidence/`
+- `data/contexts/journal/`
+- `test/test_runtime_context.py`
+- `test/test_tool_receipt.py`
+- `test/test_context_evidence_store.py`
+- `test/test_context_compression_journal.py`
 
-### 未敲定问题
+### 已确认决策
 
-- 是否调用真实模型生成摘要，还是先使用规则化字符串摘要。
-- 清理上下文的边界清单。
+- 第一版 `ModelContextView` 直接渲染回现有 `AgentMessage` / messages，不新增独立数据结构。
+- 任何新增数据结构在开发前必须先写入 `docs/DATA_MODEL.md`。
+- Evidence Vault 只保存运行过程中的长工具结果和大对象摘要，不主动探索或索引全部感知结果。
+- Context Budget 第一版使用估算 token。
+- LLM Phase Summary 在 Step 8 内接入，但不做 rolling summary。
+- 主 Agent 和后台 subagent 的纯文本 system prompt 统一移动到 `src/dutyflow/config/prompt_config/` 管理；动态注入的 skills / tools 列表不放入该静态 prompt 配置。
 
 ### 任务清单
 
-- [ ] 实现上下文摘要文件。
-- [ ] 实现压缩逻辑。
-- [ ] 实现安全清理逻辑。
+- [ ] 将主 Agent 和后台 subagent 的纯 system prompt 移入 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
+- [ ] 开发任何新增 context、receipt、evidence、journal 数据结构前，先更新 `docs/DATA_MODEL.md`。
+- [ ] 实现 `ModelContextView` 概念层，第一版直接输出现有 `AgentMessage` / messages，不新增独立结构。
+- [ ] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
+- [ ] 实现 Working Set 构造。
+- [ ] 实现 State Delta 构造。
+- [ ] 实现 Tool Receipt 数据结构和构造器。
+- [ ] 实现旧 tool result 的确定性 micro-compact。
+- [ ] 实现 Evidence Store，用于外置长工具结果和大对象摘要，不主动索引全部感知结果。
+- [ ] 实现 Context Budget，第一版输出估算 token。
+- [ ] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
+- [ ] 实现 Compression Journal。
+- [ ] 实现 Context Health Check。
+- [ ] 接入 `context_overflow` emergency compact recovery。
 - [ ] 接入 CLI `/compress`。
 - [ ] 接入 CLI `/clear`。
 - [ ] 为新增 `.py` 文件添加自测入口。
@@ -1234,7 +1521,15 @@ Demo 期最终必须实现以下完整链路：
 
 ### 人工确认
 
-- [ ] 确认是否允许真实模型参与上下文压缩。
+- [x] 第一版不优先做 LLM rolling summary。
+- [x] 第一版先做确定性投影、Tool Receipt、Evidence 引用和 Compression Journal。
+- [x] 允许后续引入 LLM Phase Summary，但必须通过 Context Health Check。
+- [x] 第一版 `ModelContextView` 不新增独立数据结构，直接渲染回现有 messages。
+- [x] 新增数据结构开发前必须先更新 `docs/DATA_MODEL.md`。
+- [x] Evidence Vault 只保留运行过程中的长工具结果和大对象摘要。
+- [x] Context Budget 第一版使用估算 token。
+- [x] LLM Phase Summary 在 Step 8 内接入。
+- [x] 主 Agent 和后台 subagent 的纯 system prompt 统一放入 `src/dutyflow/config/prompt_config/`。
 
 ## Step 9: CLI 控制台与可观察性
 
