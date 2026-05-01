@@ -14,9 +14,14 @@ if str(SRC_ROOT) not in sys.path:
 
 from dutyflow.agent.core_loop import AgentLoop  # noqa: E402
 from dutyflow.agent.model_client import ModelResponse  # noqa: E402
+from dutyflow.agent.recovery import RecoveryScope  # noqa: E402
 from dutyflow.agent.state import (  # noqa: E402
     AgentContentBlock,
+    AgentRecoveryState,
+    AgentTaskControl,
     AgentState,
+    append_assistant_message,
+    append_tool_results,
     create_initial_agent_state,
 )
 from dutyflow.agent.tools.registry import ToolRegistry  # noqa: E402
@@ -50,12 +55,41 @@ class TestRuntimeContextManager(unittest.TestCase):
         self.assertNotIn(_PROJECTION_MARKER, _first_system_text(result.state))
         self.assertEqual(result.final_text, "ok")
 
+    def test_build_working_set_extracts_runtime_focus(self) -> None:
+        """Working Set 应从 AgentState 中提取当前目标、工具锚点和控制状态。"""
+        state = _working_set_state()
+        working_set = RuntimeContextManager().build_working_set(state)
+        self.assertEqual(working_set.query_id, "ctx_working")
+        self.assertEqual(working_set.latest_user_text, "请处理这个任务")
+        self.assertEqual(working_set.latest_assistant_text, "工具结果已收到")
+        self.assertEqual(working_set.current_task_id, "task_001")
+        self.assertEqual(working_set.pending_tool_use_ids, ())
+        self.assertEqual(working_set.last_tool_result_ids, ("tool_1",))
+        self.assertEqual(working_set.recent_tool_use_ids, ("tool_1",))
+        self.assertEqual(working_set.recent_tool_names, ("sample_tool",))
+        self.assertEqual(working_set.task_weight_level, "high")
+        self.assertEqual(working_set.approval_status, "waiting")
+        self.assertEqual(working_set.retry_status, "retrying")
+        self.assertEqual(working_set.waiting_recovery_scope_ids, ("tool_1",))
+        self.assertEqual(working_set.to_dict()["query_id"], "ctx_working")
+        self.assertEqual(working_set.to_dict()["recent_tool_use_ids"], ["tool_1"])
+
+    def test_project_refreshes_latest_working_set(self) -> None:
+        """每次 project 都应刷新最近一次 Working Set 快照。"""
+        state = create_initial_agent_state("ctx_latest", "hello")
+        manager = RuntimeContextManager()
+        manager.project(state)
+        self.assertIsNotNone(manager.latest_working_set)
+        assert manager.latest_working_set is not None
+        self.assertEqual(manager.latest_working_set.latest_user_text, "hello")
+
 
 class _MarkerRuntimeContextManager(RuntimeContextManager):
     """测试用投影器：只改模型可见 system message，不改源 state。"""
 
     def __init__(self) -> None:
         """记录投影调用次数。"""
+        super().__init__()
         self.project_count = 0
 
     def project_state_for_model(self, state: AgentState) -> AgentState:
@@ -87,6 +121,71 @@ def _first_system_text(state: AgentState) -> str:
     if not state.messages or state.messages[0].role != "system":
         return ""
     return "\n".join(block.text for block in state.messages[0].content if block.type == "text")
+
+
+def _working_set_state() -> AgentState:
+    """构造包含工具、任务控制和恢复 scope 的 Working Set 测试状态。"""
+    state = create_initial_agent_state("ctx_working", "请处理这个任务")
+    state = _append_tool_exchange(state)
+    state = append_assistant_message(state, (AgentContentBlock(type="text", text="工具结果已收到"),))
+    return _attach_control_state(state)
+
+
+def _append_tool_exchange(state: AgentState) -> AgentState:
+    """给测试状态追加一次工具调用和工具结果。"""
+    state = append_assistant_message(
+        state,
+        (
+            AgentContentBlock(
+                type="tool_use",
+                tool_use_id="tool_1",
+                tool_name="sample_tool",
+                tool_input={"text": "hello"},
+            ),
+        ),
+    )
+    state = append_tool_results(
+        state,
+        (
+            AgentContentBlock(
+                type="tool_result",
+                tool_use_id="tool_1",
+                tool_name="sample_tool",
+                content="工具返回内容不应覆盖用户输入",
+            ),
+        ),
+    )
+    return state
+
+
+def _attach_control_state(state: AgentState) -> AgentState:
+    """给测试状态补充任务控制和等待恢复 scope。"""
+    return replace(
+        state,
+        current_task_id="task_001",
+        task_control=AgentTaskControl(
+            task_id="task_001",
+            weight_level="high",
+            approval_status="waiting",
+            retry_status="retrying",
+            next_action="wait_approval",
+        ),
+        recovery=AgentRecoveryState(
+            latest_interruption_reason="waiting_approval",
+            latest_resume_point="before_tool_execute",
+            recovery_scopes=(
+                RecoveryScope(
+                    recovery_id="rec_001",
+                    scope_type="tool_call",
+                    scope_id="tool_1",
+                    status="waiting",
+                    failure_kind="approval_waiting",
+                    interruption_reason="waiting_approval",
+                    resume_point="before_tool_execute",
+                ),
+            ),
+        ),
+    )
 
 
 _PROJECTION_MARKER = "runtime-context-projection-marker"

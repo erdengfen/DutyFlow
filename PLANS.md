@@ -1193,7 +1193,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 8: Runtime Context 与上下文投影
 
-状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束，以及 `ModelContextView` 概念层第一版：模型调用前通过 Runtime Context 投影，输出仍为现有 `AgentMessage` / messages。
+状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束、`ModelContextView` 概念层第一版，以及 Working Set 确定性构造。
 
 ### 最终效果
 
@@ -1503,7 +1503,7 @@ emergency compact
 - [x] 将主 Agent 和后台 subagent 的纯 system prompt 移入 `src/dutyflow/config/prompt_config/` 统一管理，动态 skills / tools 列表仍由运行时注入。
 - [x] 实现 `ModelContextView` 概念层，第一版直接输出现有 `AgentMessage` / messages，不新增独立结构。
 - [x] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
-- [ ] 实现 Working Set 构造。
+- [x] 实现 Working Set 构造。
 - [ ] 实现 State Delta 构造。
 - [ ] 实现 Tool Receipt 数据结构和构造器。
 - [ ] 实现旧 tool result 的确定性 micro-compact。

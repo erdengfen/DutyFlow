@@ -278,7 +278,39 @@ updated_at: 2026-04-16T00:00:00+08:00
 - `interruption_reason` 用于描述任务为什么被挂起，不等同于 `failure_kind`。
 - 当前阶段即使未落盘，也必须保证这些字段可以被 `to_dict` / `from_dict` 稳定表达。
 
-### 2.5 中断原因与恢复点枚举
+### 2.5 Runtime Context Working Set
+
+`WorkingSet` 是 `RuntimeContextManager` 在模型调用前从 `AgentState` 确定性构造的当前工作集。它是内存结构，不是新的持久化文件；后续如写入上下文日志，必须通过 `Compression Journal` 或专门的 context 记录落盘。
+
+第一版字段：
+
+- `query_id`：当前 query 稳定 ID。
+- `turn_count`：当前 AgentState 轮数。
+- `transition_reason`：当前状态转移原因。
+- `current_event_id`：当前飞书或本地事件锚点，可为空。
+- `current_task_id`：当前任务锚点，可为空。
+- `latest_user_text`：最近一条用户文本输入，用作当前目标的最小表达。
+- `latest_assistant_text`：最近一条 assistant 文本输出，用于识别当前阶段状态。
+- `pending_tool_use_ids`：仍在等待结果的工具调用 ID。
+- `last_tool_result_ids`：最近一次写回的工具结果 ID。
+- `recent_tool_use_ids`：最近若干工具调用 ID。
+- `recent_tool_names`：最近若干工具名。
+- `task_weight_level`：当前任务权重等级。
+- `approval_status`：当前审批状态。
+- `retry_status`：当前重试状态。
+- `next_action`：当前控制面建议的下一步。
+- `latest_interruption_reason`：最近中断原因。
+- `latest_resume_point`：最近恢复点。
+- `waiting_recovery_scope_ids`：处于等待状态的恢复 scope ID。
+
+约束：
+
+- `WorkingSet` 不保存完整长工具结果、文件正文或飞书原始 payload。
+- `WorkingSet` 可以引用 ID 和短文本摘要，但不得替代审计记录、任务记录、审批记录或事件原文。
+- 第一版 `WorkingSet` 构造不得调用模型，不得产生外部副作用。
+- 后续压缩策略可以基于 `WorkingSet` 生成模型可见 messages，但不得丢失 `task_id`、`approval_id`、`perception_id`、`event_id`、`tool_use_id` 等关键锚点。
+
+### 2.6 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 
