@@ -1,14 +1,17 @@
 # 本文件标识运行时上下文子包，具体投影逻辑位于 runtime_context.py。
 
 from dutyflow.context.runtime_context import RuntimeContextManager, StateDelta, WorkingSet
+from dutyflow.context.tool_receipt import ToolReceipt, ToolReceiptBuilder
 
-__all__ = ["RuntimeContextManager", "StateDelta", "WorkingSet"]
+__all__ = ["RuntimeContextManager", "StateDelta", "ToolReceipt", "ToolReceiptBuilder", "WorkingSet"]
 
 
 def _self_test() -> None:
     """验证上下文子包可被导入。"""
     assert RuntimeContextManager is not None
     assert StateDelta is not None
+    assert ToolReceipt is not None
+    assert ToolReceiptBuilder is not None
     assert WorkingSet is not None
 
 

@@ -341,7 +341,40 @@ updated_at: 2026-04-16T00:00:00+08:00
 - 第一版 `StateDelta` 构造不得调用模型，不得产生外部副作用。
 - `StateDelta` 的 ID 字段必须保持原始锚点值，不得摘要化或重写。
 
-### 2.7 中断原因与恢复点枚举
+### 2.7 Runtime Context Tool Receipt
+
+`ToolReceipt` 是旧工具结果进入上下文压缩链路前的短收据。它是内存结构，第一版不新增持久化文件；后续如落盘，应写入 `Compression Journal` 或 evidence 相关记录。
+
+第一版字段：
+
+- `tool_use_id`：模型侧工具调用 ID。
+- `tool_name`：工具名。
+- `status`：工具结果状态，建议值为 `success`、`error`、`waiting_approval`、`rejected`、`unknown`。
+- `ok`：工具执行是否成功。
+- `is_error`：工具结果是否为错误结果。
+- `error_kind`：错误类型；非错误可为空。
+- `summary`：可进入模型上下文的短摘要。
+- `full_result_ref`：完整结果当前位置或重取句柄，例如 `agent_state_tool_result:<tool_use_id>` 或 evidence 文件路径。
+- `retryable`：是否可重试。
+- `retry_exhausted`：是否已耗尽重试。
+- `attempt_count`：工具实际尝试次数。
+- `attachments`：工具结果携带的附件路径或文件锚点。
+- `context_modifier_types`：工具结果携带的控制提示类型。
+- `task_id`：相关任务锚点，可为空。
+- `event_id`：相关事件锚点，可为空。
+- `approval_ids`：相关审批 ID。
+- `perception_ids`：相关感知记录 ID。
+- `file_paths`：相关文件路径。
+- `impacts_current_decision`：该收据是否仍影响当前决策。
+
+约束：
+
+- `ToolReceipt` 不保存完整长工具结果，只保存短摘要、状态和可追溯锚点。
+- `ToolReceipt` 必须保留 `tool_use_id`、`tool_name` 和 `status`。
+- `summary` 可以有损，`tool_use_id`、`task_id`、`approval_id`、`perception_id`、`event_id` 和文件路径不得有损。
+- 第一版构造器只做确定性解析，不调用模型，不产生外部副作用。
+
+### 2.8 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 

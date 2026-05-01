@@ -1193,7 +1193,7 @@ Demo 期最终必须实现以下完整链路：
 
 ## Step 8: Runtime Context 与上下文投影
 
-状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束、`ModelContextView` 概念层第一版、Working Set 确定性构造和 State Delta 构造。
+状态：进行中。已完成主 Agent / 后台 subagent 静态 prompt 配置收束、`ModelContextView` 概念层第一版、Working Set 确定性构造、State Delta 构造和 Tool Receipt 数据结构与构造器。
 
 ### 最终效果
 
@@ -1505,7 +1505,7 @@ emergency compact
 - [x] 实现 `RuntimeContextManager.project`，模型调用前不再直接使用完整 `AgentState.messages`。
 - [x] 实现 Working Set 构造。
 - [x] 实现 State Delta 构造。
-- [ ] 实现 Tool Receipt 数据结构和构造器。
+- [x] 实现 Tool Receipt 数据结构和构造器。
 - [ ] 实现旧 tool result 的确定性 micro-compact。
 - [ ] 实现 Evidence Store，用于外置长工具结果和大对象摘要，不主动索引全部感知结果。
 - [ ] 实现 Context Budget，第一版输出估算 token。
