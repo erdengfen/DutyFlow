@@ -74,6 +74,7 @@ class DutyFlowApp:
         self.project_root = project_root or Path.cwd()
         self.cli = CliConsole(self)
         self._chat_debug_service: ChatDebugService | None = None
+        self._persistent_chat_session: ChatDebugSession | None = None
         self._feishu_ingress_service: FeishuIngressService | None = None
         self._runtime_service: RuntimeService | None = None
         self._runtime_loop: RuntimeAgentLoop | None = None
@@ -383,9 +384,75 @@ class DutyFlowApp:
         self._chat_debug_service = ChatDebugService(self._handle_chat_debug_task)
         return self._chat_debug_service
 
+    def _get_or_create_persistent_chat_session(self) -> ChatDebugSession:
+        """构造并复用跨任务持续的 /chat 调试会话，供上下文命令操作。"""
+        if self._persistent_chat_session is None:
+            self._persistent_chat_session = self.create_chat_debug_session()
+        return self._persistent_chat_session
+
     def _handle_chat_debug_task(self, task: ChatDebugTask) -> str:
-        """执行单条调试任务，底层仍复用旧的 /chat loop 能力。"""
-        return self.run_chat_debug(task.user_text)
+        """执行单条调试任务，复用持续会话以保留跨任务上下文状态。"""
+        session = self._get_or_create_persistent_chat_session()
+        try:
+            result = session.run_turn(task.user_text)
+        except Exception as exc:  # noqa: BLE001
+            return _chat_error("chat_failed", str(exc))
+        return result.to_debug_text()
+
+    def clear_context_debug(self) -> str:
+        """清空当前持续 /chat 调试会话的运行时上下文投影缓存。"""
+        if self._persistent_chat_session is None:
+            return _context_debug_payload(
+                "empty", "no_session", "no chat debug session; run /chat run first"
+            )
+        self._persistent_chat_session.loop.runtime_context_manager.reset()
+        return _context_debug_payload("ok", "cleared", "runtime context projection cache cleared")
+
+    def compress_context_debug(self) -> str:
+        """对当前持续 /chat 调试会话触发手动 LLM 阶段摘要压缩。"""
+        session = self._get_or_create_persistent_chat_session()
+        if session.state is None:
+            return _context_debug_payload(
+                "empty", "no_state", "no context state; run /chat run first"
+            )
+        loop = session.loop
+        manager = loop.runtime_context_manager
+        try:
+            projected_state = manager.project_state_for_model(session.state)
+        except Exception as exc:  # noqa: BLE001
+            return _context_debug_payload("error", "projection_failed", str(exc))
+        working_set = manager.latest_working_set
+        if working_set is None:
+            return _context_debug_payload("error", "no_working_set", "projection produced no working set")
+        try:
+            trigger, record = loop.phase_summary_service.maybe_create_summary(
+                model_client=loop.model_client,
+                state=session.state,
+                projected_messages=projected_state.messages,
+                working_set=working_set,
+                delta=manager.latest_state_delta,
+                budget=manager.latest_budget_report,
+                forced_reason="manual_compress",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _context_debug_payload("error", "compress_failed", str(exc))
+        if record is None:
+            return _context_debug_payload(
+                "ok",
+                "no_summary",
+                f"trigger={trigger.reason} mode={trigger.mode}",
+                {"trigger": trigger.to_dict()},
+            )
+        return _context_debug_payload(
+            "ok",
+            "compressed",
+            f"phase summary generated: {record.relative_path}",
+            {
+                "trigger": trigger.to_dict(),
+                "record_path": record.relative_path,
+                "summary_id": record.summary_id,
+            },
+        )
 
     def run(self, args: Sequence[str] | None = None) -> int:
         """根据命令参数启动健康检查或 CLI 控制台。"""
@@ -598,6 +665,22 @@ def _feishu_debug_payload(
         "event_id": event_id,
         "message_id": message_id,
         "record_path": record_path,
+        "detail": detail,
+        "payload": dict(payload or {}),
+    }
+    return json.dumps(body, ensure_ascii=False, indent=2)
+
+
+def _context_debug_payload(
+    status: str,
+    action: str,
+    detail: str,
+    payload: Mapping[str, Any] | None = None,
+) -> str:
+    """格式化 /context 调试命令的标准输出。"""
+    body = {
+        "status": status,
+        "action": action,
         "detail": detail,
         "payload": dict(payload or {}),
     }

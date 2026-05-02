@@ -1542,8 +1542,8 @@ emergency compact
 - [x] 实现 Compression Journal。
 - [x] 实现 Context Health Check。
 - [x] 接入 `context_overflow` emergency compact recovery。
-- [ ] 接入 CLI `/compress`。
-- [ ] 接入 CLI `/clear`。
+- [x] 接入 CLI `/compress`。
+- [x] 接入 CLI `/clear`。
 - [x] 为新增 `.py` 文件添加自测入口。
 - [x] 编写测试文件。
 - [ ] 执行本阶段完整链路检查。

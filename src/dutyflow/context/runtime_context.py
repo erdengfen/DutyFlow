@@ -231,6 +231,19 @@ class RuntimeContextManager:
             self.latest_compression_journal_record = record
         self.latest_compression_journal_error = str(error)
 
+    def reset(self) -> None:
+        """清空运行时缓存的投影状态；compression_journal_store 和 budget_estimator 保持不变。"""
+        self.latest_working_set = None
+        self.latest_state_delta = None
+        self.latest_budget_report = None
+        self.latest_phase_summary_trigger = None
+        self.latest_phase_summary_record = None
+        self.latest_phase_summary_error = ""
+        self.latest_compression_journal_record = None
+        self.latest_compression_journal_error = ""
+        self._compression_journal_keys = set()
+        self.latest_health_check = None
+
     def _record_projection_change_journal(self, state: AgentState, projected_messages: tuple[AgentMessage, ...]) -> None:
         """当投影产生可见变化时写入 Compression Journal。"""
         if self.compression_journal_store is None or projected_messages == state.messages:

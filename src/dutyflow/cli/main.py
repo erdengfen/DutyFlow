@@ -41,6 +41,12 @@ class HealthCheckProvider(Protocol):
     def get_feishu_doctor_debug(self) -> str:
         """返回当前飞书监听实例的 doctor 诊断结果。"""
 
+    def clear_context_debug(self) -> str:
+        """清空当前 /chat 调试会话的运行时上下文投影缓存。"""
+
+    def compress_context_debug(self) -> str:
+        """对当前 /chat 调试会话触发手动 LLM 阶段摘要压缩。"""
+
 
 class CliConsole:
     """处理 /... 风格的本地开发者调试命令。"""
@@ -67,6 +73,8 @@ class CliConsole:
             return self._handle_agent(normalized)
         if normalized == "/feishu" or normalized.startswith("/feishu "):
             return self._handle_feishu(normalized)
+        if normalized == "/context" or normalized.startswith("/context "):
+            return self._handle_context(normalized)
         if normalized in {"/help", "help", ""}:
             return self._help_text()
         return f"Unsupported command: {normalized}"
@@ -122,6 +130,21 @@ class CliConsole:
             "Unsupported agent command: "
             f"{normalized}\n"
             f"{_agent_help_text()}"
+        )
+
+    def _handle_context(self, command: str) -> str:
+        """执行上下文窗口管理命令。"""
+        normalized = command.strip()
+        if normalized in {"/context", "/context help"}:
+            return _context_help_text()
+        if normalized == "/context clear":
+            return self.app.clear_context_debug()
+        if normalized == "/context compress":
+            return self.app.compress_context_debug()
+        return (
+            "Unsupported context command: "
+            f"{normalized}\n"
+            f"{_context_help_text()}"
         )
 
     def _feishu_doctor_loop(self) -> bool:
@@ -199,6 +222,8 @@ class CliConsole:
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
             "/feishu doctor - 进入飞书长连接诊断模式\n"
             "/feishu latest - 查看最近一条飞书接入结果\n"
+            "/context clear - 清空当前 /chat 调试会话的运行时上下文投影缓存\n"
+            "/context compress - 手动触发 LLM 阶段摘要压缩当前上下文\n"
             "/exit - 退出交互控制台"
         )
 
@@ -252,6 +277,16 @@ def _feishu_doctor_help_text() -> str:
     )
 
 
+def _context_help_text() -> str:
+    """返回上下文窗口管理命令说明。"""
+    return (
+        "Context commands:\n"
+        "/context clear - 清空当前 /chat 调试会话的运行时上下文投影缓存\n"
+        "/context compress - 手动触发 LLM 阶段摘要压缩当前上下文\n"
+        "/context help - 查看本说明"
+    )
+
+
 def _feishu_listen_deprecated_text(status_text: str) -> str:
     """为旧的 `/feishu listen` 命令返回明确兼容提示。"""
     return "`/feishu listen` 已废弃；监听会在 app 启动时自动拉起。以下返回当前监听状态：\n" + status_text
@@ -300,6 +335,14 @@ class _SelfTestApp:
         """返回自测飞书诊断快照。"""
         return '{"action": "doctor_status", "payload": {"listener": {"raw_event_count": 0}}}'
 
+    def clear_context_debug(self) -> str:
+        """返回自测上下文清除结果。"""
+        return '{"status": "ok", "action": "cleared", "detail": "runtime context projection cache cleared", "payload": {}}'
+
+    def compress_context_debug(self) -> str:
+        """返回自测上下文压缩结果。"""
+        return '{"status": "empty", "action": "no_state", "detail": "no context state; run /chat run first", "payload": {}}'
+
 
 def _self_test() -> None:
     """验证 CLI 命令解析的最小行为。"""
@@ -310,6 +353,9 @@ def _self_test() -> None:
     assert '"action": "agent_state"' in cli.handle_command("/agent state")
     assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
+    assert '"action": "cleared"' in cli.handle_command("/context clear")
+    assert '"action": "no_state"' in cli.handle_command("/context compress")
+    assert "Context commands" in cli.handle_command("/context help")
 
 
 if __name__ == "__main__":
