@@ -103,6 +103,8 @@ class RuntimeAgentLoop:
         projected_messages = _project_messages_for_debug(self.agent_loop, state)
         budget = self.agent_loop.runtime_context_manager.estimate_budget(projected_messages)
         phase_summary = _phase_summary_debug(self.agent_loop.runtime_context_manager)
+        compression_journal = _compression_journal_debug(self.agent_loop.runtime_context_manager)
+        health_check = _health_check_debug(self.agent_loop.runtime_context_manager)
         return {
             "status": "ok",
             "action": "agent_state",
@@ -113,6 +115,8 @@ class RuntimeAgentLoop:
                 projected_messages,
                 budget.to_dict(),
                 phase_summary,
+                compression_journal,
+                health_check,
             ),
         }
 
@@ -256,6 +260,8 @@ def _agent_state_debug_payload(
     projected_messages: tuple[AgentMessage, ...],
     budget_report: Mapping[str, Any],
     phase_summary: Mapping[str, Any],
+    compression_journal: Mapping[str, Any],
+    health_check: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """组装正式 runtime AgentState 的调试 payload。"""
     return {
@@ -263,6 +269,8 @@ def _agent_state_debug_payload(
         "latest_result": _loop_result_debug(loop_result),
         "compression": _compression_debug(state.messages, projected_messages),
         "phase_summary": dict(phase_summary),
+        "compression_journal": dict(compression_journal),
+        "health_check": dict(health_check) if health_check else {},
         "budget_report": budget_report,
         "messages": {
             "canonical": _messages_debug(state.messages),
@@ -280,6 +288,23 @@ def _phase_summary_debug(manager) -> dict[str, Any]:
         "record": record.to_dict() if record is not None else {},
         "error": getattr(manager, "latest_phase_summary_error", ""),
     }
+
+
+def _compression_journal_debug(manager) -> dict[str, Any]:
+    """返回最近一次 Compression Journal 写入状态。"""
+    record = getattr(manager, "latest_compression_journal_record", None)
+    return {
+        "record": record.to_dict() if record is not None else {},
+        "error": getattr(manager, "latest_compression_journal_error", ""),
+    }
+
+
+def _health_check_debug(manager) -> dict[str, Any]:
+    """返回最近一次 Context Health Check 结果。"""
+    health = getattr(manager, "latest_health_check", None)
+    if health is None:
+        return {"passed": None, "failed_checks": [], "checks": []}
+    return health.to_dict()
 
 
 def _state_debug_summary(state: AgentState) -> dict[str, Any]:

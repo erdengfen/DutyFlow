@@ -502,7 +502,89 @@ Frontmatter 字段：
 - 第一版不得因为预算超限自动删除内容；压缩动作由后续 Step 8 的 health check、journal 和 recovery 链路统一接入。
 - `preview` 可以有损，`message_index`、`block_index`、`tool_use_id` 和 `tool_name` 不得有损。
 
-### 2.10 中断原因与恢复点枚举
+### 2.10 Runtime Context Compression Journal
+
+`CompressionJournalRecord` 是上下文投影、压缩、阶段摘要、证据外置和后续恢复动作的审计记录。它保存“模型可见上下文如何被改写”的事实，不保存完整长工具结果。
+
+存储位置：
+
+```text
+data/contexts/journal/ctxj_<id>.md
+```
+
+Frontmatter 字段：
+
+- `schema`：固定为 `dutyflow.context_compression_journal.v1`。
+- `id`：journal ID，格式为 `ctxj_<id>`。
+- `action_type`：动作类型，第一版建议值为 `model_context_projection`、`micro_compact`、`phase_boundary`、`phase_summary`、`evidence_offload`、`manual_compress`、`emergency_compact`。
+- `trigger_reason`：触发原因，例如 `tool_result_clearing`、`phase_boundary_only`、`phase_boundary_budget`、`budget_hard_limit`、`context_overflow`、`manual_compress`。
+- `query_id`：所属 Agent query ID。
+- `task_id`：相关任务 ID，可为空。
+- `event_id`：相关事件 ID，可为空。
+- `created_at`：创建时间。
+- `source_message_count`：源 messages 数量。
+- `projected_message_count`：投影后 messages 数量。
+- `source_tool_result_count`：源上下文中的 tool result 数量。
+- `projected_tool_receipt_count`：投影后 Tool Receipt 数量。
+- `projected_active_tool_result_count`：投影后仍保留原文的 tool result 数量。
+- `estimated_tokens`：投影后上下文估算 token，可为空或 `0`。
+- `compacted_tool_result_ids`：被收据化的 tool result ID，逗号分隔。
+- `generated_tool_receipt_ids`：新生成 Tool Receipt 的工具调用 ID，逗号分隔。
+- `evidence_refs`：相关 evidence 引用，逗号分隔。
+- `phase_summary_id`：相关阶段摘要 ID，可为空。
+- `phase_summary_file`：相关阶段摘要文件路径，可为空。
+- `health_check_status`：健康检查结果；Health Check 未实现前为空或 `not_run`。
+- `preserved_task_ids`：保留的任务锚点，逗号分隔。
+- `preserved_event_ids`：保留的事件锚点，逗号分隔。
+- `preserved_tool_use_ids`：保留的工具调用锚点，逗号分隔。
+- `preserved_approval_ids`：保留的审批锚点，逗号分隔。
+
+正文结构：
+
+```markdown
+# Compression Journal ctxj_xxx
+
+## Summary
+
+- action_type: micro_compact
+- trigger_reason: tool_result_clearing
+- query_id: query_001
+
+## Scope
+
+- source_message_count: 8
+- projected_message_count: 8
+- estimated_tokens: 3200
+
+## Preserved Anchors
+
+- task_ids: task_001
+- event_ids: evt_001
+- tool_use_ids: tool_001
+- approval_ids: approval_001
+
+## Generated Artifacts
+
+- compacted_tool_result_ids: tool_001
+- generated_tool_receipt_ids: tool_001
+- evidence_refs:
+- phase_summary_id:
+- phase_summary_file:
+
+## Notes
+
+确定性 micro-compact 将旧 tool result 替换为 Tool Receipt。
+```
+
+约束：
+
+- Compression Journal 是审计记录，不是模型下一轮上下文的直接来源。
+- Journal 不保存完整长工具结果；长内容必须进入 Evidence Store 或业务原始文件。
+- `preserved_*`、`compacted_tool_result_ids`、`phase_summary_id` 和 `evidence_refs` 不得摘要化或重写。
+- 第一版只在发生可见投影变化、Tool Receipt 生成、阶段摘要边界或 LLM 阶段摘要时落盘，不记录每一次无变化投影。
+- Context Health Check 未实现前，`health_check_status` 记录为 `not_run`。
+
+### 2.11 中断原因与恢复点枚举
 
 `failure_kind` 第一版建议值：
 

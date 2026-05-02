@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 
 from dutyflow.agent.state import AgentContentBlock, AgentMessage, AgentState
+from dutyflow.context.compression_journal import CompressionJournalStore
 from dutyflow.context.context_budget import ContextBudgetEstimator, ContextBudgetReport
 
 
@@ -95,7 +96,7 @@ _STATE_DELTA_TUPLE_FIELDS = frozenset(
 class RuntimeContextManager:
     """管理模型调用前的运行时上下文投影，不拥有 AgentState 源状态。"""
 
-    def __init__(self) -> None:
+    def __init__(self, compression_journal_store: CompressionJournalStore | None = None) -> None:
         """初始化最近一次工作集快照。"""
         self.latest_working_set: WorkingSet | None = None
         self.latest_state_delta: StateDelta | None = None
@@ -103,7 +104,12 @@ class RuntimeContextManager:
         self.latest_phase_summary_trigger = None
         self.latest_phase_summary_record = None
         self.latest_phase_summary_error = ""
+        self.compression_journal_store = compression_journal_store
+        self.latest_compression_journal_record = None
+        self.latest_compression_journal_error = ""
+        self._compression_journal_keys: set[str] = set()
         self.budget_estimator = ContextBudgetEstimator()
+        self.latest_health_check: ContextHealthCheck | None = None
 
     def project(self, state: AgentState) -> tuple[AgentMessage, ...]:
         """返回 ModelContextView 概念层对应的现有 messages 表示。"""
@@ -112,6 +118,8 @@ class RuntimeContextManager:
         self.latest_working_set = working_set
         projected_messages = self.project_messages(state, working_set=working_set)
         self.latest_budget_report = self.estimate_budget(projected_messages)
+        self.latest_health_check = run_context_health_check(state, projected_messages)
+        self._record_projection_change_journal(state, projected_messages)
         return projected_messages
 
     def build_working_set(self, state: AgentState) -> WorkingSet:
@@ -202,6 +210,41 @@ class RuntimeContextManager:
         if record is not None:
             self.latest_phase_summary_record = record
         self.latest_phase_summary_error = str(error)
+
+    def record_compression_journal(self, record, error: str = "") -> None:
+        """记录最近一次 Compression Journal 写入结果。"""
+        if record is not None:
+            self.latest_compression_journal_record = record
+        self.latest_compression_journal_error = str(error)
+
+    def _record_projection_change_journal(self, state: AgentState, projected_messages: tuple[AgentMessage, ...]) -> None:
+        """当投影产生可见变化时写入 Compression Journal。"""
+        if self.compression_journal_store is None or projected_messages == state.messages:
+            return
+        compacted_ids = _compacted_tool_result_ids(state.messages, projected_messages)
+        if not compacted_ids:
+            return
+        dedupe_key = f"{state.query_id}:micro_compact:{','.join(compacted_ids)}"
+        if dedupe_key in self._compression_journal_keys:
+            return
+        health_status = "not_run"
+        if self.latest_health_check is not None:
+            health_status = "passed" if self.latest_health_check.passed else "failed"
+        try:
+            record = self.compression_journal_store.write_projection_change(
+                state=state,
+                source_messages=state.messages,
+                projected_messages=projected_messages,
+                budget=self.latest_budget_report,
+                trigger_reason="tool_result_clearing",
+                health_check_status=health_status,
+                notes="确定性 micro-compact 将旧 tool result 替换为 Tool Receipt。",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.record_compression_journal(None, error=str(exc))
+            return
+        self._compression_journal_keys.add(dedupe_key)
+        self.record_compression_journal(record)
 
 
 def _latest_text_by_role(messages: tuple[AgentMessage, ...], role: str) -> str:
@@ -346,8 +389,157 @@ def _is_tool_receipt_text(content: str) -> bool:
     return str(content).strip().startswith("ToolReceipt(")
 
 
+def _compacted_tool_result_ids(
+    source_messages: tuple[AgentMessage, ...],
+    projected_messages: tuple[AgentMessage, ...],
+) -> tuple[str, ...]:
+    """返回本次投影中由原文变成 Tool Receipt 的工具结果 ID。"""
+    ids: list[str] = []
+    for source_message, projected_message in zip(source_messages, projected_messages, strict=False):
+        for source_block, projected_block in zip(source_message.content, projected_message.content, strict=False):
+            if _block_became_tool_receipt(source_block, projected_block):
+                _append_unique(ids, source_block.tool_use_id)
+    return tuple(ids)
+
+
+def _block_became_tool_receipt(source: AgentContentBlock, projected: AgentContentBlock) -> bool:
+    """判断单个 block 是否在投影中被收据化。"""
+    return (
+        source.type == "tool_result"
+        and projected.type == "tool_result"
+        and source.tool_use_id == projected.tool_use_id
+        and not _is_tool_receipt_text(source.content)
+        and _is_tool_receipt_text(projected.content)
+    )
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    """追加非空且未出现过的工具结果 ID。"""
+    normalized = str(value).strip()
+    if normalized and normalized not in items:
+        items.append(normalized)
+
+
 _TASK_CONTROL_FIELDS = ("task_weight_level", "approval_status", "retry_status", "next_action")
 _RECOVERY_FIELDS = ("latest_interruption_reason", "latest_resume_point")
+
+
+@dataclass(frozen=True)
+class ContextHealthCheckItem:
+    """表示一条上下文健康检查项的结果。"""
+
+    name: str
+    passed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class ContextHealthCheck:
+    """表示一次完整的上下文健康检查结果。"""
+
+    passed: bool
+    checks: tuple[ContextHealthCheckItem, ...]
+    failed_checks: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        """返回可序列化调试结构。"""
+        return {
+            "passed": self.passed,
+            "failed_checks": list(self.failed_checks),
+            "checks": [{"name": c.name, "passed": c.passed, "reason": c.reason} for c in self.checks],
+        }
+
+
+def run_context_health_check(
+    state: AgentState,
+    projected_messages: tuple[AgentMessage, ...],
+) -> ContextHealthCheck:
+    """对 projected_messages 执行确定性健康检查，验证关键锚点仍然可见。"""
+    checks: list[ContextHealthCheckItem] = []
+
+    checks.append(_check_message_count(state.messages, projected_messages))
+    checks.append(_check_task_id_preserved(state, projected_messages))
+    checks.append(_check_event_id_preserved(state, projected_messages))
+    checks.append(_check_pending_tool_ids_preserved(state, projected_messages))
+
+    failed = tuple(c.name for c in checks if not c.passed)
+    return ContextHealthCheck(passed=not failed, checks=tuple(checks), failed_checks=failed)
+
+
+def _check_message_count(
+    source: tuple[AgentMessage, ...],
+    projected: tuple[AgentMessage, ...],
+) -> ContextHealthCheckItem:
+    """投影后 message 数量不能减少。"""
+    passed = len(projected) >= len(source)
+    return ContextHealthCheckItem(
+        name="message_count_preserved",
+        passed=passed,
+        reason="" if passed else f"projected={len(projected)} < source={len(source)}",
+    )
+
+
+def _check_task_id_preserved(state: AgentState, projected: tuple[AgentMessage, ...]) -> ContextHealthCheckItem:
+    """当前 task_id 必须在 projected_messages 文本中可见（或本身为空）。"""
+    task_id = (state.current_task_id or state.task_control.task_id).strip()
+    if not task_id:
+        return ContextHealthCheckItem(name="task_id_preserved", passed=True, reason="no active task_id")
+    visible = _id_visible_in_messages(task_id, projected)
+    return ContextHealthCheckItem(
+        name="task_id_preserved",
+        passed=visible,
+        reason="" if visible else f"task_id={task_id!r} not found in projected messages",
+    )
+
+
+def _check_event_id_preserved(state: AgentState, projected: tuple[AgentMessage, ...]) -> ContextHealthCheckItem:
+    """当前 event_id 必须在 projected_messages 文本中可见（或本身为空）。"""
+    event_id = state.current_event_id.strip()
+    if not event_id:
+        return ContextHealthCheckItem(name="event_id_preserved", passed=True, reason="no active event_id")
+    visible = _id_visible_in_messages(event_id, projected)
+    return ContextHealthCheckItem(
+        name="event_id_preserved",
+        passed=visible,
+        reason="" if visible else f"event_id={event_id!r} not found in projected messages",
+    )
+
+
+def _check_pending_tool_ids_preserved(
+    state: AgentState,
+    projected: tuple[AgentMessage, ...],
+) -> ContextHealthCheckItem:
+    """state.pending_tool_use_ids 中的 ID 应在 projected 中仍有 tool_use block。"""
+    if not state.pending_tool_use_ids:
+        return ContextHealthCheckItem(name="pending_tool_ids_preserved", passed=True, reason="no pending tool IDs")
+    present = frozenset(
+        block.tool_use_id
+        for msg in projected
+        for block in msg.content
+        if block.type in ("tool_use", "tool_result") and block.tool_use_id
+    )
+    missing = [tid for tid in state.pending_tool_use_ids if tid not in present]
+    passed = not missing
+    return ContextHealthCheckItem(
+        name="pending_tool_ids_preserved",
+        passed=passed,
+        reason="" if passed else f"missing pending tool IDs: {missing}",
+    )
+
+
+def _id_visible_in_messages(id_value: str, messages: tuple[AgentMessage, ...]) -> bool:
+    """检查 id_value 是否在 projected messages 的任意文本或 tool_use_id 字段中可见。"""
+    for msg in messages:
+        for block in msg.content:
+            if id_value in (block.text or ""):
+                return True
+            if id_value in (block.content or ""):
+                return True
+            if id_value == block.tool_use_id:
+                return True
+            if id_value in (block.tool_name or ""):
+                return True
+    return False
 
 
 def _self_test() -> None:

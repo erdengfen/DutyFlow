@@ -6,6 +6,7 @@ from dutyflow.context.context_budget import (
     ContextBudgetLaneUsage,
     ContextBudgetReport,
 )
+from dutyflow.context.compression_journal import CompressionJournalRecord, CompressionJournalStore
 from dutyflow.context.evidence_store import EvidenceRecord, EvidenceStore
 from dutyflow.context.phase_summary import (
     PhaseBoundaryDetector,
@@ -15,7 +16,14 @@ from dutyflow.context.phase_summary import (
     PhaseSummaryStore,
     PhaseSummaryTrigger,
 )
-from dutyflow.context.runtime_context import RuntimeContextManager, StateDelta, WorkingSet
+from dutyflow.context.runtime_context import (
+    ContextHealthCheck,
+    ContextHealthCheckItem,
+    RuntimeContextManager,
+    StateDelta,
+    WorkingSet,
+    run_context_health_check,
+)
 from dutyflow.context.tool_receipt import ToolReceipt, ToolReceiptBuilder
 
 __all__ = [
@@ -23,6 +31,8 @@ __all__ = [
     "ContextBudgetItem",
     "ContextBudgetLaneUsage",
     "ContextBudgetReport",
+    "CompressionJournalRecord",
+    "CompressionJournalStore",
     "EvidenceRecord",
     "EvidenceStore",
     "PhaseBoundaryDetector",
@@ -31,11 +41,14 @@ __all__ = [
     "PhaseSummaryService",
     "PhaseSummaryStore",
     "PhaseSummaryTrigger",
+    "ContextHealthCheck",
+    "ContextHealthCheckItem",
     "RuntimeContextManager",
     "StateDelta",
     "ToolReceipt",
     "ToolReceiptBuilder",
     "WorkingSet",
+    "run_context_health_check",
 ]
 
 
@@ -45,6 +58,8 @@ def _self_test() -> None:
     assert ContextBudgetItem is not None
     assert ContextBudgetLaneUsage is not None
     assert ContextBudgetReport is not None
+    assert CompressionJournalRecord is not None
+    assert CompressionJournalStore is not None
     assert EvidenceRecord is not None
     assert EvidenceStore is not None
     assert PhaseBoundaryDetector is not None
@@ -53,6 +68,9 @@ def _self_test() -> None:
     assert PhaseSummaryService is not None
     assert PhaseSummaryStore is not None
     assert PhaseSummaryTrigger is not None
+    assert ContextHealthCheck is not None
+    assert ContextHealthCheckItem is not None
+    assert run_context_health_check is not None
     assert RuntimeContextManager is not None
     assert StateDelta is not None
     assert ToolReceipt is not None

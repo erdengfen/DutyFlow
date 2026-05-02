@@ -16,6 +16,7 @@ RECOVERY_FAILURE_KINDS = frozenset(
         "model_transport_error",
         "model_max_tokens",
         "context_overflow",
+        "context_compaction_failed",
         "tool_timeout",
         "tool_transient_error",
         "tool_retry_exhausted",

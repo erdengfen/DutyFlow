@@ -35,6 +35,7 @@ from dutyflow.agent.tools.executor import ToolExecutor
 from dutyflow.agent.tools.registry import ToolRegistry
 from dutyflow.agent.tools.router import ToolRouter
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope
+from dutyflow.context.compression_journal import CompressionJournalStore
 from dutyflow.context.phase_summary import PhaseSummaryService, PhaseSummaryStore
 from dutyflow.context.runtime_context import RuntimeContextManager
 
@@ -102,6 +103,7 @@ class AgentLoop:
         system_prompt_preamble: str = "",
         runtime_context_manager: RuntimeContextManager | None = None,
         phase_summary_service: PhaseSummaryService | None = None,
+        compression_journal_store: CompressionJournalStore | None = None,
     ) -> None:
         """绑定模型客户端、工具注册表和运行目录。"""
         self.model_client = model_client
@@ -115,10 +117,14 @@ class AgentLoop:
         self.audit_logger = audit_logger
         self.skill_registry = skill_registry or SkillRegistry.empty(cwd / "skills")
         self.system_prompt_preamble = system_prompt_preamble.strip()
+        self.compression_journal_store = compression_journal_store or CompressionJournalStore(self.cwd)
         self.runtime_context_manager = runtime_context_manager or RuntimeContextManager()
+        if self.runtime_context_manager.compression_journal_store is None:
+            self.runtime_context_manager.compression_journal_store = self.compression_journal_store
         self.phase_summary_service = phase_summary_service or PhaseSummaryService(
             store=PhaseSummaryStore(self.cwd),
         )
+        self._phase_summary_journal_keys: set[str] = set()
         # 关键开关：CLI /chat 调试链路允许的最大工具续转轮数；超过后直接停止，防止无限循环。
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
@@ -142,6 +148,9 @@ class AgentLoop:
             model_state: AgentState | None = None
             try:
                 model_state = self.runtime_context_manager.project_state_for_model(state)
+                health = self.runtime_context_manager.latest_health_check
+                if health is not None and not health.passed:
+                    raise _ContextCompactionError(health.failed_checks)
                 self._maybe_create_phase_summary(state, model_state)
                 response = self.model_client.call_model(model_state, self.registry.list_specs())
             except Exception as exc:  # noqa: BLE001
@@ -302,6 +311,28 @@ class AgentLoop:
             self.runtime_context_manager.record_phase_summary(None, error=str(exc))
             return
         self.runtime_context_manager.record_phase_summary(trigger, record)
+        self._record_phase_summary_journal(state, model_state, trigger, record)
+
+    def _record_phase_summary_journal(self, state: AgentState, model_state: AgentState, trigger, record) -> None:
+        """把阶段边界或阶段摘要动作写入 Compression Journal。"""
+        if not getattr(trigger, "should_record_boundary", False):
+            return
+        dedupe_key = getattr(trigger, "dedupe_key", "")
+        if dedupe_key in self._phase_summary_journal_keys:
+            return
+        try:
+            journal = self.compression_journal_store.write_phase_summary_event(
+                state=state,
+                projected_messages=model_state.messages,
+                budget=self.runtime_context_manager.latest_budget_report,
+                trigger=trigger,
+                phase_summary_record=record,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.runtime_context_manager.record_compression_journal(None, error=str(exc))
+            return
+        self._phase_summary_journal_keys.add(dedupe_key)
+        self.runtime_context_manager.record_compression_journal(journal)
 
     def _register_model_recovery(
         self,
@@ -352,6 +383,8 @@ class AgentLoop:
 
     def _classify_model_failure(self, exc: Exception) -> str:
         """把模型异常映射为恢复层 failure_kind。"""
+        if isinstance(exc, _ContextCompactionError):
+            return "context_compaction_failed"
         message = str(exc).lower()
         if "context" in message or "prompt" in message:
             return "context_overflow"
@@ -607,6 +640,14 @@ def _trim_debug_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "...(truncated)"
+
+
+class _ContextCompactionError(Exception):
+    """内部哨兵：上下文健康检查失败，阻止本轮模型调用。"""
+
+    def __init__(self, failed_checks: tuple[str, ...]) -> None:
+        super().__init__(f"context_compaction_failed: {failed_checks}")
+        self.failed_checks = failed_checks
 
 
 def _self_test() -> None:

@@ -1539,13 +1539,13 @@ emergency compact
 - [x] 实现 Evidence Store，用于外置长工具结果和大对象摘要，不主动索引全部感知结果。
 - [x] 实现 Context Budget，第一版输出估算 token。
 - [x] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
-- [ ] 实现 Compression Journal。
+- [x] 实现 Compression Journal。
 - [ ] 实现 Context Health Check。
 - [ ] 接入 `context_overflow` emergency compact recovery。
 - [ ] 接入 CLI `/compress`。
 - [ ] 接入 CLI `/clear`。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写测试文件。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写测试文件。
 - [ ] 执行本阶段完整链路检查。
 
 ### 人工确认
