@@ -67,15 +67,21 @@ class RuntimeAgentLoop:
         )
         self.latest_result: RuntimeLoopExecutionResult | None = None
         self.latest_agent_loop_result: AgentLoopResult | None = None
+        self._chat_sessions: dict[str, AgentState] = {}
 
     def handle_work_item(self, work_item: RuntimeWorkItem) -> None:
         """消费一条 runtime work item，并把结果通过统一反馈接口发回会话。"""
         loop_input = self._require_loop_input(work_item.perception_id)
+        chat_id = str(loop_input.get("chat_id", "")).strip()
+        existing_state = self._chat_sessions.get(chat_id)
         loop_result = self.agent_loop.run_until_stop(
             _build_runtime_user_text(loop_input),
             query_id=work_item.work_id,
             tool_content=_build_runtime_tool_content(work_item, loop_input),
+            state=existing_state,
         )
+        if chat_id:
+            self._chat_sessions[chat_id] = loop_result.state
         self.latest_agent_loop_result = loop_result
         feedback = self._send_feedback(loop_input, loop_result)
         self.latest_result = RuntimeLoopExecutionResult(
