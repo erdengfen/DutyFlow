@@ -56,8 +56,12 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(result.state.task_control.retry_status, "none")
 
     def test_context_overflow_fails_with_recovery_scope(self) -> None:
-        """上下文溢出时应返回失败，并留下恢复 scope。"""
-        client = _FakeModelClient((ValueError("prompt too long"),))
+        """上下文溢出时触发应急压缩重试，重试后再次溢出应返回失败并留下恢复 scope。"""
+        # 三次溢出：第一次主调用 overflow，第二次被 phase_summary LLM 调用消耗，
+        # 第三次作为应急压缩后的重试调用再次 overflow，超出应急压缩次数后进入恢复挂起。
+        client = _FakeModelClient(
+            (ValueError("prompt too long"), ValueError("prompt too long"), ValueError("prompt too long"))
+        )
         result = _loop(client).run_until_stop("run")
         self.assertEqual(result.stop_reason, "context_overflow")
         self.assertEqual(result.state.recovery.compact_attempts, 1)

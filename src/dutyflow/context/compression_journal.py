@@ -142,6 +142,34 @@ class CompressionJournalStore:
         )
         return self._write_record(record)
 
+    def write_emergency_compact(
+        self,
+        *,
+        state: AgentState,
+        source_messages: tuple[AgentMessage, ...],
+        compacted_messages: tuple[AgentMessage, ...],
+        budget: ContextBudgetReport | None,
+        health_check_status: str = "not_run",
+        notes: str = "",
+    ) -> CompressionJournalRecord:
+        """记录一次 context_overflow 触发的应急压缩动作。"""
+        compacted_ids = _compacted_tool_result_ids(source_messages, compacted_messages)
+        record = _build_record(
+            self.project_root,
+            self.journal_dir,
+            state=state,
+            action_type="emergency_compact",
+            trigger_reason="context_overflow_emergency",
+            source_messages=source_messages,
+            projected_messages=compacted_messages,
+            budget=budget,
+            compacted_tool_result_ids=compacted_ids,
+            generated_tool_receipt_ids=compacted_ids,
+            health_check_status=health_check_status,
+            notes=notes or "应急压缩：context_overflow 触发，压缩全部 tool result。",
+        )
+        return self._write_record(record)
+
     def read_journal(self, journal_id: str) -> CompressionJournalRecord | None:
         """按 journal ID 读取记录。"""
         path = self.journal_dir / f"{journal_id}.md"

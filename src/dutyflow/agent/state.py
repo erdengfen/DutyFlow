@@ -22,6 +22,7 @@ TRANSITION_REASONS = frozenset(
         "tool_result_continuation",
         "max_tokens_recovery",
         "compact_retry",
+        "emergency_compact_retry",
         "transport_retry",
         "stop_hook_continuation",
         "user_continuation",
@@ -32,6 +33,7 @@ TRANSITION_REASONS = frozenset(
 RECOVERY_ATTEMPT_FAILURE_KINDS = {
     "model_max_tokens": "continuation_attempts",
     "context_overflow": "compact_attempts",
+    "context_compaction_failed": "compact_attempts",
     "model_transport_error": "transport_attempts",
     "tool_timeout": "tool_error_attempts",
     "tool_transient_error": "tool_error_attempts",

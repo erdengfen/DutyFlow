@@ -37,7 +37,7 @@ from dutyflow.agent.tools.router import ToolRouter
 from dutyflow.agent.tools.types import ToolCall, ToolResultEnvelope
 from dutyflow.context.compression_journal import CompressionJournalStore
 from dutyflow.context.phase_summary import PhaseSummaryService, PhaseSummaryStore
-from dutyflow.context.runtime_context import RuntimeContextManager
+from dutyflow.context.runtime_context import RuntimeContextManager, run_context_health_check
 
 
 @dataclass(frozen=True)
@@ -129,6 +129,8 @@ class AgentLoop:
         self.max_turns = max_turns
         # 关键开关：单轮模型调用在当前进程内允许的最大恢复次数；当前默认最多 3 次。
         self.max_model_recovery_attempts = max_model_recovery_attempts
+        # 关键开关：context_overflow 应急压缩最多允许 1 次重试；超过后以 context_compaction_failed 结束。
+        self.max_emergency_compact_attempts = 1
 
     def run_until_stop(
         self,
@@ -143,6 +145,7 @@ class AgentLoop:
         tool_results: list[ToolResultEnvelope] = []
         local_turns = 0
         model_transport_attempts = 0
+        emergency_compact_attempts = 0
         active_recovery_ids: list[str] = []
         while True:
             model_state: AgentState | None = None
@@ -157,6 +160,13 @@ class AgentLoop:
                 failure_kind = self._classify_model_failure(exc)
                 if failure_kind == "context_overflow" and model_state is not None:
                     self._maybe_create_phase_summary(state, model_state, forced_reason="context_overflow")
+                    if emergency_compact_attempts < self.max_emergency_compact_attempts:
+                        compacted_state, compact_ok = self._apply_emergency_compact(state, str(exc))
+                        emergency_compact_attempts += 1
+                        if compact_ok:
+                            state = mark_transition(compacted_state, "emergency_compact_retry")
+                            continue
+                        failure_kind = "context_compaction_failed"
                 state, decision, recovery_id = self._register_model_recovery(
                     state=state,
                     failure_kind=failure_kind,
@@ -389,6 +399,48 @@ class AgentLoop:
         if "context" in message or "prompt" in message:
             return "context_overflow"
         return "model_transport_error"
+
+    def _apply_emergency_compact(
+        self,
+        state: AgentState,
+        error_message: str = "",
+    ) -> tuple[AgentState, bool]:
+        """应急压缩：压缩全部 tool result，运行 Health Check，按结果决定是否更新 state。"""
+        compacted_messages = self.runtime_context_manager.emergency_compact_messages(state)
+        health = run_context_health_check(state, compacted_messages)
+        self.runtime_context_manager.latest_health_check = health
+        health_status = "passed" if health.passed else "failed"
+        self._record_emergency_compact_journal(state, compacted_messages, health_status, error_message)
+        if not health.passed:
+            return state, False
+        compacted_state = replace(state, messages=compacted_messages)
+        self.runtime_context_manager.latest_budget_report = (
+            self.runtime_context_manager.estimate_budget(compacted_messages)
+        )
+        return compacted_state, True
+
+    def _record_emergency_compact_journal(
+        self,
+        state: AgentState,
+        compacted_messages: tuple[AgentMessage, ...],
+        health_status: str,
+        error_message: str = "",
+    ) -> None:
+        """把应急压缩动作写入 Compression Journal。"""
+        note_suffix = f" error={error_message[:200]}" if error_message else ""
+        try:
+            record = self.compression_journal_store.write_emergency_compact(
+                state=state,
+                source_messages=state.messages,
+                compacted_messages=compacted_messages,
+                budget=self.runtime_context_manager.latest_budget_report,
+                health_check_status=health_status,
+                notes=f"应急压缩：context_overflow 触发，压缩全部 tool result。{note_suffix}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.runtime_context_manager.record_compression_journal(None, error=str(exc))
+            return
+        self.runtime_context_manager.record_compression_journal(record)
 
     def _new_recovery_id(self, event: RecoveryEvent) -> str:
         """生成模型恢复 scope 的本地 ID。"""

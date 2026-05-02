@@ -197,6 +197,20 @@ class RuntimeContextManager:
             return state.messages
         return tuple(compacted_messages)
 
+    def emergency_compact_messages(self, state: AgentState) -> tuple[AgentMessage, ...]:
+        """应急压缩：压缩全部 tool result（包含最新一条），比 micro-compact 更激进。"""
+        working_set = self.build_working_set(state)
+        # 关键开关：应急压缩不保留任何 fresh tool result，全部替换为 Tool Receipt。
+        compacted_messages: list[AgentMessage] = []
+        changed = False
+        for message in state.messages:
+            compacted = _micro_compact_message(message, working_set, frozenset())
+            changed = changed or compacted is not message
+            compacted_messages.append(compacted)
+        if not changed:
+            return state.messages
+        return tuple(compacted_messages)
+
     def project_state_for_model(self, state: AgentState) -> AgentState:
         """把投影后的 messages 渲染回现有 AgentState 结构供模型客户端消费。"""
         projected_messages = self.project(state)

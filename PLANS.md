@@ -1541,7 +1541,7 @@ emergency compact
 - [x] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
 - [x] 实现 Compression Journal。
 - [x] 实现 Context Health Check。
-- [ ] 接入 `context_overflow` emergency compact recovery。
+- [x] 接入 `context_overflow` emergency compact recovery。
 - [ ] 接入 CLI `/compress`。
 - [ ] 接入 CLI `/clear`。
 - [x] 为新增 `.py` 文件添加自测入口。
