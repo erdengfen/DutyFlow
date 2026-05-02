@@ -1540,7 +1540,7 @@ emergency compact
 - [x] 实现 Context Budget，第一版输出估算 token。
 - [x] 接入 LLM Phase Summary，使用阶段摘要而不是 rolling summary。
 - [x] 实现 Compression Journal。
-- [ ] 实现 Context Health Check。
+- [x] 实现 Context Health Check。
 - [ ] 接入 `context_overflow` emergency compact recovery。
 - [ ] 接入 CLI `/compress`。
 - [ ] 接入 CLI `/clear`。
