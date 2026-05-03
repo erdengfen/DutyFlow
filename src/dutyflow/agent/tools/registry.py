@@ -29,6 +29,9 @@ from dutyflow.agent.tools.logic.skill_tools.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.skill_tools.load_skill import LoadSkillTool
 from dutyflow.agent.tools.logic.task_tools.create_background_task import CreateBackgroundTaskTool
 from dutyflow.agent.tools.logic.task_tools.schedule_background_task import ScheduleBackgroundTaskTool
+from dutyflow.agent.tools.logic.web_tools.web_fetch import WebFetchTool
+from dutyflow.agent.tools.logic.web_tools.web_read_link import WebReadLinkTool
+from dutyflow.agent.tools.logic.web_tools.web_search import WebSearchTool
 
 if TYPE_CHECKING:
     from dutyflow.agent.tools.context import ToolUseContext
@@ -52,6 +55,9 @@ TOOL_REGISTRY = {
     ScheduleBackgroundTaskTool.name: ScheduleBackgroundTaskTool(),
     SearchContactKnowledgeHeadersTool.name: SearchContactKnowledgeHeadersTool(),
     UpdateContactKnowledgeTool.name: UpdateContactKnowledgeTool(),
+    WebFetchTool.name: WebFetchTool(),
+    WebReadLinkTool.name: WebReadLinkTool(),
+    WebSearchTool.name: WebSearchTool(),
 }
 
 
