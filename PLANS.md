@@ -2163,12 +2163,12 @@ edit_time   最后编辑时间（Unix 秒）
 
 **阶段 1：OAuth 授权流程**
 
-- [ ] 实现 `FeishuOAuthManager.build_authorize_url()`
-- [ ] 实现 `FeishuOAuthManager.start_callback_server()`（临时 HTTP server，接收 code，300 秒超时）
-- [ ] 实现 `FeishuOAuthManager.exchange_code()`（调用飞书 token 接口）
-- [ ] 实现 `FeishuOAuthManager.fetch_user_info()`（补全 user_id / union_id）
-- [ ] 实现 token 换取后通过 `save_env_values()` 写入 `.env`
-- [ ] 在 `runtime.py` 中识别 `/oauth` 指令，触发完整授权流程并向用户发送授权链接和完成通知
+- [x] 实现 `FeishuOAuthManager.build_authorize_url()`
+- [x] 实现 `FeishuOAuthManager.start_callback_server()`（临时 HTTP server，接收 code，300 秒超时）
+- [x] 实现 `FeishuOAuthManager.exchange_code()`（调用飞书 token 接口）
+- [x] 实现 `FeishuOAuthManager.fetch_user_info()`（补全 user_id / union_id）
+- [x] 实现 token 换取后通过 `save_env_values()` 写入 `.env`
+- [x] 在 `runtime.py` 中识别 `/oauth` 指令，触发完整授权流程并向用户发送授权链接和完成通知
 
 **阶段 2：Token 刷新与有效性管理**
 
@@ -2192,7 +2192,7 @@ edit_time   最后编辑时间（Unix 秒）
 
 **验收与测试**
 
-- [ ] 编写 `test/test_feishu_oauth.py`（mock HTTP，覆盖 URL 构造、state 校验、token 换取、刷新逻辑）
+- [x] 编写 `test/test_feishu_oauth.py`（mock HTTP，覆盖 URL 构造、state 校验、token 换取、runtime 指令路由）
 - [ ] 编写 `test/test_feishu_user_resource.py`（mock 飞书 API，覆盖 read_doc 和 get_file_meta）
 - [ ] 编写工具注册验证测试
 - [ ] 为新增 `.py` 文件添加自测入口
@@ -2200,10 +2200,10 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 人工确认
 
-- [×] 飞书开放平台应用后台已添加回调地址 `http://127.0.0.1:9768/feishu/oauth/callback`
-- [×] 已申请并开启所需权限 scope（`docx:document:readonly`、`drive:drive:readonly`）
-- [×] `.env` 已填写 `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` 和 `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
-- [×] 真实 OAuth 流程需要浏览器配合，首次授权为人工操作
+- [x] 飞书开放平台应用后台已添加回调地址 `http://127.0.0.1:9768/feishu/oauth/callback`
+- [x] 已申请并开启所需权限 scope（`docx:document:readonly`、`drive:drive:readonly`）
+- [x] `.env` 已填写 `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` 和 `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
+- [x] 真实 OAuth 流程需要浏览器配合，首次授权为人工操作
 
 ## Step 13: 完整 Demo 链路验收
 

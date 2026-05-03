@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import secrets
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 import sys
@@ -21,6 +23,7 @@ from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingr
 from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
+from dutyflow.feishu.oauth import FeishuOAuthManager
 from dutyflow.perception.store import PerceptionRecordService
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
@@ -117,6 +120,7 @@ class FeishuIngressService:
             self.latest_result = result
             return result
         bind_payload: dict[str, Any] = {}
+        oauth_payload: dict[str, Any] = {}
         action = "accepted"
         detail = "event accepted and persisted"
         record_path = self._write_event_record(envelope)
@@ -126,6 +130,10 @@ class FeishuIngressService:
             bind_payload = self._handle_bind_request(envelope)
             action = "bind_saved"
             detail = "bind command processed and persisted"
+        elif envelope.is_oauth_request():
+            oauth_payload = self._handle_oauth_request(envelope)
+            action = "oauth_started"
+            detail = "oauth flow initiated in background"
         self._remember_event(envelope)
         result = FeishuIngressResult(
             action=action,
@@ -139,6 +147,7 @@ class FeishuIngressService:
                 **perception_payload,
                 **runtime_payload,
                 **bind_payload,
+                **oauth_payload,
             },
         )
         self.latest_result = result
@@ -346,6 +355,8 @@ class FeishuIngressService:
         """把主链事件对应的感知记录送入 runtime queue。"""
         if envelope.is_bind_request():
             return {"runtime_queue_action": "skipped_bind"}
+        if envelope.is_oauth_request():
+            return {"runtime_queue_action": "skipped_oauth"}
         if self.runtime_service is None:
             return {"runtime_queue_action": "runtime_not_connected"}
         loop_input = perception_payload.get("loop_input_preview")
@@ -372,6 +383,79 @@ class FeishuIngressService:
             "runtime_work_id": work_item.work_id,
             "runtime_perception_id": work_item.perception_id,
         }
+
+    def _handle_oauth_request(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
+        """处理 `/oauth` 指令：校验配置、发送授权链接，并在后台线程执行完整授权流程。"""
+        if not _has_oauth_config(self.config):
+            self.feedback_gateway.send_text(
+                envelope.chat_id,
+                "OAuth 配置不完整，请先在 .env 中设置 "
+                "DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI 和 DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES。",
+            )
+            return {"oauth_action": "config_missing"}
+
+        manager = FeishuOAuthManager(self.config, self.project_root)
+        state = secrets.token_hex(16)
+        auth_url = manager.build_authorize_url(state)
+
+        self.feedback_gateway.send_text(
+            envelope.chat_id,
+            f"请在 5 分钟内用浏览器打开以下链接完成飞书授权：\n{auth_url}",
+        )
+
+        thread = threading.Thread(
+            target=self._run_oauth_background,
+            args=(manager, state, envelope.chat_id),
+            daemon=True,
+        )
+        thread.start()
+
+        return {
+            "oauth_action": "started",
+            "oauth_state": state,
+        }
+
+    def _run_oauth_background(
+        self,
+        manager: FeishuOAuthManager,
+        state: str,
+        chat_id: str,
+    ) -> None:
+        """后台线程：等待 OAuth callback，换取 token，补全用户身份，持久化到 .env。"""
+        try:
+            code = manager.start_callback_server(state)
+            token_data = manager.exchange_code(code)
+            access_token = token_data.get("access_token") or token_data.get(
+                "user_access_token", ""
+            )
+            user_info = manager.fetch_user_info(access_token)
+            saved_keys = manager.persist_token_result(token_data, user_info)
+            self._apply_oauth_result_to_config(token_data, user_info)
+            self.feedback_gateway.send_text(
+                chat_id,
+                f"OAuth 授权完成，已记录用户身份和访问凭证（{len(saved_keys)} 个字段已更新）。",
+            )
+        except TimeoutError:
+            self.feedback_gateway.send_text(
+                chat_id,
+                "OAuth 授权超时（300 秒），请重新发送 /oauth 重试。",
+            )
+        except Exception as exc:
+            self.feedback_gateway.send_text(chat_id, f"OAuth 授权失败：{exc}")
+
+    def _apply_oauth_result_to_config(
+        self,
+        token_data: dict[str, Any],
+        user_info: dict[str, Any],
+    ) -> None:
+        """把 OAuth 换取结果同步写回当前进程内配置，避免重启前仍使用空值。"""
+        access_token = token_data.get("access_token") or token_data.get(
+            "user_access_token", ""
+        )
+        self.config.feishu_owner_user_access_token = access_token
+        self.config.feishu_owner_user_refresh_token = token_data.get("refresh_token", "")
+        self.config.feishu_owner_user_id = user_info.get("user_id", "")
+        self.config.feishu_owner_union_id = user_info.get("union_id", "")
 
     def _handle_bind_request(self, envelope: FeishuEventEnvelope) -> dict[str, Any]:
         """处理 `/bind` 指令，回填 `.env` 并向当前会话回消息。"""
@@ -531,6 +615,11 @@ def _build_event_body(
         "- approval_required: no\n"
         "- task_created: no\n"
     )
+
+
+def _has_oauth_config(config: EnvConfig) -> bool:
+    """判断 OAuth 流程所需的最小配置是否已填写。"""
+    return bool(config.feishu_oauth_redirect_uri and config.feishu_oauth_default_scopes)
 
 
 def _join_scope_id(*parts: str) -> str:

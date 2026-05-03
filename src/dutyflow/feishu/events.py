@@ -42,6 +42,10 @@ class FeishuEventEnvelope:
         """判断当前消息是否为显式的绑定指令。"""
         return self.is_p2p_message() and self.message_text.strip() == "/bind"
 
+    def is_oauth_request(self) -> bool:
+        """判断当前消息是否为显式的 OAuth 授权指令。"""
+        return self.is_p2p_message() and self.message_text.strip() in {"/oauth", "oauth 授权"}
+
 
 class FeishuEventAdapter:
     """把飞书原始事件转换为接入层统一视图。"""
