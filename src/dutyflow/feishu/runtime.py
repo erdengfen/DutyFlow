@@ -424,12 +424,19 @@ class FeishuIngressService:
         """后台线程：等待 OAuth callback，换取 token，补全用户身份，持久化到 .env。"""
         try:
             code = manager.start_callback_server(state)
+            print(f"[OAuth] 收到授权码，开始换取 token", flush=True)
             token_data = manager.exchange_code(code)
+            print(f"[OAuth] token_data keys: {list(token_data.keys())}", flush=True)
             access_token = token_data.get("access_token") or token_data.get(
                 "user_access_token", ""
             )
+            print(f"[OAuth] access_token 长度: {len(access_token)}", flush=True)
             user_info = manager.fetch_user_info(access_token)
+            print(f"[OAuth] user_info keys: {list(user_info.keys())}", flush=True)
+            env_path = manager.project_root / ".env"
+            print(f"[OAuth] 将写入 .env 路径: {env_path}", flush=True)
             saved_keys = manager.persist_token_result(token_data, user_info)
+            print(f"[OAuth] saved_keys: {saved_keys}", flush=True)
             self._apply_oauth_result_to_config(token_data, user_info)
             self.feedback_gateway.send_text(
                 chat_id,
@@ -441,6 +448,9 @@ class FeishuIngressService:
                 "OAuth 授权超时（300 秒），请重新发送 /oauth 重试。",
             )
         except Exception as exc:
+            import traceback
+            print(f"[OAuth] 后台线程异常: {exc}", flush=True)
+            traceback.print_exc()
             self.feedback_gateway.send_text(chat_id, f"OAuth 授权失败：{exc}")
 
     def _apply_oauth_result_to_config(

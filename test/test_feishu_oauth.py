@@ -112,6 +112,24 @@ class TestParseFeishuResponse(unittest.TestCase):
             _parse_feishu_response(resp, "token 换取")
         self.assertIn("token 换取", str(ctx.exception))
 
+    def test_nonzero_code_with_empty_msg_shows_full_body(self) -> None:
+        resp = {"code": 99991663, "msg": ""}
+        with self.assertRaises(RuntimeError) as ctx:
+            _parse_feishu_response(resp, "token 换取")
+        self.assertIn("99991663", str(ctx.exception))
+
+    def test_oauth_error_format_raises_with_description(self) -> None:
+        resp = {"error": "invalid_grant", "error_description": "code has expired"}
+        with self.assertRaises(RuntimeError) as ctx:
+            _parse_feishu_response(resp, "token 换取")
+        self.assertIn("code has expired", str(ctx.exception))
+
+    def test_oauth_error_format_without_description(self) -> None:
+        resp = {"error": "invalid_client"}
+        with self.assertRaises(RuntimeError) as ctx:
+            _parse_feishu_response(resp, "token 换取")
+        self.assertIn("invalid_client", str(ctx.exception))
+
     def test_missing_data_returns_empty_dict(self) -> None:
         resp = {"code": 0}
         data = _parse_feishu_response(resp, "test")
@@ -121,10 +139,17 @@ class TestParseFeishuResponse(unittest.TestCase):
 class TestExchangeCode(unittest.TestCase):
     """验证 code → token 换取逻辑（mock HTTP）。"""
 
+    def _make_app_token_resp(self) -> MagicMock:
+        """构造 app_access_token 接口的 mock 响应。"""
+        resp = MagicMock()
+        resp.json.return_value = {"code": 0, "app_access_token": "at.fake_app_token"}
+        resp.raise_for_status = MagicMock()
+        return resp
+
     def test_successful_exchange_returns_token_data(self) -> None:
         manager = FeishuOAuthManager(_make_config(), Path("/tmp"))
-        fake_resp = MagicMock()
-        fake_resp.json.return_value = {
+        token_resp = MagicMock()
+        token_resp.json.return_value = {
             "code": 0,
             "data": {
                 "access_token": "u.tok123",
@@ -132,18 +157,18 @@ class TestExchangeCode(unittest.TestCase):
                 "expires_in": 7140,
             },
         }
-        fake_resp.raise_for_status = MagicMock()
-        with patch("httpx.post", return_value=fake_resp):
+        token_resp.raise_for_status = MagicMock()
+        with patch("httpx.post", side_effect=[self._make_app_token_resp(), token_resp]):
             data = manager.exchange_code("code_abc")
         self.assertEqual(data["access_token"], "u.tok123")
         self.assertEqual(data["refresh_token"], "ref456")
 
     def test_feishu_error_code_raises(self) -> None:
         manager = FeishuOAuthManager(_make_config(), Path("/tmp"))
-        fake_resp = MagicMock()
-        fake_resp.json.return_value = {"code": 99201, "msg": "expired code"}
-        fake_resp.raise_for_status = MagicMock()
-        with patch("httpx.post", return_value=fake_resp):
+        error_resp = MagicMock()
+        error_resp.json.return_value = {"code": 99201, "msg": "expired code"}
+        error_resp.raise_for_status = MagicMock()
+        with patch("httpx.post", side_effect=[self._make_app_token_resp(), error_resp]):
             with self.assertRaises(RuntimeError):
                 manager.exchange_code("bad_code")
 

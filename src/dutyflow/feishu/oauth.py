@@ -17,6 +17,8 @@ from dutyflow.config.env import EnvConfig, save_env_values
 _FEISHU_AUTHORIZE_URL = "https://open.feishu.cn/open-apis/authen/v1/authorize"
 _FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
 _FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+# 关键开关：app_access_token 获取端点，/oidc/access_token 需要用它做 Bearer 鉴权。
+_FEISHU_APP_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 # 关键开关：本地 callback 监听端口，必须与飞书后台登记的回调地址一致。
 OAUTH_CALLBACK_PORT = 9768
 # 关键开关：等待用户在浏览器完成授权的最长秒数。
@@ -52,18 +54,27 @@ class FeishuOAuthManager:
         return _wait_for_oauth_code(OAUTH_CALLBACK_PORT, state, timeout)
 
     def exchange_code(self, code: str) -> dict[str, Any]:
-        """用授权码换取 user_access_token，返回飞书 token 接口的 data 字段。"""
+        """用授权码换取 user_access_token，返回飞书 token 接口的 data 字段。
+
+        飞书 /oidc/access_token 需要先用 app_id/app_secret 换取 app_access_token，
+        再以 Bearer 形式鉴权，不接受 Basic auth。
+        """
         import httpx
 
-        credentials = _build_basic_credentials(
+        app_token = _fetch_app_access_token(
             self.config.feishu_app_id, self.config.feishu_app_secret
         )
         headers = {
-            "Authorization": f"Basic {credentials}",
+            "Authorization": f"Bearer {app_token}",
             "Content-Type": "application/json",
         }
-        body = {"grant_type": "authorization_code", "code": code}
+        body = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self.config.feishu_oauth_redirect_uri,
+        }
         response = httpx.post(_FEISHU_TOKEN_URL, headers=headers, json=body, timeout=15.0)
+        _log_feishu_response("token 换取", response.status_code, response.text)
         response.raise_for_status()
         return _parse_feishu_response(response.json(), "token 换取")
 
@@ -73,6 +84,7 @@ class FeishuOAuthManager:
 
         headers = {"Authorization": f"Bearer {access_token}"}
         response = httpx.get(_FEISHU_USER_INFO_URL, headers=headers, timeout=10.0)
+        _log_feishu_response("用户信息查询", response.status_code, response.text)
         response.raise_for_status()
         return _parse_feishu_response(response.json(), "用户信息查询")
 
@@ -154,16 +166,52 @@ def _write_html_response(
     handler.wfile.write(body)
 
 
+def _fetch_app_access_token(app_id: str, app_secret: str) -> str:
+    """用 app_id/app_secret 向飞书换取 app_access_token，供 /oidc/access_token 鉴权使用。"""
+    import httpx
+
+    response = httpx.post(
+        _FEISHU_APP_TOKEN_URL,
+        json={"app_id": app_id, "app_secret": app_secret},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    token = data.get("app_access_token", "")
+    if not token:
+        raise RuntimeError(f"获取 app_access_token 失败：{data}")
+    return token
+
+
 def _build_basic_credentials(app_id: str, app_secret: str) -> str:
-    """把 app_id:app_secret 编码为 HTTP Basic 认证凭据。"""
+    """把 app_id:app_secret 编码为 HTTP Basic 认证凭据（保留供其他场景使用）。"""
     return base64.b64encode(f"{app_id}:{app_secret}".encode()).decode()
 
 
 def _parse_feishu_response(resp: dict[str, Any], context: str) -> dict[str, Any]:
-    """解析飞书 API 响应，非零 code 时抛出带上下文的 RuntimeError。"""
+    """解析飞书 API 响应，支持飞书统一格式和 OAuth 标准错误格式，失败时抛出含完整信息的 RuntimeError。"""
+    # OAuth 标准错误格式：{"error": "...", "error_description": "..."}，无 code 字段
+    if "error" in resp and "code" not in resp:
+        desc = resp.get("error_description") or resp.get("error")
+        raise RuntimeError(f"飞书 {context} 失败（OAuth 错误）：{desc}")
+    # 飞书统一响应格式：{"code": <int>, "msg": "...", "data": {...}}
     if resp.get("code") != 0:
-        raise RuntimeError(f"飞书 {context} 失败：{resp.get('msg', '未知错误')}")
+        detail = (
+            resp.get("msg")
+            or resp.get("error_description")
+            or resp.get("error")
+            or json.dumps(resp, ensure_ascii=False)
+        )
+        raise RuntimeError(f"飞书 {context} 失败（code={resp.get('code')}）：{detail}")
     return resp.get("data") or {}
+
+
+def _log_feishu_response(context: str, status_code: int, body: str) -> None:
+    """把飞书 API 原始响应打印到 stdout，供本地调试使用。"""
+    print(
+        f"[OAuth] {context} HTTP {status_code}: {body[:500]}",
+        flush=True,
+    )
 
 
 def _compute_expires_at(expires_in_seconds: int) -> str:
