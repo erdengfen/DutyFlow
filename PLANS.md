@@ -2177,11 +2177,11 @@ edit_time   最后编辑时间（Unix 秒）
 - [x] 刷新后同步更新 `.env` 中的三个 token 字段
 - [x] refresh_token 过期时返回明确错误，提示用户重新 `/oauth`
 
-**阶段 3：资源读取层**
+**阶段 3：资源读取层**（已完成 2026-05-03）
 
-- [ ] 实现 `FeishuUserResourceClient.read_doc()`（飞书 docx raw_content API）
-- [ ] 实现 `FeishuUserResourceClient.get_file_meta()`（飞书 drive batch_query API）
-- [ ] `user_access_token` 不存在时返回 `token_missing` 错误，不静默失败
+- [x] 实现 `FeishuUserResourceClient.read_doc()`（飞书 docx raw_content API）
+- [x] 实现 `FeishuUserResourceClient.get_file_meta()`（飞书 drive batch_query API）
+- [x] `user_access_token` 不存在时返回 `token_missing` 错误，不静默失败
 
 **阶段 4：内部工具接入**
 
@@ -2193,7 +2193,7 @@ edit_time   最后编辑时间（Unix 秒）
 **验收与测试**
 
 - [x] 编写 `test/test_feishu_oauth.py`（mock HTTP，覆盖 URL 构造、state 校验、token 换取、runtime 指令路由）
-- [ ] 编写 `test/test_feishu_user_resource.py`（mock 飞书 API，覆盖 read_doc 和 get_file_meta）
+- [x] 编写 `test/test_feishu_user_resource.py`（mock 飞书 API，覆盖 read_doc 和 get_file_meta）
 - [ ] 编写工具注册验证测试
 - [ ] 为新增 `.py` 文件添加自测入口
 - [ ] 执行本阶段完整链路检查
