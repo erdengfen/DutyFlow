@@ -21,6 +21,7 @@ from dutyflow.feishu.oauth import (  # noqa: E402
     _compute_expires_at,
     _build_basic_credentials,
     _parse_feishu_response,
+    _token_needs_refresh,
 )
 from dutyflow.feishu.events import FeishuEventAdapter  # noqa: E402
 
@@ -347,6 +348,219 @@ class TestRuntimeOAuthHandling(unittest.TestCase):
         self.assertIn("oauth_state", result)
 
 
+class TestTokenNeedsRefresh(unittest.TestCase):
+    """验证 _token_needs_refresh() 在各种 expires_at 值下的行为。"""
+
+    def test_empty_string_returns_true(self) -> None:
+        self.assertTrue(_token_needs_refresh(""))
+
+    def test_invalid_format_returns_true(self) -> None:
+        self.assertTrue(_token_needs_refresh("not-a-date"))
+
+    def test_far_future_returns_false(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(timespec="seconds")
+        self.assertFalse(_token_needs_refresh(future))
+
+    def test_within_300s_returns_true(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        soon = (datetime.now(timezone.utc) + timedelta(seconds=200)).isoformat(timespec="seconds")
+        self.assertTrue(_token_needs_refresh(soon))
+
+    def test_past_expiry_returns_true(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
+        self.assertTrue(_token_needs_refresh(past))
+
+    def test_exactly_300s_returns_true(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        boundary = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat(timespec="seconds")
+        self.assertTrue(_token_needs_refresh(boundary))
+
+    def test_naive_datetime_treated_as_utc(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        naive_future = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        self.assertFalse(_token_needs_refresh(naive_future))
+
+
+class TestRefreshToken(unittest.TestCase):
+    """验证 refresh_token() 调用刷新接口、持久化并同步 config。"""
+
+    def _make_app_token_resp(self) -> MagicMock:
+        resp = MagicMock()
+        resp.json.return_value = {"code": 0, "app_access_token": "at.fake"}
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    def _make_refresh_resp(self, *, code: int = 0, data: dict | None = None, msg: str = "") -> MagicMock:
+        resp = MagicMock()
+        body: dict = {"code": code}
+        if code == 0:
+            body["data"] = data or {
+                "access_token": "u.new_tok",
+                "refresh_token": "ur.new_ref",
+                "expires_in": 7140,
+            }
+        else:
+            body["msg"] = msg or "error"
+        resp.json.return_value = body
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    def test_successful_refresh_returns_new_token_data(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            config = _make_config()
+            config.feishu_owner_user_access_token = "u.old"
+            config.feishu_owner_user_refresh_token = "ur.old"
+            config.feishu_owner_user_token_expires_at = ""
+            manager = FeishuOAuthManager(config, root)
+            with patch("httpx.post", side_effect=[self._make_app_token_resp(), self._make_refresh_resp()]):
+                data = manager.refresh_token("ur.old")
+        self.assertEqual(data["access_token"], "u.new_tok")
+        self.assertEqual(data["refresh_token"], "ur.new_ref")
+
+    def test_refresh_writes_new_token_to_env(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            config = _make_config()
+            config.feishu_owner_user_access_token = "u.old"
+            config.feishu_owner_user_refresh_token = "ur.old"
+            config.feishu_owner_user_token_expires_at = ""
+            manager = FeishuOAuthManager(config, root)
+            with patch("httpx.post", side_effect=[self._make_app_token_resp(), self._make_refresh_resp()]):
+                manager.refresh_token("ur.old")
+            env_text = (root / ".env").read_text()
+        self.assertIn("u.new_tok", env_text)
+        self.assertIn("ur.new_ref", env_text)
+
+    def test_refresh_updates_config_in_memory(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            config = _make_config()
+            config.feishu_owner_user_access_token = "u.old"
+            config.feishu_owner_user_refresh_token = "ur.old"
+            config.feishu_owner_user_token_expires_at = ""
+            manager = FeishuOAuthManager(config, root)
+            with patch("httpx.post", side_effect=[self._make_app_token_resp(), self._make_refresh_resp()]):
+                manager.refresh_token("ur.old")
+        self.assertEqual(config.feishu_owner_user_access_token, "u.new_tok")
+        self.assertEqual(config.feishu_owner_user_refresh_token, "ur.new_ref")
+
+    def test_feishu_error_raises_runtime_error(self) -> None:
+        config = _make_config()
+        config.feishu_owner_user_access_token = ""
+        config.feishu_owner_user_refresh_token = ""
+        config.feishu_owner_user_token_expires_at = ""
+        manager = FeishuOAuthManager(config, Path("/tmp"))
+        error_resp = self._make_refresh_resp(code=99306, msg="refresh token expired")
+        with patch("httpx.post", side_effect=[self._make_app_token_resp(), error_resp]):
+            with self.assertRaises(RuntimeError) as ctx:
+                manager.refresh_token("ur.expired")
+        self.assertIn("token 刷新", str(ctx.exception))
+
+
+class TestEnsureValidToken(unittest.TestCase):
+    """验证 ensure_valid_token() 的过期检测和刷新触发逻辑。"""
+
+    def _make_manager(
+        self,
+        *,
+        access_token: str = "u.valid",
+        refresh_token_val: str = "ur.ref",
+        expires_at: str = "",
+        root: Path | None = None,
+    ) -> FeishuOAuthManager:
+        config = _make_config()
+        config.feishu_owner_user_access_token = access_token
+        config.feishu_owner_user_refresh_token = refresh_token_val
+        config.feishu_owner_user_token_expires_at = expires_at
+        return FeishuOAuthManager(config, root or Path("/tmp"))
+
+    def _far_future(self) -> str:
+        from datetime import datetime, timedelta, timezone
+        return (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(timespec="seconds")
+
+    def test_no_access_token_raises(self) -> None:
+        manager = self._make_manager(access_token="")
+        with self.assertRaises(RuntimeError) as ctx:
+            manager.ensure_valid_token()
+        self.assertIn("/oauth", str(ctx.exception))
+
+    def test_valid_token_far_from_expiry_returns_immediately(self) -> None:
+        manager = self._make_manager(expires_at=self._far_future())
+        token = manager.ensure_valid_token()
+        self.assertEqual(token, "u.valid")
+
+    def test_empty_expires_at_triggers_refresh(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            manager = self._make_manager(expires_at="", root=root)
+            app_resp = MagicMock()
+            app_resp.json.return_value = {"code": 0, "app_access_token": "at.fake"}
+            app_resp.raise_for_status = MagicMock()
+            refresh_resp = MagicMock()
+            refresh_resp.json.return_value = {
+                "code": 0,
+                "data": {"access_token": "u.refreshed", "refresh_token": "ur.new", "expires_in": 7140},
+            }
+            refresh_resp.raise_for_status = MagicMock()
+            with patch("httpx.post", side_effect=[app_resp, refresh_resp]):
+                token = manager.ensure_valid_token()
+        self.assertEqual(token, "u.refreshed")
+
+    def test_near_expiry_triggers_refresh(self) -> None:
+        import tempfile
+        from datetime import datetime, timedelta, timezone
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            soon = (datetime.now(timezone.utc) + timedelta(seconds=100)).isoformat(timespec="seconds")
+            manager = self._make_manager(expires_at=soon, root=root)
+            app_resp = MagicMock()
+            app_resp.json.return_value = {"code": 0, "app_access_token": "at.fake"}
+            app_resp.raise_for_status = MagicMock()
+            refresh_resp = MagicMock()
+            refresh_resp.json.return_value = {
+                "code": 0,
+                "data": {"access_token": "u.renewed", "refresh_token": "ur.new", "expires_in": 7140},
+            }
+            refresh_resp.raise_for_status = MagicMock()
+            with patch("httpx.post", side_effect=[app_resp, refresh_resp]):
+                token = manager.ensure_valid_token()
+        self.assertEqual(token, "u.renewed")
+
+    def test_no_refresh_token_raises(self) -> None:
+        manager = self._make_manager(refresh_token_val="", expires_at="")
+        with self.assertRaises(RuntimeError) as ctx:
+            manager.ensure_valid_token()
+        self.assertIn("/oauth", str(ctx.exception))
+
+    def test_refresh_failure_propagates_error(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            manager = self._make_manager(expires_at="", root=root)
+            app_resp = MagicMock()
+            app_resp.json.return_value = {"code": 0, "app_access_token": "at.fake"}
+            app_resp.raise_for_status = MagicMock()
+            err_resp = MagicMock()
+            err_resp.json.return_value = {"code": 99306, "msg": "refresh token expired"}
+            err_resp.raise_for_status = MagicMock()
+            with patch("httpx.post", side_effect=[app_resp, err_resp]):
+                with self.assertRaises(RuntimeError):
+                    manager.ensure_valid_token()
+
+
 def _self_test() -> None:
     """运行本文件所有单元测试。"""
     loader = unittest.defaultTestLoader
@@ -362,6 +576,9 @@ def _self_test() -> None:
         TestCallbackServerStateValidation,
         TestOAuthRequestDetection,
         TestRuntimeOAuthHandling,
+        TestTokenNeedsRefresh,
+        TestRefreshToken,
+        TestEnsureValidToken,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

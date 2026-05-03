@@ -16,13 +16,16 @@ from dutyflow.config.env import EnvConfig, save_env_values
 
 _FEISHU_AUTHORIZE_URL = "https://open.feishu.cn/open-apis/authen/v1/authorize"
 _FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
+_FEISHU_REFRESH_URL = "https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token"
 _FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
-# 关键开关：app_access_token 获取端点，/oidc/access_token 需要用它做 Bearer 鉴权。
+# 关键开关：app_access_token 获取端点，/oidc/* 接口需要用它做 Bearer 鉴权。
 _FEISHU_APP_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 # 关键开关：本地 callback 监听端口，必须与飞书后台登记的回调地址一致。
 OAUTH_CALLBACK_PORT = 9768
 # 关键开关：等待用户在浏览器完成授权的最长秒数。
 OAUTH_TIMEOUT_SECONDS = 300.0
+# 关键开关：距 token 过期不足此秒数时提前刷新，避免请求途中 token 失效。
+_TOKEN_REFRESH_AHEAD_SECONDS = 300
 
 
 class FeishuOAuthManager:
@@ -106,6 +109,71 @@ class FeishuOAuthManager:
             "DUTYFLOW_FEISHU_OWNER_UNION_ID": user_info.get("union_id", ""),
         }
         return save_env_values(self.project_root, env_values)
+
+    def refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        """用 refresh_token 换取新的 user_access_token，持久化到 .env 并同步更新 config。
+
+        refresh_token 过期（飞书默认 30 天）时抛出 RuntimeError，需重新执行 /oauth。
+        返回飞书接口的 data 字段，结构与 exchange_code 相同。
+        """
+        import httpx
+
+        app_token = _fetch_app_access_token(
+            self.config.feishu_app_id, self.config.feishu_app_secret
+        )
+        headers = {
+            "Authorization": f"Bearer {app_token}",
+            "Content-Type": "application/json",
+        }
+        body = {"grant_type": "refresh_token", "refresh_token": refresh_token}
+        response = httpx.post(_FEISHU_REFRESH_URL, headers=headers, json=body, timeout=15.0)
+        _log_feishu_response("token 刷新", response.status_code, response.text)
+        response.raise_for_status()
+        token_data = _parse_feishu_response(response.json(), "token 刷新")
+        self._persist_refreshed_token(token_data)
+        return token_data
+
+    def ensure_valid_token(self) -> str:
+        """返回当前有效的 user_access_token，必要时先刷新。
+
+        access_token 为空：尚未授权，提示执行 /oauth。
+        expires_at 为空或距过期 ≤ 300 秒：触发刷新。
+        refresh_token 为空：无法刷新，提示重新 /oauth。
+        """
+        access_token = self.config.feishu_owner_user_access_token
+        if not access_token:
+            raise RuntimeError(
+                "尚未完成 OAuth 授权，请向 Bot 发送 /oauth 完成授权。"
+            )
+        if not _token_needs_refresh(self.config.feishu_owner_user_token_expires_at):
+            return access_token
+        refresh_token_val = self.config.feishu_owner_user_refresh_token
+        if not refresh_token_val:
+            raise RuntimeError(
+                "user_access_token 已过期且无可用 refresh_token，"
+                "请重新向 Bot 发送 /oauth 完成授权。"
+            )
+        token_data = self.refresh_token(refresh_token_val)
+        new_token = token_data.get("access_token") or token_data.get("user_access_token", "")
+        if not new_token:
+            raise RuntimeError("token 刷新成功但未返回新 access_token，请重新 /oauth 授权。")
+        return new_token
+
+    def _persist_refreshed_token(self, token_data: dict[str, Any]) -> None:
+        """把刷新后的三个 token 字段写入 .env，并同步更新进程内 config。"""
+        access_token = token_data.get("access_token") or token_data.get("user_access_token", "")
+        refresh_token = token_data.get("refresh_token", "")
+        expires_in = int(token_data.get("expires_in", 0))
+        expires_at = _compute_expires_at(expires_in)
+        env_values = {
+            "DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN": access_token,
+            "DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN": refresh_token,
+            "DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT": expires_at,
+        }
+        save_env_values(self.project_root, env_values)
+        self.config.feishu_owner_user_access_token = access_token
+        self.config.feishu_owner_user_refresh_token = refresh_token
+        self.config.feishu_owner_user_token_expires_at = expires_at
 
 
 def _wait_for_oauth_code(port: int, state: str, timeout: float) -> str:
@@ -212,6 +280,23 @@ def _log_feishu_response(context: str, status_code: int, body: str) -> None:
         f"[OAuth] {context} HTTP {status_code}: {body[:500]}",
         flush=True,
     )
+
+
+def _token_needs_refresh(expires_at: str) -> bool:
+    """判断 token 是否需要刷新。
+
+    expires_at 为空、格式不可解析，或距过期 ≤ _TOKEN_REFRESH_AHEAD_SECONDS 秒时返回 True。
+    """
+    if not expires_at:
+        return True
+    try:
+        expire_dt = datetime.fromisoformat(expires_at)
+        if expire_dt.tzinfo is None:
+            expire_dt = expire_dt.replace(tzinfo=timezone.utc)
+        remaining = (expire_dt - datetime.now(timezone.utc)).total_seconds()
+        return remaining <= _TOKEN_REFRESH_AHEAD_SECONDS
+    except (ValueError, OverflowError):
+        return True
 
 
 def _compute_expires_at(expires_in_seconds: int) -> str:

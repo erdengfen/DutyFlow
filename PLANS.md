@@ -2170,12 +2170,12 @@ edit_time   最后编辑时间（Unix 秒）
 - [x] 实现 token 换取后通过 `save_env_values()` 写入 `.env`
 - [x] 在 `runtime.py` 中识别 `/oauth` 指令，触发完整授权流程并向用户发送授权链接和完成通知
 
-**阶段 2：Token 刷新与有效性管理**
+**阶段 2：Token 刷新与有效性管理**（已完成 2026-05-03）
 
-- [ ] 实现 `FeishuOAuthManager.refresh_token()`（调用飞书刷新接口）
-- [ ] 实现 `FeishuOAuthManager.ensure_valid_token()`（检查过期，按需刷新，返回有效 token）
-- [ ] 刷新后同步更新 `.env` 中的三个 token 字段
-- [ ] refresh_token 过期时返回明确错误，提示用户重新 `/oauth`
+- [x] 实现 `FeishuOAuthManager.refresh_token()`（调用飞书刷新接口）
+- [x] 实现 `FeishuOAuthManager.ensure_valid_token()`（检查过期，按需刷新，返回有效 token）
+- [x] 刷新后同步更新 `.env` 中的三个 token 字段
+- [x] refresh_token 过期时返回明确错误，提示用户重新 `/oauth`
 
 **阶段 3：资源读取层**
 
