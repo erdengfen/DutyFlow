@@ -29,6 +29,8 @@ from dutyflow.agent.tools.logic.skill_tools.create_skill import CreateSkillTool
 from dutyflow.agent.tools.logic.skill_tools.load_skill import LoadSkillTool
 from dutyflow.agent.tools.logic.task_tools.create_background_task import CreateBackgroundTaskTool
 from dutyflow.agent.tools.logic.task_tools.schedule_background_task import ScheduleBackgroundTaskTool
+from dutyflow.agent.tools.logic.feishu_tools.get_file_meta import FeishuGetFileMetaTool
+from dutyflow.agent.tools.logic.feishu_tools.read_doc import FeishuReadDocTool
 from dutyflow.agent.tools.logic.web_tools.web_fetch import WebFetchTool
 from dutyflow.agent.tools.logic.web_tools.web_read_link import WebReadLinkTool
 from dutyflow.agent.tools.logic.web_tools.web_search import WebSearchTool
@@ -39,6 +41,8 @@ if TYPE_CHECKING:
 ToolHandler = Callable[[ToolCall, "ToolUseContext"], ToolResultEnvelope]
 
 TOOL_REGISTRY = {
+    FeishuGetFileMetaTool.name: FeishuGetFileMetaTool(),
+    FeishuReadDocTool.name: FeishuReadDocTool(),
     AddContactKnowledgeTool.name: AddContactKnowledgeTool(),
     CreateApprovalRequestTool.name: CreateApprovalRequestTool(),
     CloseCliSessionTool.name: CloseCliSessionTool(),
@@ -144,6 +148,8 @@ def _self_test() -> None:
         registry.register(spec)
     except ValueError:
         runtime_registry = create_runtime_tool_registry()
+        assert runtime_registry.has("feishu_get_file_meta")
+        assert runtime_registry.has("feishu_read_doc")
         assert runtime_registry.has("add_contact_knowledge")
         assert runtime_registry.has("create_approval_request")
         assert runtime_registry.has("close_cli_session")

@@ -2183,20 +2183,20 @@ edit_time   最后编辑时间（Unix 秒）
 - [x] 实现 `FeishuUserResourceClient.get_file_meta()`（飞书 drive batch_query API）
 - [x] `user_access_token` 不存在时返回 `token_missing` 错误，不静默失败
 
-**阶段 4：内部工具接入**
+**阶段 4：内部工具接入**（已完成 2026-05-03）
 
-- [ ] 创建 `feishu_read_doc` contract / logic，接入 Evidence Store 落盘
-- [ ] 创建 `feishu_get_file_meta` contract / logic
-- [ ] 注册两个工具到 `ToolRegistry`
-- [ ] 两个工具均为 `requires_approval=False`，`idempotency="read_only"`
+- [x] 创建 `feishu_read_doc` contract / logic，接入 Evidence Store 落盘
+- [x] 创建 `feishu_get_file_meta` contract / logic
+- [x] 注册两个工具到 `ToolRegistry`
+- [x] 两个工具均为 `requires_approval=False`，`idempotency="read_only"`
 
 **验收与测试**
 
 - [x] 编写 `test/test_feishu_oauth.py`（mock HTTP，覆盖 URL 构造、state 校验、token 换取、runtime 指令路由）
 - [x] 编写 `test/test_feishu_user_resource.py`（mock 飞书 API，覆盖 read_doc 和 get_file_meta）
-- [ ] 编写工具注册验证测试
-- [ ] 为新增 `.py` 文件添加自测入口
-- [ ] 执行本阶段完整链路检查
+- [x] 编写工具注册验证测试（`test/test_feishu_tools.py`）
+- [x] 为新增 `.py` 文件添加自测入口
+- [x] 执行本阶段完整链路检查
 
 ### 人工确认
 
