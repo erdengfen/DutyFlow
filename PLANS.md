@@ -1832,7 +1832,7 @@ emergency compact
 
 ### 最终效果
 
-系统可以生成提醒、摘要、审批请求和状态更新的回馈内容。真实飞书未接入时，通过占位接口返回明确字符串；真实接入条件满足后可替换为飞书发送。
+系统可以生成提醒、摘要、审批请求和状态更新的回馈内容。真实飞书未接入时，通过 `FeedbackGateway` 的占位路径返回明确字符串；飞书客户端已配置时切换到真实发送。
 
 ### 验收标准
 
@@ -1843,36 +1843,30 @@ emergency compact
 
 ### 涉及文件、类、方法、模块
 
-- `src/dutyflow/feishu/feedback.py`
-  - `FeishuFeedbackService`
-  - `send_reminder`
-  - `send_summary`
-  - `send_approval_request`
+- `src/dutyflow/feedback/gateway.py`
+  - `FeedbackGateway`
+  - `send_text`
+  - `send_owner_text`
   - `send_status_update`
+  - `send_owner_approval_card`
+  - `send_approval_card`
 - `src/dutyflow/feishu/client.py`
-- `src/dutyflow/approval/approval_flow.py`
-- `test/test_feishu_feedback.py`
-
-### 未敲定问题
-
-- 飞书消息卡片或文本消息格式。
-- 飞书审批确认交互方式。
-- 飞书真实 API 字段。
+- `test/test_feedback_gateway.py`
 
 ### 任务清单
 
-- [ ] 实现提醒回馈占位。
-- [ ] 实现摘要回馈占位。
-- [ ] 实现审批请求回馈占位。
-- [ ] 实现状态更新回馈占位。
-- [ ] 将敏感回馈接入审批层。
-- [ ] 为新增 `.py` 文件添加自测入口。
-- [ ] 编写测试文件。
-- [ ] 执行本阶段完整链路检查。
+- [x] 实现文本回馈（`send_text` / `send_owner_text`）。
+- [x] 实现状态更新回馈（`send_status_update`）。
+- [x] 实现审批卡片回馈（`send_approval_card` / `send_owner_approval_card`）。
+- [x] 敏感回馈（代表用户立场的卡片动作）接入审批层。
+- [x] 飞书客户端未配置时返回 `placeholder` 状态，不伪装真实发送。
+- [x] 为新增 `.py` 文件添加自测入口。
+- [x] 编写测试文件（`test/test_feedback_gateway.py`）。
+- [x] 执行本阶段完整链路检查。
 
 ### 人工确认
 
-- [ ] 提供真实飞书应用和测试会话前，不接真实发送。
+- [x] 提供真实飞书应用和测试会话前，不接真实发送。
 
 ## Step 11: Demo 不实现能力的接口占位
 
@@ -1951,7 +1945,267 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 - [ ] 确认占位接口命名是否需要与未来真实能力保持一致。
 - [ ] 确认未来安装式运行时的默认工作区是否采用 `~/DutyFlow/workspace/`。
 
-## Step 12: 完整 Demo 链路验收
+## Step 12: 飞书 OAuth 用户接入面扩展
+
+### 最终效果
+
+Agent 除 bot 事件接收面外，增加以 owner 用户身份主动读取飞书授权资源的能力。用户向 bot 发送 `/oauth` 指令，agent 回复授权链接；用户在浏览器完成授权后，本地 agent 通过一次性临时 HTTP callback server 接收 code，完成 code → token 换取和用户身份补全，并将 token 持久化到 `.env`；token 过期前自动刷新；agent 通过封装好的内部工具读取用户有权访问的飞书文档和文件元信息。
+
+### 技术边界
+
+本 Step 扩展的是**主动读取能力**，不改变 bot 事件接收面的逻辑：
+
+```
+bot 端（已有）：
+  用户 → bot 消息 → im.message.receive_v1 → agent 处理
+
+用户 OAuth 端（本 Step）：
+  用户授权 → agent 持有 user_access_token → 主动调用飞书 API 读取用户授权资源
+```
+
+能读什么 = 应用申请的 scope + 用户实际授权 + 飞书 OpenAPI 覆盖范围。不等于"用户在飞书客户端里能看到的全部内容"。
+
+### 飞书后台配置要求（人工步骤，开发前完成）
+
+在飞书开放平台应用后台执行以下配置：
+
+1. **添加 OAuth 回调地址**：在「安全设置」→「重定向 URL」中添加：
+   ```
+   http://127.0.0.1:9768/feishu/oauth/callback
+   ```
+   本地开发无需公网地址，飞书 OAuth 支持 localhost 回调。
+
+2. **申请所需权限 scope**（首版最小集合）：
+   ```
+   docx:document:readonly          读取文档内容
+   drive:drive:readonly            读取云盘文件列表和元信息
+   ```
+   按需后续追加；不要一次申请过宽的权限。
+
+3. **应用发布状态**：企业自建应用在开发环境可直接测试，无需发布审核。
+
+### env 字段分工
+
+| 字段 | 填写方式 | 说明 |
+|------|---------|------|
+| `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` | **手动填**，开发前配置 | 必须与飞书后台回调地址一致，首版填 `http://127.0.0.1:9768/feishu/oauth/callback` |
+| `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES` | **手动填**，开发前配置 | 逗号分隔，首版填 `docx:document:readonly,drive:drive:readonly` |
+| `DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN` | **OAuth 流程后自动写入** | agent 换取 token 后通过 `save_env_values()` 写入 |
+| `DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN` | **OAuth 流程后自动写入** | 同上 |
+| `DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT` | **OAuth 流程后自动写入** | ISO-8601 绝对时间，由 `expires_in`（秒）计算 |
+| `DUTYFLOW_FEISHU_OWNER_USER_ID` | **OAuth 流程后自动写入** | 通过用户信息接口补全 |
+| `DUTYFLOW_FEISHU_OWNER_UNION_ID` | **OAuth 流程后自动写入** | 通过用户信息接口补全 |
+| `DUTYFLOW_FEISHU_OWNER_OPEN_ID` | **bot bootstrap 已自动写入** | Step 5 `/bind` 流程已完成 |
+| `DUTYFLOW_FEISHU_TENANT_KEY` | **bot bootstrap 已自动写入** | Step 5 `/bind` 流程已完成 |
+
+### OAuth 授权完整流程
+
+```
+1. 用户向 bot 发送 "/oauth" 或 "oauth 授权"
+
+2. agent 构造飞书 OAuth 授权 URL：
+   https://open.feishu.cn/open-apis/authen/v1/authorize
+     ?app_id=<FEISHU_APP_ID>
+     &redirect_uri=<URL-encoded OAUTH_REDIRECT_URI>
+     &scope=<空格分隔的 scopes>
+     &state=<本地随机 state，用于防 CSRF>
+
+3. agent 启动临时 HTTP server：127.0.0.1:9768
+   - 监听 GET /feishu/oauth/callback
+   - 超时上限：300 秒
+   - 收到 code 后立即关闭
+
+4. bot 向用户发送授权链接消息（文本 + URL）
+
+5. 用户在浏览器打开链接 → 飞书登录 → 授权 → 飞书回调到本地：
+   GET http://127.0.0.1:9768/feishu/oauth/callback?code=xxx&state=yyy
+
+6. 临时 server 接收 code，校验 state，向用户浏览器返回"授权完成"提示页
+
+7. agent 调用飞书 token 接口换取 token：
+   POST https://open.feishu.cn/open-apis/authen/v1/oidc/access_token
+   Body: {
+     "grant_type": "authorization_code",
+     "code": "<code>"
+   }
+   Header: Content-Type: application/json
+           Authorization: Basic base64(<app_id>:<app_secret>)
+   返回：user_access_token、refresh_token、expires_in、token_type
+
+8. agent 调用飞书用户信息接口，补全 user_id 和 union_id：
+   GET https://open.feishu.cn/open-apis/authen/v1/user_info
+   Header: Authorization: Bearer <user_access_token>
+   返回：user_id、union_id、name、avatar_url 等
+
+9. agent 通过 save_env_values() 写入 .env：
+   - DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN
+   - DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN
+   - DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT（当前时间 + expires_in 秒）
+   - DUTYFLOW_FEISHU_OWNER_USER_ID
+   - DUTYFLOW_FEISHU_OWNER_UNION_ID
+
+10. agent 向用户发送确认消息："OAuth 授权完成，已记录用户身份和访问凭证。"
+```
+
+### Token 刷新策略
+
+- 每次使用 `user_access_token` 前检查 `TOKEN_EXPIRES_AT`
+- 若距过期时间 ≤ 300 秒，先调用刷新接口：
+  ```
+  POST https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token
+  Body: {
+    "grant_type": "refresh_token",
+    "refresh_token": "<refresh_token>"
+  }
+  Header: Authorization: Basic base64(<app_id>:<app_secret>)
+  ```
+- 刷新成功后同步更新 `.env` 中的三个 token 字段
+- 刷新失败（refresh_token 过期）时提示用户重新执行 `/oauth` 授权
+
+### 资源读取层设计
+
+资源读取**不直接暴露 `user_access_token` 给 model**，而是封装为内部工具。首版实现两个工具：
+
+#### `feishu_read_doc`
+
+读取一个飞书文档的纯文本正文。
+
+入参：
+```
+doc_token   必填，飞书文档 token（从文档 URL 或用户提供）
+```
+
+飞书 API：
+```
+GET https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/raw_content
+Header: Authorization: Bearer <user_access_token>
+```
+
+出参：
+```
+doc_token       文档 token
+title           文档标题
+content_preview 正文前 1000 字预览
+evidence_path   完整正文写入 Evidence Store 的路径
+fetched_at      ISO-8601 读取时间
+```
+
+#### `feishu_get_file_meta`
+
+读取飞书云盘文件或文档的元信息（不读正文）。
+
+入参：
+```
+file_token  必填，文件或文档 token
+file_type   必填，取值：doc / docx / sheet / bitable / folder
+```
+
+飞书 API：
+```
+GET https://open.feishu.cn/open-apis/drive/v1/metas/batch_query
+  ?request_docs[0][doc_token]=<file_token>
+  &request_docs[0][doc_type]=<file_type>
+Header: Authorization: Bearer <user_access_token>
+```
+
+出参：
+```
+file_token  文件 token
+file_type   文件类型
+title       文件标题
+owner_id    所有者 open_id
+create_time 创建时间（Unix 秒）
+edit_time   最后编辑时间（Unix 秒）
+```
+
+### 涉及文件、类、方法
+
+- `src/dutyflow/feishu/oauth.py`
+  - `FeishuOAuthManager`
+    - `build_authorize_url(state: str) -> str` — 构造授权 URL
+    - `start_callback_server(state: str, timeout: float) -> str` — 临时 server，阻塞等待 code
+    - `exchange_code(code: str) -> dict` — code → token
+    - `refresh_token() -> dict` — 刷新 user_access_token
+    - `ensure_valid_token() -> str` — 检查过期并按需刷新，返回有效 token
+    - `fetch_user_info(access_token: str) -> dict` — 补全 user_id / union_id
+
+- `src/dutyflow/feishu/user_resource.py`
+  - `FeishuUserResourceClient`
+    - `read_doc(doc_token: str) -> dict` — 读取文档正文
+    - `get_file_meta(file_token: str, file_type: str) -> dict` — 读取文件元信息
+    - （内部使用 `FeishuOAuthManager.ensure_valid_token()` 取得有效 token）
+
+- `src/dutyflow/agent/tools/contracts/feishu_tools/__init__.py`
+- `src/dutyflow/agent/tools/contracts/feishu_tools/read_doc_contract.py`
+- `src/dutyflow/agent/tools/contracts/feishu_tools/get_file_meta_contract.py`
+- `src/dutyflow/agent/tools/logic/feishu_tools/__init__.py`
+- `src/dutyflow/agent/tools/logic/feishu_tools/read_doc.py`
+  - `FeishuReadDocTool` — 调用 `FeishuUserResourceClient.read_doc()`，结果写入 Evidence Store
+- `src/dutyflow/agent/tools/logic/feishu_tools/get_file_meta.py`
+  - `FeishuGetFileMetaTool` — 调用 `FeishuUserResourceClient.get_file_meta()`
+- `src/dutyflow/agent/tools/registry.py` — 注册两个新工具
+
+- `src/dutyflow/feishu/runtime.py` — 增加 `/oauth` 指令处理：识别触发条件、调用 `FeishuOAuthManager`、发送授权链接和完成通知
+
+- `test/test_feishu_oauth.py` — 测试 URL 构造、state 校验、token 换取（mock HTTP）、token 刷新逻辑、过期检测
+- `test/test_feishu_user_resource.py` — 测试 `read_doc`、`get_file_meta`（mock 飞书 API 返回）
+- `test/test_feishu_tools_registry.py` — 验证两个新工具注册到运行时注册表
+
+### 未敲定问题
+
+- 临时 HTTP server 实现选型：`http.server`（标准库） vs `asyncio` 小型实现；考虑到 agent loop 是异步的，两者需要协调好线程/事件循环。
+- 飞书文档 API 的实际响应结构在接入时按真实返回字段调整。
+- `/oauth` 指令触发形式：是否也支持 CLI 入口 `/feishu oauth` 触发（便于调试）。
+- 当 `user_access_token` 不存在时，工具调用应返回明确的 `token_missing` 错误，不静默失败。
+- 后续如需读取更多资源类型（日历、任务、联系人），在 `FeishuUserResourceClient` 中按需扩展，不在本 Step 内预建。
+
+### 任务清单
+
+**阶段 1：OAuth 授权流程**
+
+- [ ] 实现 `FeishuOAuthManager.build_authorize_url()`
+- [ ] 实现 `FeishuOAuthManager.start_callback_server()`（临时 HTTP server，接收 code，300 秒超时）
+- [ ] 实现 `FeishuOAuthManager.exchange_code()`（调用飞书 token 接口）
+- [ ] 实现 `FeishuOAuthManager.fetch_user_info()`（补全 user_id / union_id）
+- [ ] 实现 token 换取后通过 `save_env_values()` 写入 `.env`
+- [ ] 在 `runtime.py` 中识别 `/oauth` 指令，触发完整授权流程并向用户发送授权链接和完成通知
+
+**阶段 2：Token 刷新与有效性管理**
+
+- [ ] 实现 `FeishuOAuthManager.refresh_token()`（调用飞书刷新接口）
+- [ ] 实现 `FeishuOAuthManager.ensure_valid_token()`（检查过期，按需刷新，返回有效 token）
+- [ ] 刷新后同步更新 `.env` 中的三个 token 字段
+- [ ] refresh_token 过期时返回明确错误，提示用户重新 `/oauth`
+
+**阶段 3：资源读取层**
+
+- [ ] 实现 `FeishuUserResourceClient.read_doc()`（飞书 docx raw_content API）
+- [ ] 实现 `FeishuUserResourceClient.get_file_meta()`（飞书 drive batch_query API）
+- [ ] `user_access_token` 不存在时返回 `token_missing` 错误，不静默失败
+
+**阶段 4：内部工具接入**
+
+- [ ] 创建 `feishu_read_doc` contract / logic，接入 Evidence Store 落盘
+- [ ] 创建 `feishu_get_file_meta` contract / logic
+- [ ] 注册两个工具到 `ToolRegistry`
+- [ ] 两个工具均为 `requires_approval=False`，`idempotency="read_only"`
+
+**验收与测试**
+
+- [ ] 编写 `test/test_feishu_oauth.py`（mock HTTP，覆盖 URL 构造、state 校验、token 换取、刷新逻辑）
+- [ ] 编写 `test/test_feishu_user_resource.py`（mock 飞书 API，覆盖 read_doc 和 get_file_meta）
+- [ ] 编写工具注册验证测试
+- [ ] 为新增 `.py` 文件添加自测入口
+- [ ] 执行本阶段完整链路检查
+
+### 人工确认
+
+- [×] 飞书开放平台应用后台已添加回调地址 `http://127.0.0.1:9768/feishu/oauth/callback`
+- [×] 已申请并开启所需权限 scope（`docx:document:readonly`、`drive:drive:readonly`）
+- [×] `.env` 已填写 `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` 和 `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
+- [×] 真实 OAuth 流程需要浏览器配合，首次授权为人工操作
+
+## Step 13: 完整 Demo 链路验收
 
 ### 最终效果
 
@@ -2023,6 +2277,7 @@ Demo 期不实现的能力在程序中留有接口，但不接入真实数据，
 | Step 7 | in_progress | 2026-04-30 | 已完成前 16 个功能点：任务与调度、审批与恢复、后台任务入口、worker 独立执行面、飞书审批回调、Agent State、后台 subagent 执行器、任务限定能力面、结果占位 Markdown、worker 正式执行器接入、完成结果系统回推和执行链测试。 |
 | Step 8 | pending |  |  |
 | Step 9 | pending |  |  |
-| Step 10 | pending |  |  |
+| Step 10 | completed | 2026-05-03 | FeedbackGateway 已实现 send_text / send_status_update / send_approval_card，接入飞书 client 和审批层，测试通过。 |
 | Step 11 | pending |  |  |
 | Step 12 | pending |  |  |
+| Step 13 | pending |  |  |
