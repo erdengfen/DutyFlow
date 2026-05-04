@@ -424,14 +424,34 @@ def _link_targets(
 
 
 def _collect_urls(message_text: str, content_payload: Mapping[str, Any]) -> tuple[str, ...]:
-    """汇总文本和结构化字段中的稳定 URL。"""
+    """汇总文本和结构化字段中的稳定 URL，包括 post 消息 elements 中的 href。"""
     urls: list[str] = []
     for key in ("url", "href"):
         value = _text(content_payload.get(key))
         if value:
             urls.append(value)
     urls.extend(re.findall(r"https?://[^\s]+", message_text))
+    urls.extend(_collect_post_hrefs(content_payload))
     return tuple(dict.fromkeys(urls))
+
+
+def _collect_post_hrefs(content_payload: Mapping[str, Any]) -> list[str]:
+    """从 post 消息的 content 二维数组中收集 a 标签的 href 值。"""
+    paragraphs = content_payload.get("content")
+    if not isinstance(paragraphs, list):
+        return []
+    hrefs: list[str] = []
+    for paragraph in paragraphs:
+        if not isinstance(paragraph, list):
+            continue
+        for element in paragraph:
+            if not isinstance(element, Mapping):
+                continue
+            if _text(element.get("tag")) == "a":
+                href = _text(element.get("href"))
+                if href:
+                    hrefs.append(href)
+    return hrefs
 
 
 def _collect_attachment_kinds(
@@ -440,7 +460,9 @@ def _collect_attachment_kinds(
 ) -> tuple[str, ...]:
     """根据消息类型和解析目标汇总附件种类。"""
     kinds = [target.target_type for target in parse_targets]
-    if envelope.message_type == "post" and "link" not in kinds:
+    # post 消息若未检测到任何链接（包括飞书文档），回退标记 link 类型
+    has_link = any(k == "link" or k.startswith("feishu_") for k in kinds)
+    if envelope.message_type == "post" and not has_link:
         kinds.append("link")
     return tuple(dict.fromkeys(kind for kind in kinds if kind))
 

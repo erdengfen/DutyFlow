@@ -70,6 +70,63 @@ class TestFeishuPerception(unittest.TestCase):
             self.assertTrue(record.mentions_bot)
             self.assertEqual(record.entities[-1].kind, "mention")
 
+    def test_post_message_feishu_href_creates_feishu_doc_target(self) -> None:
+        """post 消息 elements 中 a 标签的 href 飞书文档 URL 应被提取为 feishu_docx 解析目标。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            post_content = {
+                "title": "",
+                "content": [[
+                    {"tag": "text", "text": "请看这个文档："},
+                    {"tag": "a", "text": "季度报告", "href": "https://company.feishu.cn/docx/doxcnAbcDefGhi"},
+                ]],
+            }
+            envelope, raw_event_path = _create_source_record(
+                root, "unused", message_type="post", content_payload=post_content
+            )
+            record = service.create_record(envelope, raw_event_path)
+            self.assertTrue(record.has_attachment)
+            self.assertEqual(record.trigger_kind, "p2p_feishu_doc")
+            feishu_targets = [t for t in record.parse_targets if t.target_type.startswith("feishu_")]
+            self.assertEqual(len(feishu_targets), 1)
+            self.assertEqual(feishu_targets[0].file_key, "doxcnAbcDefGhi")
+            self.assertEqual(feishu_targets[0].required_tool, "feishu_read_doc")
+
+    def test_post_message_elements_text_in_raw_text(self) -> None:
+        """post 消息的 elements 文本内容应被提取到 raw_text，供 LLM 理解消息意图。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            post_content = {
+                "title": "",
+                "content": [[
+                    {"tag": "text", "text": "请查阅"},
+                    {"tag": "a", "text": "财报文档", "href": "https://company.feishu.cn/docx/doxcnXxx123"},
+                ]],
+            }
+            envelope, raw_event_path = _create_source_record(
+                root, "unused", message_type="post", content_payload=post_content
+            )
+            record = service.create_record(envelope, raw_event_path)
+            self.assertIn("请查阅", record.raw_text)
+            self.assertIn("财报文档", record.raw_text)
+
+    def test_post_message_without_feishu_link_gets_link_fallback(self) -> None:
+        """post 消息中没有任何链接时，attachment_kinds 应回退标记 link 类型。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            post_content = {
+                "title": "会议纪要",
+                "content": [[{"tag": "text", "text": "今天讨论了季度目标"}]],
+            }
+            envelope, raw_event_path = _create_source_record(
+                root, "unused", message_type="post", content_payload=post_content
+            )
+            record = service.create_record(envelope, raw_event_path)
+            self.assertIn("link", record.attachment_kinds)
+
     def test_feishu_docx_url_creates_feishu_doc_parse_target(self) -> None:
         """消息文本中的飞书 docx URL 应生成 feishu_docx 解析目标并直接提取 doc_token。"""
         with tempfile.TemporaryDirectory() as temp_dir:

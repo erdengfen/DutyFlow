@@ -235,9 +235,9 @@ def _extract_content_preview(raw_content: object) -> str:
 
 
 def _extract_message_text(raw_content: object) -> str:
-    """从飞书消息内容中提取完整文本，用于识别绑定指令。"""
+    """从飞书消息内容提取完整文本：text 类型取 text 字段，post 类型展开 elements 数组。"""
     if isinstance(raw_content, Mapping):
-        return _as_text(dict(raw_content).get("text"))
+        return _text_from_content(dict(raw_content))
     content_text = _as_text(raw_content)
     if not content_text:
         return ""
@@ -246,16 +246,47 @@ def _extract_message_text(raw_content: object) -> str:
     except json.JSONDecodeError:
         return content_text
     if isinstance(parsed, Mapping):
-        return _as_text(dict(parsed).get("text"))
+        return _text_from_content(dict(parsed))
     return content_text
 
 
+def _text_from_content(content: dict[str, Any]) -> str:
+    """从解析后的 content dict 提取纯文本：优先 text 字段，再展开 post elements。"""
+    text = _as_text(content.get("text"))
+    if text:
+        return text
+    return _extract_post_elements_text(content)
+
+
+def _extract_post_elements_text(content: dict[str, Any]) -> str:
+    """从 post 消息的 content 二维数组中拼接 text/a 标签的文本内容。"""
+    paragraphs = content.get("content")
+    if not isinstance(paragraphs, list):
+        return ""
+    parts: list[str] = []
+    for paragraph in paragraphs:
+        if not isinstance(paragraph, list):
+            continue
+        for element in paragraph:
+            if not isinstance(element, Mapping):
+                continue
+            tag = _as_text(element.get("tag"))
+            if tag in ("text", "a"):
+                elem_text = _as_text(element.get("text"))
+                if elem_text:
+                    parts.append(elem_text)
+    return " ".join(parts)
+
+
 def _preview_from_mapping(content: dict[str, Any]) -> str:
-    """优先提取文本字段，缺失时再回退为 JSON 片段。"""
+    """优先提取文本字段，其次展开 post elements，最后回退为 JSON 片段。"""
     for key in ("text", "title"):
         text = _as_text(content.get(key))
         if text:
             return _truncate(text)
+    post_text = _extract_post_elements_text(content)
+    if post_text:
+        return _truncate(post_text)
     return _truncate(json.dumps(content, ensure_ascii=False, sort_keys=True))
 
 
