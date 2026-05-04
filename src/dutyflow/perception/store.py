@@ -12,6 +12,28 @@ from dutyflow.feishu.events import FeishuEventEnvelope
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
 
+# 飞书文档 / 文件 URL 中 token 提取规则，支持 feishu.cn / larksuite.com / larkoffice.com 三种域名。
+_FEISHU_DOMAIN_PAT = r"(?:feishu\.cn|larksuite\.com|larkoffice\.com)"
+_FEISHU_DOC_URL_RE = re.compile(
+    r"https?://\S+\." + _FEISHU_DOMAIN_PAT + r"/(docx|docs|wiki)/([A-Za-z0-9_-]{6,})"
+)
+_FEISHU_FILE_URL_RE = re.compile(
+    r"https?://\S+\." + _FEISHU_DOMAIN_PAT + r"/(sheets|base)/([A-Za-z0-9_-]{6,})"
+)
+_FEISHU_DRIVE_URL_RE = re.compile(
+    r"https?://\S+\." + _FEISHU_DOMAIN_PAT + r"/drive/(?:file|folder)/([A-Za-z0-9_-]{6,})"
+)
+# URL path segment → 感知层 target_type 映射
+_FEISHU_DOC_TYPE_MAP: dict[str, str] = {
+    "docx": "feishu_docx",
+    "docs": "feishu_doc",
+    "wiki": "feishu_wiki",
+}
+_FEISHU_FILE_TYPE_MAP: dict[str, str] = {
+    "sheets": "feishu_sheet",
+    "base": "feishu_bitable",
+}
+
 
 @dataclass(frozen=True)
 class PerceptionEntity:
@@ -352,25 +374,52 @@ def _image_target(message_id: str, image_key: str, image_name: str) -> Perceptio
     )
 
 
+def _parse_feishu_url(url: str) -> tuple[str, str, str] | None:
+    """从飞书 URL 中提取 (token, target_type, required_tool)，无法识别时返回 None。
+
+    支持 docx/docs/wiki/sheets/base/drive/file/folder 路径；token 最短 6 位字母数字。
+    """
+    m = _FEISHU_DOC_URL_RE.search(url)
+    if m:
+        return m.group(2), _FEISHU_DOC_TYPE_MAP.get(m.group(1), "feishu_docx"), "feishu_read_doc"
+    m = _FEISHU_FILE_URL_RE.search(url)
+    if m:
+        return m.group(2), _FEISHU_FILE_TYPE_MAP.get(m.group(1), "feishu_file"), "feishu_get_file_meta"
+    m = _FEISHU_DRIVE_URL_RE.search(url)
+    if m:
+        return m.group(1), "feishu_file", "feishu_get_file_meta"
+    return None
+
+
 def _link_targets(
     message_id: str,
     message_text: str,
     content_payload: Mapping[str, Any],
 ) -> list[PerceptionParseTarget]:
-    """从文本或消息结构中提取网页/文档链接。"""
+    """从文本或消息结构中提取链接；飞书文档 URL 直接提取 token 并标记专用工具。"""
     urls = _collect_urls(message_text, content_payload)
     targets: list[PerceptionParseTarget] = []
     for index, url in enumerate(urls, start=1):
-        targets.append(
-            PerceptionParseTarget(
+        feishu = _parse_feishu_url(url)
+        if feishu:
+            token, target_type, tool_name = feishu
+            targets.append(PerceptionParseTarget(
+                target_id=f"{message_id}:feishu:{index}",
+                target_type=target_type,
+                file_key=token,
+                file_name="",
+                url=url,
+                required_tool=tool_name,
+            ))
+        else:
+            targets.append(PerceptionParseTarget(
                 target_id=f"{message_id}:link:{index}",
                 target_type="link",
                 file_key="",
                 file_name="",
                 url=url,
                 required_tool="parse_web_link",
-            )
-        )
+            ))
     return targets
 
 
@@ -406,6 +455,8 @@ def _build_trigger_kind(
         return f"{prefix}_file"
     if "image" in attachment_kinds:
         return f"{prefix}_image"
+    if any(k.startswith("feishu_") for k in attachment_kinds):
+        return f"{prefix}_feishu_doc"
     if "link" in attachment_kinds:
         return f"{prefix}_link"
     return f"{prefix}_text"
@@ -637,7 +688,7 @@ def _text(value: object) -> str:
 
 
 def _self_test() -> None:
-    """验证感知记录可写入并可反向构造成 loop 输入。"""
+    """验证感知记录可写入并可反向构造成 loop 输入；飞书 URL 可被正确提取。"""
     from tempfile import TemporaryDirectory
 
     from dutyflow.feishu.events import FeishuEventAdapter
@@ -655,6 +706,22 @@ def _self_test() -> None:
         assert record.trigger_kind == "p2p_text"
         assert loop_input is not None
         assert loop_input["sender_open_id"] == "ou_fixture_sender"
+
+    # 飞书 URL → token 解析验证
+    doc_url = "https://company.feishu.cn/docx/doxcnAbcDefGhi"
+    parsed = _parse_feishu_url(doc_url)
+    assert parsed is not None, "应能解析飞书 docx URL"
+    assert parsed[0] == "doxcnAbcDefGhi", f"token 提取错误: {parsed[0]}"
+    assert parsed[1] == "feishu_docx"
+    assert parsed[2] == "feishu_read_doc"
+
+    sheet_url = "https://abc.feishu.cn/sheets/shtcnXyzAbc123"
+    parsed_sheet = _parse_feishu_url(sheet_url)
+    assert parsed_sheet is not None
+    assert parsed_sheet[1] == "feishu_sheet"
+    assert parsed_sheet[2] == "feishu_get_file_meta"
+
+    assert _parse_feishu_url("https://www.google.com/search?q=test") is None, "非飞书 URL 应返回 None"
 
 
 if __name__ == "__main__":

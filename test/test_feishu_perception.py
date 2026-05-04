@@ -70,6 +70,82 @@ class TestFeishuPerception(unittest.TestCase):
             self.assertTrue(record.mentions_bot)
             self.assertEqual(record.entities[-1].kind, "mention")
 
+    def test_feishu_docx_url_creates_feishu_doc_parse_target(self) -> None:
+        """消息文本中的飞书 docx URL 应生成 feishu_docx 解析目标并直接提取 doc_token。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            doc_url = "https://company.feishu.cn/docx/doxcnAbcDefGhi"
+            envelope, raw_event_path = _create_source_record(root, f"请看这个文档 {doc_url}")
+            record = service.create_record(envelope, raw_event_path)
+            self.assertTrue(record.has_attachment)
+            self.assertEqual(record.trigger_kind, "p2p_feishu_doc")
+            feishu_targets = [t for t in record.parse_targets if t.target_type.startswith("feishu_")]
+            self.assertEqual(len(feishu_targets), 1)
+            self.assertEqual(feishu_targets[0].target_type, "feishu_docx")
+            self.assertEqual(feishu_targets[0].file_key, "doxcnAbcDefGhi")
+            self.assertEqual(feishu_targets[0].required_tool, "feishu_read_doc")
+            self.assertEqual(feishu_targets[0].url, doc_url)
+
+    def test_feishu_sheet_url_creates_feishu_sheet_parse_target(self) -> None:
+        """消息文本中的飞书 sheet URL 应生成 feishu_sheet 类型目标，工具指向 feishu_get_file_meta。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            sheet_url = "https://company.feishu.cn/sheets/shtcnXyzAbc123"
+            envelope, raw_event_path = _create_source_record(root, f"表格链接 {sheet_url}")
+            record = service.create_record(envelope, raw_event_path)
+            feishu_targets = [t for t in record.parse_targets if t.target_type.startswith("feishu_")]
+            self.assertEqual(len(feishu_targets), 1)
+            self.assertEqual(feishu_targets[0].target_type, "feishu_sheet")
+            self.assertEqual(feishu_targets[0].file_key, "shtcnXyzAbc123")
+            self.assertEqual(feishu_targets[0].required_tool, "feishu_get_file_meta")
+
+    def test_non_feishu_url_creates_generic_link_target(self) -> None:
+        """非飞书 URL 应继续生成 link 类型解析目标，required_tool 为 parse_web_link。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            envelope, raw_event_path = _create_source_record(
+                root, "参考资料 https://www.google.com/search?q=test"
+            )
+            record = service.create_record(envelope, raw_event_path)
+            link_targets = [t for t in record.parse_targets if t.target_type == "link"]
+            self.assertEqual(len(link_targets), 1)
+            self.assertEqual(link_targets[0].required_tool, "parse_web_link")
+            feishu_targets = [t for t in record.parse_targets if t.target_type.startswith("feishu_")]
+            self.assertEqual(len(feishu_targets), 0)
+
+    def test_feishu_url_token_in_loop_input_parse_targets(self) -> None:
+        """loop_input 的 parse_targets 应包含已提取的 file_key，供 Agent 直接调用工具。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            doc_url = "https://abc.feishu.cn/docx/FvFadXXXXXXXXXXX"
+            envelope, raw_event_path = _create_source_record(root, doc_url)
+            record = service.create_record(envelope, raw_event_path)
+            loop_input = service.build_loop_input(record_id=record.record_id)
+            self.assertIsNotNone(loop_input)
+            targets = loop_input["parse_targets"]
+            self.assertTrue(
+                any(t["file_key"] == "FvFadXXXXXXXXXXX" for t in targets),
+                "loop_input parse_targets 中应有提取到的 doc_token",
+            )
+
+    def test_feishu_drive_file_url_creates_feishu_file_target(self) -> None:
+        """飞书 drive/file URL 应生成 feishu_file 类型目标，工具指向 feishu_get_file_meta。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = PerceptionRecordService(root)
+            drive_url = "https://company.feishu.cn/drive/file/boxcnAbcXyz123456"
+            envelope, raw_event_path = _create_source_record(root, drive_url)
+            record = service.create_record(envelope, raw_event_path)
+            feishu_targets = [t for t in record.parse_targets if t.target_type.startswith("feishu_")]
+            self.assertEqual(len(feishu_targets), 1)
+            self.assertEqual(feishu_targets[0].target_type, "feishu_file")
+            self.assertEqual(feishu_targets[0].file_key, "boxcnAbcXyz123456")
+            self.assertEqual(feishu_targets[0].required_tool, "feishu_get_file_meta")
+
     def test_multiline_text_roundtrip_preserves_full_raw_text(self) -> None:
         """多行飞书文本写入感知记录后，回读给 loop 时不应只剩第一行。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,7 +186,7 @@ def _create_source_record(
 
 
 def _self_test() -> None:
-    """运行本文件单元测试。"""
+    """运行本文件全部单元测试，覆盖原有感知记录和飞书 URL 解析两组用例。"""
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestFeishuPerception)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
