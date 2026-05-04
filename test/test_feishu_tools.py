@@ -1,4 +1,4 @@
-# 本文件验证 feishu_read_doc 和 feishu_get_file_meta 工具的注册、contract 结构和执行逻辑。
+# 本文件验证 feishu_read_doc、feishu_get_file_meta 和 feishu_search_drive 工具的注册、contract 结构和执行逻辑。
 
 from pathlib import Path
 import json
@@ -13,9 +13,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from dutyflow.agent.tools.logic.feishu_tools.read_doc import FeishuReadDocTool  # noqa: E402
 from dutyflow.agent.tools.logic.feishu_tools.get_file_meta import FeishuGetFileMetaTool  # noqa: E402
+from dutyflow.agent.tools.logic.feishu_tools.search_drive import FeishuSearchDriveTool  # noqa: E402
 from dutyflow.agent.tools.registry import create_runtime_tool_registry  # noqa: E402
 from dutyflow.agent.tools.types import ToolCall  # noqa: E402
-from dutyflow.feishu.user_resource import DocReadResult, FileMetaResult  # noqa: E402
+from dutyflow.feishu.user_resource import DocReadResult, DriveFileItem, DriveSearchResult, FileMetaResult  # noqa: E402
 
 
 def _ctx(cwd: Path = Path("/tmp")) -> MagicMock:
@@ -65,7 +66,7 @@ def _fail_meta_result(status: str = "token_missing") -> FileMetaResult:
 
 
 class TestToolRegistration(unittest.TestCase):
-    """验证两个飞书工具已正确注册到运行时注册表。"""
+    """验证三个飞书工具已正确注册到运行时注册表。"""
 
     def setUp(self) -> None:
         self.registry = create_runtime_tool_registry()
@@ -75,6 +76,22 @@ class TestToolRegistration(unittest.TestCase):
 
     def test_feishu_get_file_meta_registered(self) -> None:
         self.assertTrue(self.registry.has("feishu_get_file_meta"))
+
+    def test_feishu_search_drive_registered(self) -> None:
+        self.assertTrue(self.registry.has("feishu_search_drive"))
+
+    def test_search_drive_requires_approval_false(self) -> None:
+        spec = self.registry.get("feishu_search_drive")
+        self.assertFalse(spec.requires_approval)
+
+    def test_search_drive_idempotency_read_only(self) -> None:
+        spec = self.registry.get("feishu_search_drive")
+        self.assertEqual(spec.idempotency, "read_only")
+
+    def test_search_drive_required_input_query(self) -> None:
+        spec = self.registry.get("feishu_search_drive")
+        self.assertIn("query", spec.required_inputs())
+        self.assertNotIn("count", spec.required_inputs())
 
     def test_read_doc_requires_approval_false(self) -> None:
         spec = self.registry.get("feishu_read_doc")
@@ -233,10 +250,120 @@ class TestFeishuGetFileMetaTool(unittest.TestCase):
         self.assertEqual(payload["title"], "季报.xlsx")
 
 
+def _ok_search_result(
+    query: str = "季报",
+    files: list[tuple[str, str, str]] | None = None,
+) -> DriveSearchResult:
+    """构造成功的搜索结果，files 为 (token, name, file_type) 三元组列表。"""
+    if files is None:
+        files = [("doxcnABC", "2024 Q4 季报", "docx")]
+    items = tuple(
+        DriveFileItem(
+            token=t, name=n, file_type=ft,
+            url=f"https://company.feishu.cn/{ft}/{t}",
+            owner_id="ou_abc", modified_time="1700001000",
+        )
+        for t, n, ft in files
+    )
+    return DriveSearchResult(
+        ok=True, status="ok", query=query,
+        files=items, has_more=False, total=len(items),
+        fetched_at="2026-05-04T00:00:00+00:00", detail="",
+    )
+
+
+def _fail_search_result(status: str = "token_missing") -> DriveSearchResult:
+    return DriveSearchResult(
+        ok=False, status=status, query="季报",
+        files=(), has_more=False, total=0,
+        fetched_at="", detail="no token",
+    )
+
+
+class TestFeishuSearchDriveTool(unittest.TestCase):
+    """验证 feishu_search_drive 工具的输入校验和执行逻辑。"""
+
+    def _run(self, inputs: dict, search_result: DriveSearchResult | None = None) -> object:
+        tool = FeishuSearchDriveTool()
+        call = _call("feishu_search_drive", inputs)
+        ctx = _ctx()
+        if search_result is None:
+            return tool.handle(call, ctx)
+        with patch(
+            "dutyflow.agent.tools.logic.feishu_tools.search_drive._build_client"
+        ) as mock_build:
+            mock_client = MagicMock()
+            mock_client.search_drive.return_value = search_result
+            mock_build.return_value = mock_client
+            return tool.handle(call, ctx)
+
+    def test_empty_query_returns_invalid_input(self) -> None:
+        result = self._run({"query": ""})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "invalid_input")
+
+    def test_missing_query_returns_invalid_input(self) -> None:
+        result = self._run({})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "invalid_input")
+
+    def test_token_missing_propagates_error(self) -> None:
+        result = self._run({"query": "季报"}, _fail_search_result("token_missing"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "token_missing")
+
+    def test_api_error_propagates(self) -> None:
+        result = self._run({"query": "季报"}, _fail_search_result("api_error"))
+        self.assertEqual(result.error_kind, "api_error")
+
+    def test_success_returns_ok(self) -> None:
+        result = self._run({"query": "季报"}, _ok_search_result())
+        self.assertTrue(result.ok)
+
+    def test_success_payload_has_required_fields(self) -> None:
+        result = self._run({"query": "季报"}, _ok_search_result())
+        payload = json.loads(result.content)
+        for key in ("query", "total", "has_more", "count", "files", "fetched_at"):
+            self.assertIn(key, payload)
+
+    def test_file_payload_has_required_fields(self) -> None:
+        result = self._run({"query": "季报"}, _ok_search_result())
+        payload = json.loads(result.content)
+        file_item = payload["files"][0]
+        for key in ("name", "token", "type", "url", "modified_time", "next_tool"):
+            self.assertIn(key, file_item)
+
+    def test_docx_type_next_tool_is_feishu_read_doc(self) -> None:
+        result = self._run({"query": "季报"}, _ok_search_result(files=[("doxcnABC", "季报", "docx")]))
+        payload = json.loads(result.content)
+        self.assertEqual(payload["files"][0]["next_tool"], "feishu_read_doc")
+
+    def test_sheet_type_next_tool_is_feishu_get_file_meta(self) -> None:
+        result = self._run({"query": "季报表"}, _ok_search_result(files=[("shtcnXYZ", "季报表", "sheet")]))
+        payload = json.loads(result.content)
+        self.assertEqual(payload["files"][0]["next_tool"], "feishu_get_file_meta")
+
+    def test_count_capped_at_max(self) -> None:
+        """count 超过上限时工具应静默截断，不返回错误。"""
+        result = self._run({"query": "季报", "count": 999}, _ok_search_result())
+        self.assertTrue(result.ok)
+
+    def test_invalid_count_falls_back_to_default(self) -> None:
+        result = self._run({"query": "季报", "count": "not_a_number"}, _ok_search_result())
+        self.assertTrue(result.ok)
+
+    def test_empty_result_list_returns_ok(self) -> None:
+        result = self._run({"query": "不存在的文档"}, _ok_search_result(files=[]))
+        self.assertTrue(result.ok)
+        payload = json.loads(result.content)
+        self.assertEqual(payload["files"], [])
+        self.assertEqual(payload["count"], 0)
+
+
 def _self_test() -> None:
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
-    for cls in (TestToolRegistration, TestFeishuReadDocTool, TestFeishuGetFileMetaTool):
+    for cls in (TestToolRegistration, TestFeishuReadDocTool, TestFeishuGetFileMetaTool, TestFeishuSearchDriveTool):
         suite.addTests(loader.loadTestsFromTestCase(cls))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():

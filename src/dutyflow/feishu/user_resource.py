@@ -15,6 +15,9 @@ _FEISHU_DOCX_CONTENT_URL = (
     "https://open.feishu.cn/open-apis/docx/v1/documents/{doc_token}/raw_content"
 )
 _FEISHU_DRIVE_META_URL = "https://open.feishu.cn/open-apis/drive/v1/metas/batch_query"
+_FEISHU_DRIVE_SEARCH_URL = "https://open.feishu.cn/open-apis/drive/v1/files/search"
+# 单次搜索最多返回 20 条，防止结果列表撑大模型上下文。
+_MAX_SEARCH_COUNT = 20
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,32 @@ class DocReadResult:
     doc_token: str
     title: str
     content: str
+    fetched_at: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class DriveFileItem:
+    """表示云盘搜索结果中的单个文件条目。"""
+
+    token: str
+    name: str
+    file_type: str
+    url: str
+    owner_id: str
+    modified_time: str
+
+
+@dataclass(frozen=True)
+class DriveSearchResult:
+    """表示 search_drive() 的完整执行结果。"""
+
+    ok: bool
+    status: str  # "ok" | "token_missing" | "permission_denied" | "api_error"
+    query: str
+    files: tuple[DriveFileItem, ...]
+    has_more: bool
+    total: int
     fetched_at: str
     detail: str
 
@@ -89,6 +118,27 @@ class FeishuUserResourceClient:
             ok=True, status="ok", doc_token=doc_token,
             title=title, content=content, fetched_at=now, detail="",
         )
+
+    def search_drive(self, query: str, count: int = 10) -> DriveSearchResult:
+        """在用户云盘按关键词搜索文件，使用 user_access_token 确保只返回授权范围内内容。
+
+        user_access_token 不存在或无法刷新时返回 status="token_missing"。
+        """
+        now = _now_iso()
+        try:
+            token = self.oauth_manager.ensure_valid_token()
+        except RuntimeError as exc:
+            return DriveSearchResult(
+                ok=False, status="token_missing", query=query,
+                files=(), has_more=False, total=0, fetched_at=now, detail=str(exc),
+            )
+        try:
+            return _search_drive_files(token, query, count, now)
+        except _FeishuResourceError as exc:
+            return DriveSearchResult(
+                ok=False, status=exc.status, query=query,
+                files=(), has_more=False, total=0, fetched_at=now, detail=exc.detail,
+            )
 
     def get_file_meta(self, file_token: str, file_type: str) -> FileMetaResult:
         """读取飞书云盘文件或文档的元信息（不读正文）。
@@ -205,6 +255,52 @@ def _parse_resource_response(resp_body: dict[str, Any], context: str) -> dict[st
     return dict(resp_body.get("data") or {})
 
 
+def _search_drive_files(
+    user_access_token: str,
+    query: str,
+    count: int,
+    fetched_at: str,
+) -> DriveSearchResult:
+    """调用飞书 Drive 搜索接口，返回结构化搜索结果。"""
+    import httpx
+
+    headers = {
+        "Authorization": f"Bearer {user_access_token}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "search_key": query,
+        "count": min(max(1, count), _MAX_SEARCH_COUNT),
+        "offset": 0,
+    }
+    resp = httpx.post(_FEISHU_DRIVE_SEARCH_URL, headers=headers, json=body, timeout=15.0)
+    _check_http_status(resp)
+    data = _parse_resource_response(resp.json(), "云盘搜索")
+    files_raw = data.get("files") or []
+    files = tuple(
+        DriveFileItem(
+            token=str(item.get("token", "")),
+            name=str(item.get("name", "")),
+            file_type=str(item.get("type", "")),
+            url=str(item.get("url", "")),
+            owner_id=str(item.get("owner_id", "")),
+            modified_time=str(item.get("modified_time", "")),
+        )
+        for item in files_raw
+        if isinstance(item, dict)
+    )
+    return DriveSearchResult(
+        ok=True,
+        status="ok",
+        query=query,
+        files=files,
+        has_more=bool(data.get("has_more")),
+        total=int(data.get("total", len(files))),
+        fetched_at=fetched_at,
+        detail="",
+    )
+
+
 def _now_iso() -> str:
     """返回当前 UTC 时间的 ISO-8601 字符串。"""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -236,6 +332,11 @@ def _self_test() -> None:
     meta = client.get_file_meta("boxcnXXXXX", "file")
     assert not meta.ok, "should fail with empty token"
     assert meta.status == "token_missing", f"unexpected status: {meta.status}"
+
+    search = client.search_drive("季报")
+    assert not search.ok, "should fail with empty token"
+    assert search.status == "token_missing", f"unexpected status: {search.status}"
+    assert search.files == ()
 
 
 if __name__ == "__main__":
