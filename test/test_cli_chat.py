@@ -26,6 +26,7 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("/agent state", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu status", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu dm", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu gm", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_submits_non_blocking_task(self) -> None:
@@ -82,6 +83,13 @@ class TestCliChat(unittest.TestCase):
 
         self.assertIn('"action": "dm_collect"', output)
         self.assertIn('"detail": "oc_1 3600"', output)
+
+    def test_feishu_gm_command_calls_app_debug_entry(self) -> None:
+        """CLI /feishu gm 应委托给 app 的群消息 collector 调试入口。"""
+        output = CliConsole(_FakeApp()).handle_command("/feishu gm 3600")
+
+        self.assertIn('"action": "gm_collect"', output)
+        self.assertIn('"detail": "3600"', output)
 
     def test_feishu_scope_commands_call_app_debug_entries(self) -> None:
         """CLI 应暴露 Scope Registry 的最小调试命令。"""
@@ -143,6 +151,10 @@ class _FakeApp:
     def run_feishu_dm_debug(self, arg_text: str) -> str:
         """返回测试私信 collector 结果。"""
         return f'{{"action": "dm_collect", "detail": "{arg_text}"}}'
+
+    def run_feishu_gm_debug(self, arg_text: str) -> str:
+        """返回测试群消息 collector 结果。"""
+        return f'{{"action": "gm_collect", "detail": "{arg_text}"}}'
 
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """返回测试 scope registry 结果。"""

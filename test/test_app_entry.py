@@ -16,6 +16,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from dutyflow.app import DutyFlowApp
+from dutyflow.feishu.scope_registry import (  # noqa: E402
+    GROUP_CHAT_SCOPE,
+    GROUP_MESSAGE_COLLECTOR,
+    FeishuScopeRecord,
+    FeishuScopeRegistry,
+)
 
 
 class TestAppEntry(unittest.TestCase):
@@ -173,6 +179,47 @@ class TestAppEntry(unittest.TestCase):
         self.assertEqual(payload["payload"]["end_time"], 1778069714)
         self.assertEqual(fake_collector.collect_args["chat_id"], "oc_owner")
 
+    def test_feishu_gm_debug_runs_enabled_group_collector(self) -> None:
+        """应用层 /feishu gm 调试入口应只消费 enabled group_chat scope。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DutyFlowApp(root)
+            _enable_group_message_scope(root, "oc_group")
+            fake_collector = _FakeGroupMessageCollector()
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                with patch("dutyflow.app.FeishuUserClient.from_oauth_manager", return_value=object()):
+                    with patch("dutyflow.app.GroupMessageCollector", return_value=fake_collector):
+                        payload = json.loads(app.run_feishu_gm_debug("1778039900 1778040100"))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "gm_collect")
+        self.assertEqual(payload["payload"]["start_time"], 1778039900)
+        self.assertEqual(payload["payload"]["end_time"], 1778040100)
+        self.assertEqual(payload["payload"]["scope_count"], 1)
+        self.assertEqual(fake_collector.collect_args["start_time"], 1778039900)
+        self.assertTrue(fake_collector.collect_args["save_raw"])
+
+    def test_feishu_gm_debug_reports_empty_without_enabled_group_scope(self) -> None:
+        """未批准群 scope 时，/feishu gm 应提示先 discover 和 approve。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = DutyFlowApp(Path(temp_dir))
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                payload = json.loads(app.run_feishu_gm_debug("3600"))
+
+        self.assertEqual(payload["status"], "empty")
+        self.assertEqual(payload["action"], "gm_collect")
+        self.assertIn("/feishu discover groups", payload["detail"])
+
     def test_feishu_scopes_debug_lists_seeded_owner_scope(self) -> None:
         """Scope Registry 调试入口应能 seed 并列出 owner p2p scope。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -307,6 +354,49 @@ class _FakeDirectMessageCollector:
             stopped_reason="",
             detail="",
         )
+
+
+class _FakeGroupMessageCollector:
+    """模拟 group_message_collector，记录应用层传入参数。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.collect_args: dict[str, object] = {}
+
+    def collect_enabled_scopes(self, config: object, **kwargs: object) -> tuple[object, ...]:
+        """记录 enabled scope 批量采集参数并返回成功结果。"""
+        self.collect_args = {"config": config, **kwargs}
+        return (
+            SimpleNamespace(
+                ok=True,
+                status="ok",
+                chat_id="oc_group",
+                items_written=1,
+                record_paths=("data/ambient_context/group_message/2026-05-06/gm_om_1.md",),
+                cursor="1778040000000",
+                next_cursor="1778040000",
+                has_more=False,
+                next_page_token="",
+                sync_state_path="data/feishu/sync_state/group_message_collector/oc_group.md",
+                stopped_reason="",
+                detail="",
+            ),
+        )
+
+
+def _enable_group_message_scope(root: Path, chat_id: str) -> None:
+    """写入并启用一个 group_chat scope，供应用层 CLI 调试测试使用。"""
+    registry = FeishuScopeRegistry(root)
+    record = FeishuScopeRecord(
+        account_id="tenant_1_ou_1",
+        scope_type=GROUP_CHAT_SCOPE,
+        scope_id=chat_id,
+        collector_names=(GROUP_MESSAGE_COLLECTOR,),
+        discovered_from="manual_add",
+    )
+    registry.upsert_candidate(record)
+    registry.approve_scope(record.account_id, record.scope_type, record.scope_id)
+    registry.enable_scope(record.account_id, record.scope_type, record.scope_id)
 
 
 class _FakeChatSession:

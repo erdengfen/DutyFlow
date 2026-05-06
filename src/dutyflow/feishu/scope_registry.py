@@ -14,7 +14,10 @@ FEISHU_SCOPE_SCHEMA = "dutyflow.feishu_scope.v1"
 FEISHU_SCOPE_INDEX_SCHEMA = "dutyflow.feishu_scope_index.v1"
 DEFAULT_SCOPE_ACCOUNT_ID = "local_owner"
 DIRECT_MESSAGE_COLLECTOR = "direct_message_collector"
+GROUP_MESSAGE_COLLECTOR = "group_message_collector"
+GROUP_DOCUMENT_COLLECTOR = "group_document_collector"
 P2P_CHAT_SCOPE = "p2p_chat"
+GROUP_CHAT_SCOPE = "group_chat"
 
 _ALLOWED_STATUSES = {"candidate", "approved", "enabled", "disabled", "permission_denied", "stale"}
 # 关键开关：scope 文件名片段最多保留 120 字符，避免外部 ID 异常过长导致路径难读。

@@ -2589,7 +2589,7 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 第一批 collector：
 
 1. 【已完成】`direct_message_collector`
-2. 【未完成】`group_message_collector`
+2. 【已完成】`group_message_collector`
 3. 【未完成】`user_document_collector`
 4. 【未完成】`group_document_collector`
 5. 【未完成】`meeting_minutes_collector`
@@ -2608,7 +2608,7 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 - 【已完成】`src/dutyflow/feishu/ambient_context.py`
 - 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
 - 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
-- 【未完成】`src/dutyflow/feishu/collectors/group_message_collector.py`
+- 【已完成】`src/dutyflow/feishu/collectors/group_message_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/user_document_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/group_document_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
@@ -2655,7 +2655,9 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 
 ### 定位
 
-状态：待开发。`Feishu Scope Registry` 是飞书资源同步范围注册表，定位为用户授权后的资源边界控制面。
+状态：第一版已完成。`Feishu Scope Registry` 是飞书资源同步范围注册表，定位为用户授权后的资源边界控制面。
+
+当前已完成 scope registry、owner p2p seed、群组 candidate discovery、群消息 enabled scope 消费和 `/feishu gm` 本地调试入口；document、meeting、bitable collector 接入仍作为后续扩展。
 
 它不负责读取正文，只负责管理 collector 可以同步哪些范围。
 
@@ -2711,7 +2713,7 @@ data/feishu/
 ### Collector 接入规则
 
 - 【已完成】`direct_message_collector` 消费 `p2p_chat`。
-- 【未完成】`group_message_collector` 消费 `group_chat`。
+- 【已完成】`group_message_collector` 消费 `group_chat`。
 - 【未完成】`user_document_collector` 消费 `drive_folder`、`doc`、`wiki`、`file`。
 - 【未完成】`group_document_collector` 消费 `group_chat`、`doc`、`wiki`、`file`。
 - 【未完成】`meeting_minutes_collector` 消费 `meeting_minutes`。
@@ -2726,15 +2728,16 @@ data/feishu/
 4. 【已完成】seed 现有 `/bind` 结果：把 `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID` 写为 `p2p_chat` + `enabled` + `direct_message_collector`。
 5. 【已完成】调整 `/feishu dm`：默认从 registry 取 `direct_message_collector` 的 enabled scope；显式传入 `chat_id` 保留为调试能力。
 6. 【已完成】补最小命令：`/feishu scopes`、`/feishu scopes candidates`、`/feishu approve <scope_id>`、`/feishu disable <scope_id>`。
-7. 【未完成】实现 group candidate discovery：用户 OAuth 群列表 API 只写 `group_chat candidate`，不自动同步。
-8. 【未完成】用户批准 group scope 后，再接入 `group_message_collector` 消费 `enabled group_chat`。
+7. 【已完成】实现 group candidate discovery：用户 OAuth 群列表 API 只写 `group_chat candidate`，不自动同步。
+8. 【已完成】用户批准 group scope 后，再接入 `group_message_collector` 消费 `enabled group_chat`，并提供 `/feishu gm` 本地调试入口。
 9. 【未完成】后续 document、meeting、bitable collector 全部改为只消费 registry 中的 enabled scope。
 
 ### 第一版验收
 
 - 【已完成】现有 `/bind` 产生的 owner p2p `chat_id` 能 seed 为 `enabled p2p_chat`，不破坏当前 `/feishu dm` 能力。
 - 【已完成】`list_enabled("direct_message_collector")` 能返回已批准 p2p scope。
-- 【未完成】群列表发现只能写入 `candidate group_chat`，不会自动同步群正文。
+- 【已完成】群列表发现只能写入 `candidate group_chat`，不会自动同步群正文。
+- 【已完成】用户批准群 scope 后，可以通过 `/feishu gm` 拉取所有 `enabled group_chat` 的群消息。
 - 【已完成】用户可以通过最小命令查看、批准、禁用 scope。
 - 【已完成】权限失败能标记为 `permission_denied`，collector 不盲重试。
 - 【已完成】scope 和 sync_state 分离，scope 文件不承载同步 cursor。
@@ -2753,6 +2756,8 @@ data/feishu/
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_scope_registry test.test_app_entry test.test_cli_chat test.test_feishu_events`，43 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_events test.test_feishu_scope_registry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider test.test_feishu_oauth`，163 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，573 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_group_candidate_discovery test.test_feishu_group_message_collector test.test_cli_chat test.test_app_entry`，50 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，597 tests OK。
 
 ## Step 13: 完整 Demo 链路验收
 

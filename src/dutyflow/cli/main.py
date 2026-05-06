@@ -29,6 +29,9 @@ class HealthCheckProvider(Protocol):
     def run_feishu_dm_debug(self, arg_text: str) -> str:
         """运行飞书私信 collector 调试。"""
 
+    def run_feishu_gm_debug(self, arg_text: str) -> str:
+        """运行飞书群消息 collector 调试。"""
+
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """查看飞书 Scope Registry。"""
 
@@ -37,6 +40,9 @@ class HealthCheckProvider(Protocol):
 
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """禁用飞书 scope。"""
+
+    def run_feishu_discover_groups_debug(self) -> str:
+        """发现飞书群组并写入 scope registry candidate。"""
 
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态。"""
@@ -209,6 +215,11 @@ class CliConsole:
             return _feishu_listen_deprecated_text(self.app.get_feishu_status_debug())
         if normalized == "/feishu latest":
             return self.app.get_latest_feishu_debug()
+        if normalized == "/feishu discover groups":
+            return self.app.run_feishu_discover_groups_debug()
+        if normalized == "/feishu gm" or normalized.startswith("/feishu gm "):
+            arg_text = normalized.removeprefix("/feishu gm").strip()
+            return self.app.run_feishu_gm_debug(arg_text)
         if normalized == "/feishu dm" or normalized.startswith("/feishu dm "):
             arg_text = normalized.removeprefix("/feishu dm").strip()
             return self.app.run_feishu_dm_debug(arg_text)
@@ -244,6 +255,8 @@ class CliConsole:
             "/feishu - 查看当前飞书监听状态\n"
             "/feishu status - 查看当前飞书监听状态\n"
             "/feishu dm - 拉取默认 p2p 私信窗口用于 collector 调试\n"
+            "/feishu gm - 拉取 enabled 群消息范围用于 collector 调试\n"
+            "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
             "/feishu doctor - 进入飞书长连接诊断模式\n"
@@ -285,6 +298,10 @@ def _feishu_help_text() -> str:
         "/feishu dm - 使用默认 p2p chat_id 拉取最近私信用于 collector 调试\n"
         "/feishu dm oc_xxx 3600 - 指定 p2p chat_id，拉取最近 3600 秒\n"
         "/feishu dm oc_xxx start end - 指定 p2p chat_id 和秒级时间窗口\n"
+        "/feishu gm - 拉取所有 enabled group_chat 最近群消息用于 collector 调试\n"
+        "/feishu gm 3600 - 拉取所有 enabled group_chat 最近 3600 秒群消息\n"
+        "/feishu gm start end - 拉取所有 enabled group_chat 指定秒级时间窗口\n"
+        "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
         "/feishu approve <scope_id> - 批准并启用 scope\n"
@@ -356,6 +373,10 @@ class _SelfTestApp:
         """返回自测私信 collector 结果。"""
         return f'{{"action": "dm_collect", "detail": "{arg_text}"}}'
 
+    def run_feishu_gm_debug(self, arg_text: str) -> str:
+        """返回自测群消息 collector 结果。"""
+        return f'{{"action": "gm_collect", "detail": "{arg_text}"}}'
+
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """返回自测 scope registry 结果。"""
         return f'{{"action": "scopes", "detail": "{arg_text}"}}'
@@ -367,6 +388,10 @@ class _SelfTestApp:
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """返回自测 scope 禁用结果。"""
         return f'{{"action": "scope_disabled", "detail": "{identifier}"}}'
+
+    def run_feishu_discover_groups_debug(self) -> str:
+        """返回自测群组发现结果。"""
+        return '{"action": "discover_groups", "detail": "ok"}'
 
     def get_feishu_status_debug(self) -> str:
         """返回自测飞书状态。"""
@@ -402,7 +427,9 @@ def _self_test() -> None:
     assert '"action": "agent_state"' in cli.handle_command("/agent state")
     assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "dm_collect"' in cli.handle_command("/feishu dm")
+    assert '"action": "gm_collect"' in cli.handle_command("/feishu gm 3600")
     assert '"action": "scopes"' in cli.handle_command("/feishu scopes")
+    assert '"action": "discover_groups"' in cli.handle_command("/feishu discover groups")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")
     assert '"action": "no_state"' in cli.handle_command("/context compress")
