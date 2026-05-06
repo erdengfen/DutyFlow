@@ -272,8 +272,13 @@ def _search_drive_files(
         "search_key": query,
         "count": min(max(1, count), _MAX_SEARCH_COUNT),
         "offset": 0,
+        # 飞书 /drive/v1/files/search docs_types 合法值：[doc,sheet,slide,bitable,mindnote,file]。
+        # "docx"/"wiki" 不是此 API 的合法枚举值（"docx" 仅用于 docx content API），不能传入。
+        "docs_types": ["doc", "sheet", "slide", "bitable", "mindnote", "file"],
     }
     resp = httpx.post(_FEISHU_DRIVE_SEARCH_URL, headers=headers, json=body, timeout=15.0)
+    # 临时诊断日志：排查 0 结果根因后可删除。
+    print(f"[drive_search_debug] req_body={json.dumps(body, ensure_ascii=False)} HTTP={resp.status_code} raw={resp.text[:1000]}", flush=True)
     _check_http_status(resp)
     data = _parse_resource_response(resp.json(), "云盘搜索")
     files_raw = data.get("files") or []

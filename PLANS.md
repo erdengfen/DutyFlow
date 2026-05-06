@@ -2205,6 +2205,90 @@ edit_time   最后编辑时间（Unix 秒）
 - [x] `.env` 已填写 `DUTYFLOW_FEISHU_OAUTH_REDIRECT_URI` 和 `DUTYFLOW_FEISHU_OAUTH_DEFAULT_SCOPES`
 - [x] 真实 OAuth 流程需要浏览器配合，首次授权为人工操作
 
+## Step 12A: 用户面主动感知公共底层
+
+### 当前决策
+
+状态：待实现。先补用户面主动感知的共享底层，不先展开完整平台化调度，也不先实现 6 个 collector 的具体字段、落盘详情和业务判断。
+
+主动感知后续会拆成 6 个 collector：
+
+- 用户私信
+- 用户群聊
+- 用户文档
+- 群聊内用户有权限的文档
+- 与用户相关的会议记录
+- 与用户相关的多维表格
+
+这些信息面不能靠一个飞书 API 解决。第一阶段只建设公共底层，避免每个 collector 各自处理 token、请求、分页、限流和状态续跑。
+
+### 第一阶段公共底层
+
+#### A. Feishu User Client
+
+目标：把 OAuth 后的用户身份封装为统一用户面客户端。
+
+职责：
+
+- 使用 `user_access_token` 发起用户面 API 请求。
+- token 过期前刷新，所有刷新行为走统一入口。
+- 统一附带 `Authorization`。
+- 区分用户身份请求与 bot/app 身份请求。
+- 记录当前 account scope，至少能说明当前请求代表哪个 owner 用户、哪个 tenant/app 空间、使用哪些授权 scope。
+
+#### B. 统一请求封装
+
+目标：只做 collector 调飞书 API 所需的最小一致行为，不做通用 HTTP SDK。
+
+第一版能力：
+
+- 超时。
+- 有限重试。
+- 飞书错误码归一化。
+- 权限错误识别。
+- 分页辅助。
+- 请求日志。
+- 原始响应可选落盘。
+
+约束：
+
+- 权限错误不盲目重试。
+- 不把 token、refresh_token、app_secret 写入日志或落盘产物。
+- 不绕过审批和权限边界扩大用户面读取范围。
+
+#### C. 限流和预算
+
+目标：先控制主动拉取的成本和失败面，比复杂调度器更优先。
+
+第一版能力：
+
+- 每个 collector 每轮最多请求页数。
+- 每个 collector 每次最多处理条数。
+- 每个资源正文最多读取大小。
+- 失败后退避。
+- 权限错误进入明确状态，不持续重试。
+
+所有页数、条数、正文大小、超时、重试和退避上限在代码旁必须有中文注释说明用途，禁止保留无说明 magic number。
+
+#### D. sync_state 最小接口
+
+目标：让每个 collector 能从上次位置继续，不先设计复杂状态机。
+
+第一版只需要回答：
+
+- 这个 collector 上次同步到哪里？
+- 上次成功是什么时候？
+- 上次失败是什么？
+- 下次从哪里继续？
+
+### 第一版已知欠账
+
+- 第一版 `sync_state` 只做最小续跑，不建复杂调度状态模型；后续如果 collector 增多，需要补充统一状态 schema、失败分类、重试窗口和人工可观察视图。
+- 第一版请求封装只服务飞书用户面 API，不抽象成通用 HTTP 客户端；后续如出现多个外部平台，再评估是否抽象。
+- 第一版预算只做固定上限，不做动态优先级和全局配额；后续需要结合联系人关系、群重要性、资源活跃度做分层调度。
+- 第一版主动感知不保证实时发现所有用户面变化；需要结合被动事件线索、增量轮询、按需补拉和可订阅资源事件逐步提升时效性。
+- 第一版只记录公共底层，不确定 6 个 collector 的落盘字段和触发细则；具体数据结构必须在实现前补充到 `docs/DATA_MODEL.md` 和本计划。
+
 ## Step 13: 完整 Demo 链路验收
 
 ### 最终效果
@@ -2256,6 +2340,8 @@ edit_time   最后编辑时间（Unix 秒）
 
 ## 当前阻塞与风险记录
 
+- [x] **feishu_search_drive 搜索返回 0 结果（Step 12 已修复）**：根因是 `docs_types` 中包含了 `"docx"` 和 `"wiki"` 两个非法枚举值——飞书 `/drive/v1/files/search` 的 `docs_types` 合法值为 `[doc,sheet,slide,bitable,mindnote,file]`，`"docx"` 仅用于 docx content API，传入导致 HTTP 400 被重试机制折叠成"0 结果"的假象。已修正为合法枚举值列表，并保留临时诊断 print 待验收后删除。
+- [ ] **用户 OAuth token 刷新机制不够健康（Step 12 待修复）**：当前 `FeishuOAuthManager.ensure_valid_token()` 能在单次资源请求前检查 `expires_at` 并提前 300 秒刷新，刷新成功后会写回 `.env` 和当前进程内 `config`；但该机制仍不适合支撑后续主动感知层的高频用户面请求。已确认风险包括：1）刷新过程是同步阻塞网络请求，含 `_fetch_app_access_token` 预请求，放在 runtime/tool/collector 热路径时可能阻塞 worker 并导致消息处理延迟或丢失；2）缺少进程内刷新锁，多个 collector 并发触发刷新时可能重复刷新并互相覆盖 refresh token；3）资源请求收到 401/鉴权失效时没有强制刷新并重试一次的统一封装；4）`/oauth` 首次授权完成后当前进程内只同步 access/refresh token，未同步 `feishu_owner_user_token_expires_at`，重启前可能误判需要刷新；5）缺少 token 健康状态落盘，无法清楚区分 `valid/refreshed/reauth_required/latest_error`。后续应抽出统一的 `FeishuUserTokenProvider` 或等价组件，提供加锁刷新、后台预热、401 后单次刷新重试、app token 缓存和可观测状态，所有用户面 API 请求必须经由该层获取 token。
 - [ ] Step 5 已完成真实 p2p 私聊接入与 `/bind` bootstrap，但群聊 `@Bot` 事件和消息资源获取仍待人工补测；`DUTYFLOW_FEISHU_EVENT_CALLBACK_URL` 仍为预留字段。
 - [ ] Step 5 真实长连接已确认会收到 `im.chat.member.bot.added_v1`，但当前未注册处理器，拉机器人入群时会刷出 `processor not found` 错误日志；需在后续决定接入或显式忽略。
 - [ ] 模型 API 的具体 provider、base URL、模型名和调用格式未敲定；真实 key 提供后需要补跑完整链路。
