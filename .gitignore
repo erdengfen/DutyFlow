@@ -12,3 +12,12 @@ __pycache__/
 data/*
 !data/.gitkeep
 .idea/
+
+AGENT_BASE_TECH_NOTES.md
+AGENTS.md
+AGENTS.md_Zone.Identifier
+CLAUDE.md
+PLANS.md
+
+test
+test/*
