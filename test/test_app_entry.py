@@ -5,6 +5,7 @@ import io
 import json
 from types import SimpleNamespace
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -149,10 +150,15 @@ class TestAppEntry(unittest.TestCase):
 
     def test_feishu_dm_debug_treats_trailing_colon_number_as_lookback(self) -> None:
         """尾随中英文冒号的数字参数应按 lookback 解析，而不是误当 chat_id。"""
-        app = DutyFlowApp(PROJECT_ROOT)
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        app = DutyFlowApp(Path(temp_dir.name))
         fake_collector = _FakeDirectMessageCollector()
         with patch("dutyflow.app.load_env_config") as load_config:
             load_config.return_value = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                feishu_owner_user_id="uid_1",
                 feishu_owner_report_chat_id="oc_owner",
                 log_dir=Path("data/logs"),
             )
@@ -166,6 +172,43 @@ class TestAppEntry(unittest.TestCase):
         self.assertEqual(payload["payload"]["start_time"], 1778066114)
         self.assertEqual(payload["payload"]["end_time"], 1778069714)
         self.assertEqual(fake_collector.collect_args["chat_id"], "oc_owner")
+
+    def test_feishu_scopes_debug_lists_seeded_owner_scope(self) -> None:
+        """Scope Registry 调试入口应能 seed 并列出 owner p2p scope。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = DutyFlowApp(Path(temp_dir))
+            with patch("dutyflow.app.load_env_config") as load_config:
+                load_config.return_value = SimpleNamespace(
+                    feishu_tenant_key="tenant_1",
+                    feishu_owner_open_id="ou_1",
+                    feishu_owner_user_id="uid_1",
+                    feishu_owner_report_chat_id="oc_owner",
+                )
+
+                payload = json.loads(app.run_feishu_scopes_debug(""))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "scopes")
+        self.assertEqual(payload["payload"]["scopes"][0]["scope_id"], "oc_owner")
+        self.assertEqual(payload["payload"]["scopes"][0]["status"], "enabled")
+
+    def test_feishu_dm_default_scope_respects_registry_disabled_status(self) -> None:
+        """默认 /feishu dm 不应绕过 registry 中已禁用的 p2p scope。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = DutyFlowApp(Path(temp_dir))
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                feishu_owner_user_id="uid_1",
+                feishu_owner_report_chat_id="oc_owner",
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                app.run_feishu_scopes_debug("")
+                app.disable_feishu_scope_debug("oc_owner")
+                payload = json.loads(app.run_feishu_dm_debug("3600"))
+
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["action"], "missing_chat_id")
 
     def test_submit_chat_debug_task_eventually_produces_latest_result(self) -> None:
         """提交非阻塞 /chat 任务后，应能轮询拿到最近结果。"""

@@ -1152,6 +1152,99 @@ update_time: "1770000000000"
 - `doc_links`：在正文 `Doc Links` 表中保存 URL、资源类型和 token 线索。
 - `file_clues`：在正文 `File Clues` 表中保存附件类消息线索，不在本 collector 下载二进制正文。
 
+## 5.3 飞书同步范围注册表
+
+Feishu Scope Registry 是用户授权后的飞书资源同步边界控制面，只记录哪些范围允许被 collector 同步，不保存正文、二进制、token 或同步 cursor。
+
+文件位置：
+
+```text
+data/feishu/scopes/
+  index.md
+  <account_id>/
+    p2p_chat/
+    group_chat/
+    drive_folder/
+    doc/
+    wiki/
+    file/
+    bitable_app/
+    bitable_table/
+    meeting_minutes/
+```
+
+Scope 详情 frontmatter：
+
+```yaml
+schema: dutyflow.feishu_scope.v1
+id: fscope_<account_id>_<scope_type>_<scope_id>
+account_id: tenant_xxx_ou_xxx
+scope_type: p2p_chat
+scope_id: oc_xxx
+status: enabled
+collector_names: direct_message_collector
+discovered_from: bind_command
+tenant_key: tenant_xxx
+owner_open_id: ou_xxx
+owner_user_id: ""
+source_platform: feishu
+source_id: oc_xxx
+source_chat_id: oc_xxx
+source_message_id: ""
+source_event_id: ""
+source_url: ""
+approved_at: 2026-05-06T12:00:00+00:00
+approved_by: owner
+disabled_reason: ""
+permission_error: ""
+last_success_at: ""
+last_attempt_at: ""
+updated_at: 2026-05-06T12:00:00+00:00
+```
+
+正文结构：
+
+```md
+# Feishu Scope fscope_xxx
+
+## Summary
+
+p2p_chat oc_xxx is enabled for direct_message_collector.
+
+## Details
+
+| key | value |
+|---|---|
+| account_id | tenant_xxx_ou_xxx |
+| scope_type | p2p_chat |
+| scope_id | oc_xxx |
+| discovered_from | bind_command |
+| source_id | oc_xxx |
+| status | enabled |
+| collector_names | direct_message_collector |
+```
+
+索引文件：
+
+```text
+data/feishu/scopes/index.md
+```
+
+索引表字段：
+
+```md
+| id | account_id | scope_type | scope_id | status | collector_names | discovered_from | detail_file |
+|---|---|---|---|---|---|---|---|
+```
+
+约束：
+
+- `scope` 表示允许同步的资源边界，`sync_state` 表示某个 collector 对某个 scope 的同步进度，两者不能混用。
+- `candidate` 只表示发现了候选范围，不允许 collector 直接同步正文。
+- `enabled` 才能被 `list_enabled(collector_name)` 返回给 collector 消费。
+- `disabled` 由用户禁用，不能被后续发现流程自动覆盖。
+- `permission_denied` 表示权限失败，不进入盲重试。
+
 ## 6. 上下文摘要
 
 文件位置：

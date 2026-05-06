@@ -16,6 +16,8 @@ __all__ = [
     "AmbientFileClue",
     "DirectMessageCollectResult",
     "DirectMessageCollector",
+    "FeishuScopeRecord",
+    "FeishuScopeRegistry",
     "FeishuClient",
     "FeishuClientResult",
     "FeishuEventAdapter",
@@ -30,6 +32,8 @@ __all__ = [
     "FeishuUserClient",
     "FeishuUserTokenHealth",
     "FeishuUserTokenProvider",
+    "seed_owner_p2p_scope",
+    "scope_account_id_from_config",
 ]
 
 _EXPORT_MAP = {
@@ -58,6 +62,8 @@ _EXPORT_MAP = {
         "dutyflow.feishu.collectors.direct_message_collector",
         "DirectMessageCollector",
     ),
+    "FeishuScopeRecord": ("dutyflow.feishu.scope_registry", "FeishuScopeRecord"),
+    "FeishuScopeRegistry": ("dutyflow.feishu.scope_registry", "FeishuScopeRegistry"),
     "FeishuClient": ("dutyflow.feishu.client", "FeishuClient"),
     "FeishuClientResult": ("dutyflow.feishu.client", "FeishuClientResult"),
     "FeishuEventAdapter": ("dutyflow.feishu.events", "FeishuEventAdapter"),
@@ -84,6 +90,11 @@ _EXPORT_MAP = {
         "dutyflow.feishu.user_token_provider",
         "FeishuUserTokenProvider",
     ),
+    "seed_owner_p2p_scope": ("dutyflow.feishu.scope_registry", "seed_owner_p2p_scope"),
+    "scope_account_id_from_config": (
+        "dutyflow.feishu.scope_registry",
+        "scope_account_id_from_config",
+    ),
 }
 
 
@@ -106,6 +117,7 @@ def _self_test() -> None:
     from dutyflow.feishu.collectors.direct_message_collector import DirectMessageCollector
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
+    from dutyflow.feishu.scope_registry import FeishuScopeRegistry
     from dutyflow.feishu.sync_state import FeishuSyncStateStore
     from dutyflow.feishu.user_client import FeishuUserClient
     from dutyflow.feishu.user_request import FeishuUserRequestClient
@@ -116,6 +128,7 @@ def _self_test() -> None:
     assert DirectMessageCollector is not None
     assert FeishuClient is not None
     assert FeishuIngressService is not None
+    assert FeishuScopeRegistry is not None
     assert FeishuSyncStateStore is not None
     assert FeishuUserClient is not None
     assert FeishuUserRequestClient is not None

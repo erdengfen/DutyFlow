@@ -174,11 +174,18 @@ class TestFeishuEvents(unittest.TestCase):
             self.assertEqual(result.payload["feedback_payload"]["message_id"], "om_bind_reply")
             self.assertEqual(client.sent_chat_id, "oc_bind")
             self.assertEqual(result.payload["runtime_queue_action"], "skipped_bind")
+            self.assertEqual(result.payload["scope_registry_status"], "seeded")
+            self.assertEqual(result.payload["scope_type"], "p2p_chat")
+            self.assertEqual(result.payload["scope_status"], "enabled")
             self.assertEqual(len(runtime.enqueued_inputs), 0)
             env_text = (root / ".env").read_text(encoding="utf-8")
             self.assertIn("DUTYFLOW_FEISHU_TENANT_KEY=tenant_bind", env_text)
             self.assertIn("DUTYFLOW_FEISHU_OWNER_OPEN_ID=ou_bind", env_text)
             self.assertIn("DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID=oc_bind", env_text)
+            scope_index = (root / "data/feishu/scopes/index.md").read_text(encoding="utf-8")
+            self.assertIn("oc_bind", scope_index)
+            self.assertIn("direct_message_collector", scope_index)
+            self.assertIn("bind_command", scope_index)
 
     def test_card_action_trigger_resumes_approval_and_returns_toast(self) -> None:
         """飞书卡片按钮回调应进入审批恢复链，并返回卡片 toast。"""

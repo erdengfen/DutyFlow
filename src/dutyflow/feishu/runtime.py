@@ -24,6 +24,7 @@ from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
 from dutyflow.feishu.oauth import FeishuOAuthManager, _compute_expires_at
+from dutyflow.feishu.scope_registry import FeishuScopeRegistry, seed_owner_p2p_scope
 from dutyflow.perception.store import PerceptionRecordService
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
@@ -498,17 +499,35 @@ class FeishuIngressService:
         }
         saved_keys = save_env_values(self.project_root, env_values)
         self._apply_bound_values_to_config(env_values)
+        scope_payload = self._seed_bind_scope()
         feedback_result = self.feedback_gateway.send_text(
             envelope.chat_id,
             "绑定成功。已记录 tenant_key、owner_open_id 和 owner_report_chat_id。",
         )
-        return self._build_bind_feedback_payload(saved_keys, env_values, feedback_result)
+        return self._build_bind_feedback_payload(saved_keys, env_values, feedback_result, scope_payload)
+
+    def _seed_bind_scope(self) -> dict[str, str]:
+        """把 `/bind` 产生的 p2p chat_id 写入 Scope Registry。"""
+        record = seed_owner_p2p_scope(
+            FeishuScopeRegistry(self.project_root),
+            self.config,
+            discovered_from="bind_command",
+        )
+        if record is None:
+            return {"scope_registry_status": "skipped"}
+        return {
+            "scope_registry_status": "seeded",
+            "scope_record_id": record.record_id,
+            "scope_type": record.scope_type,
+            "scope_status": record.status,
+        }
 
     def _build_bind_feedback_payload(
         self,
         saved_keys: list[str],
         env_values: Mapping[str, str],
         feedback_result: FeedbackResult,
+        scope_payload: Mapping[str, str],
     ) -> dict[str, Any]:
         """构造 `/bind` 回信阶段的稳定输出字段。"""
         return {
@@ -518,6 +537,7 @@ class FeishuIngressService:
             "feedback_status": feedback_result.status,
             "feedback_ok": feedback_result.ok,
             "feedback_payload": feedback_result.payload,
+            **dict(scope_payload),
         }
 
     def _apply_bound_values_to_config(self, env_values: Mapping[str, str]) -> None:

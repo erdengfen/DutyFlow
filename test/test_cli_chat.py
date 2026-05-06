@@ -83,6 +83,15 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"action": "dm_collect"', output)
         self.assertIn('"detail": "oc_1 3600"', output)
 
+    def test_feishu_scope_commands_call_app_debug_entries(self) -> None:
+        """CLI 应暴露 Scope Registry 的最小调试命令。"""
+        cli = CliConsole(_FakeApp())
+
+        self.assertIn('"action": "scopes"', cli.handle_command("/feishu scopes"))
+        self.assertIn('"detail": "candidates"', cli.handle_command("/feishu scopes candidates"))
+        self.assertIn('"action": "scope_approved"', cli.handle_command("/feishu approve oc_1"))
+        self.assertIn('"action": "scope_disabled"', cli.handle_command("/feishu disable oc_1"))
+
     def test_interactive_feishu_doctor_session_keeps_running(self) -> None:
         """交互式 /feishu doctor 应进入诊断子会话，直到 /back。"""
         cli = CliConsole(_FakeApp())
@@ -134,6 +143,18 @@ class _FakeApp:
     def run_feishu_dm_debug(self, arg_text: str) -> str:
         """返回测试私信 collector 结果。"""
         return f'{{"action": "dm_collect", "detail": "{arg_text}"}}'
+
+    def run_feishu_scopes_debug(self, arg_text: str) -> str:
+        """返回测试 scope registry 结果。"""
+        return f'{{"action": "scopes", "detail": "{arg_text}"}}'
+
+    def approve_feishu_scope_debug(self, identifier: str) -> str:
+        """返回测试 scope 批准结果。"""
+        return f'{{"action": "scope_approved", "detail": "{identifier}"}}'
+
+    def disable_feishu_scope_debug(self, identifier: str) -> str:
+        """返回测试 scope 禁用结果。"""
+        return f'{{"action": "scope_disabled", "detail": "{identifier}"}}'
 
     def get_feishu_status_debug(self) -> str:
         """返回测试飞书监听状态。"""

@@ -33,6 +33,13 @@ from dutyflow.config.env import load_env_config
 from dutyflow.feishu.collectors.direct_message_collector import DirectMessageCollector
 from dutyflow.feishu.oauth import FeishuOAuthManager
 from dutyflow.feishu.runtime import FeishuIngressService
+from dutyflow.feishu.scope_registry import (
+    DIRECT_MESSAGE_COLLECTOR,
+    FeishuScopeRecord,
+    FeishuScopeRegistry,
+    seed_owner_p2p_scope,
+    scope_account_id_from_config,
+)
 from dutyflow.feishu.user_client import FeishuUserClient
 from dutyflow.feedback.gateway import FeedbackGateway
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
@@ -276,7 +283,9 @@ class DutyFlowApp:
     def run_feishu_dm_debug(self, arg_text: str) -> str:
         """用 owner 用户身份运行 direct_message_collector 的本地调试入口。"""
         config = load_env_config(self.project_root)
-        parsed = _parse_dm_debug_args(arg_text, config.feishu_owner_report_chat_id)
+        registry = FeishuScopeRegistry(self.project_root)
+        default_chat_id = _default_dm_chat_id(arg_text, config, registry)
+        parsed = _parse_dm_debug_args(arg_text, default_chat_id)
         if parsed.error_kind:
             return _feishu_error(parsed.error_kind, parsed.detail)
         try:
@@ -295,6 +304,38 @@ class DutyFlowApp:
         except Exception as exc:  # noqa: BLE001
             return _feishu_error("dm_collect_failed", str(exc))
         return _dm_collect_debug_payload(result, parsed)
+
+    def run_feishu_scopes_debug(self, arg_text: str) -> str:
+        """查看飞书 Scope Registry 当前记录。"""
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+        seed_owner_p2p_scope(registry, config)
+        status = "candidate" if arg_text.strip() == "candidates" else ""
+        records = registry.list_records(account_id=scope_account_id_from_config(config), status=status)
+        return _feishu_scopes_payload("scopes", records, self.project_root)
+
+    def approve_feishu_scope_debug(self, identifier: str) -> str:
+        """批准并启用一个飞书 scope。"""
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+        seed_owner_p2p_scope(registry, config)
+        record = _resolve_single_scope(registry, identifier)
+        if isinstance(record, str):
+            return _feishu_error("scope_not_found", record)
+        registry.approve_scope(record.account_id, record.scope_type, record.scope_id)
+        enabled = registry.enable_scope(record.account_id, record.scope_type, record.scope_id)
+        return _feishu_scopes_payload("scope_approved", (enabled,), self.project_root)
+
+    def disable_feishu_scope_debug(self, identifier: str) -> str:
+        """禁用一个飞书 scope。"""
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+        seed_owner_p2p_scope(registry, config)
+        record = _resolve_single_scope(registry, identifier)
+        if isinstance(record, str):
+            return _feishu_error("scope_not_found", record)
+        disabled = registry.disable_scope(record.account_id, record.scope_type, record.scope_id, reason="manual")
+        return _feishu_scopes_payload("scope_disabled", (disabled,), self.project_root)
 
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态，不再承担启动监听的语义。"""
@@ -740,6 +781,79 @@ class _DmDebugArgs:
     end_time: int
     error_kind: str = ""
     detail: str = ""
+
+
+def _default_dm_chat_id(arg_text: str, config: object, registry: FeishuScopeRegistry) -> str:
+    """返回 /feishu dm 默认 p2p chat_id，优先使用 Scope Registry。"""
+    if not _dm_args_need_default_chat_id(arg_text):
+        return ""
+    seeded = seed_owner_p2p_scope(registry, config)
+    if seeded is not None and seeded.status == "disabled":
+        return ""
+    account_id = scope_account_id_from_config(config)
+    scopes = registry.list_enabled(DIRECT_MESSAGE_COLLECTOR, account_id=account_id)
+    for scope in scopes:
+        if scope.scope_type == "p2p_chat":
+            return scope.scope_id
+    return ""
+
+
+def _dm_args_need_default_chat_id(arg_text: str) -> bool:
+    """判断 /feishu dm 参数是否需要默认 chat_id。"""
+    tokens = [_clean_dm_token(token) for token in arg_text.split()]
+    tokens = [token for token in tokens if token]
+    return not tokens or _is_integer_text(tokens[0])
+
+
+def _resolve_single_scope(registry: FeishuScopeRegistry, identifier: str) -> FeishuScopeRecord | str:
+    """把 CLI 中的 scope_id 或 record_id 解析成唯一 scope。"""
+    matches = registry.resolve_identifier(identifier)
+    if not matches:
+        return "scope not found: " + identifier
+    if len(matches) > 1:
+        return "scope identifier is ambiguous: " + identifier
+    return matches[0]
+
+
+def _feishu_scopes_payload(
+    action: str,
+    records: Sequence[FeishuScopeRecord],
+    project_root: Path,
+) -> str:
+    """格式化 Scope Registry 调试输出。"""
+    return _feishu_debug_payload(
+        status="ok",
+        action=action,
+        event_id="",
+        message_id="",
+        record_path=_scope_record_path(records[0], project_root) if records else "",
+        detail="ok",
+        payload={"scopes": [_scope_payload(record, project_root) for record in records]},
+    )
+
+
+def _scope_payload(record: FeishuScopeRecord, project_root: Path) -> dict[str, str]:
+    """构造单个 scope 的 CLI 输出。"""
+    return {
+        "record_id": record.record_id,
+        "account_id": record.account_id,
+        "scope_type": record.scope_type,
+        "scope_id": record.scope_id,
+        "status": record.status,
+        "collector_names": ",".join(record.collector_names),
+        "discovered_from": record.discovered_from,
+        "detail_file": _scope_record_path(record, project_root),
+    }
+
+
+def _scope_record_path(record: FeishuScopeRecord, project_root: Path) -> str:
+    """返回 scope 详情文件的项目相对路径。"""
+    registry = FeishuScopeRegistry(project_root)
+    path = registry.path_for(record.account_id, record.scope_type, record.scope_id)
+    try:
+        return str(path.relative_to(project_root.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _parse_dm_debug_args(arg_text: str, default_chat_id: str) -> _DmDebugArgs:

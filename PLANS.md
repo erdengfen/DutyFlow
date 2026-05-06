@@ -2674,13 +2674,13 @@ Scope Registry
 
 ### 第一版功能
 
-- 【未完成】保存 scope 记录：`scope_type`、`scope_id`、`account_id`、`status`、`collector_names`、`discovered_from`、来源线索、批准信息、权限错误。
-- 【未完成】支持最小状态：`candidate`、`approved`、`enabled`、`disabled`、`permission_denied`、`stale`。
-- 【未完成】支持最小接口：`upsert_candidate()`、`approve_scope()`、`enable_scope()`、`disable_scope()`、`list_enabled()`、`mark_success()`、`mark_permission_denied()`。
-- 【未完成】支持最小 scope 类型：`p2p_chat`、`group_chat`、`drive_folder`、`doc`、`wiki`、`file`、`bitable_app`、`bitable_table`、`meeting_minutes`。
-- 【未完成】支持来源记录：`env`、`bind_command`、`bot_event`、`manual_add`、`oauth_chat_list`、`group_message_link`、`user_shared_url`。
-- 【未完成】把 `approved` 和 `enabled` 分开：前者表示用户允许，后者表示当前运行中消费。
-- 【未完成】权限失败只标记状态，不盲重试，不自动扩大权限。
+- 【已完成】保存 scope 记录：`scope_type`、`scope_id`、`account_id`、`status`、`collector_names`、`discovered_from`、来源线索、批准信息、权限错误。
+- 【已完成】支持最小状态：`candidate`、`approved`、`enabled`、`disabled`、`permission_denied`、`stale`。
+- 【已完成】支持最小接口：`upsert_candidate()`、`approve_scope()`、`enable_scope()`、`disable_scope()`、`list_enabled()`、`mark_success()`、`mark_permission_denied()`。
+- 【已完成】支持最小 scope 类型：`p2p_chat`、`group_chat`、`drive_folder`、`doc`、`wiki`、`file`、`bitable_app`、`bitable_table`、`meeting_minutes`。
+- 【已完成】支持来源记录：`env`、`bind_command`、`bot_event`、`manual_add`、`oauth_chat_list`、`group_message_link`、`user_shared_url`。
+- 【已完成】把 `approved` 和 `enabled` 分开：前者表示用户允许，后者表示当前运行中消费。
+- 【已完成】权限失败只标记状态，不盲重试，不自动扩大权限。
 
 ### 落盘结构
 
@@ -2703,14 +2703,14 @@ data/feishu/
 
 落盘要求：
 
-- 【未完成】每个 scope 一个 Markdown 文件，便于人工审查和修改状态。
-- 【未完成】`index.md` 只做导航和摘要，不塞所有字段。
-- 【未完成】第一版保留 account 维度，避免后续多账号授权时 scope 混淆。
-- 【未完成】Scope Registry 不保存同步 cursor；cursor 仍归 `sync_state`。
+- 【已完成】每个 scope 一个 Markdown 文件，便于人工审查和修改状态。
+- 【已完成】`index.md` 只做导航和摘要，不塞所有字段。
+- 【已完成】第一版保留 account 维度，避免后续多账号授权时 scope 混淆。
+- 【已完成】Scope Registry 不保存同步 cursor；cursor 仍归 `sync_state`。
 
 ### Collector 接入规则
 
-- 【未完成】`direct_message_collector` 消费 `p2p_chat`。
+- 【已完成】`direct_message_collector` 消费 `p2p_chat`。
 - 【未完成】`group_message_collector` 消费 `group_chat`。
 - 【未完成】`user_document_collector` 消费 `drive_folder`、`doc`、`wiki`、`file`。
 - 【未完成】`group_document_collector` 消费 `group_chat`、`doc`、`wiki`、`file`。
@@ -2720,25 +2720,25 @@ data/feishu/
 
 ### 开发计划
 
-1. 【未完成】补 `docs/DATA_MODEL.md`：定义 scope 记录、索引、状态、来源、类型、account 维度和路径。
-2. 【未完成】新增 `src/dutyflow/feishu/scope_registry.py`，实现 Markdown store 和最小接口。
-3. 【未完成】新增 `test/test_feishu_scope_registry.py`，覆盖写入、更新、状态流转、`list_enabled()`、权限失败和 account 隔离。
-4. 【未完成】seed 现有 `/bind` 结果：把 `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID` 写为 `p2p_chat` + `enabled` + `direct_message_collector`。
-5. 【未完成】调整 `/feishu dm`：默认从 registry 取 `direct_message_collector` 的 enabled scope；显式传入 `chat_id` 保留为调试能力。
-6. 【未完成】补最小命令：`/feishu scopes`、`/feishu scopes candidates`、`/feishu approve <scope_id>`、`/feishu disable <scope_id>`。
+1. 【已完成】补 `docs/DATA_MODEL.md`：定义 scope 记录、索引、状态、来源、类型、account 维度和路径。
+2. 【已完成】新增 `src/dutyflow/feishu/scope_registry.py`，实现 Markdown store 和最小接口。
+3. 【已完成】新增 `test/test_feishu_scope_registry.py`，覆盖写入、更新、状态流转、`list_enabled()`、权限失败和 account 隔离。
+4. 【已完成】seed 现有 `/bind` 结果：把 `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID` 写为 `p2p_chat` + `enabled` + `direct_message_collector`。
+5. 【已完成】调整 `/feishu dm`：默认从 registry 取 `direct_message_collector` 的 enabled scope；显式传入 `chat_id` 保留为调试能力。
+6. 【已完成】补最小命令：`/feishu scopes`、`/feishu scopes candidates`、`/feishu approve <scope_id>`、`/feishu disable <scope_id>`。
 7. 【未完成】实现 group candidate discovery：用户 OAuth 群列表 API 只写 `group_chat candidate`，不自动同步。
 8. 【未完成】用户批准 group scope 后，再接入 `group_message_collector` 消费 `enabled group_chat`。
 9. 【未完成】后续 document、meeting、bitable collector 全部改为只消费 registry 中的 enabled scope。
 
 ### 第一版验收
 
-- 【未完成】现有 `/bind` 产生的 owner p2p `chat_id` 能 seed 为 `enabled p2p_chat`，不破坏当前 `/feishu dm` 能力。
-- 【未完成】`list_enabled("direct_message_collector")` 能返回已批准 p2p scope。
+- 【已完成】现有 `/bind` 产生的 owner p2p `chat_id` 能 seed 为 `enabled p2p_chat`，不破坏当前 `/feishu dm` 能力。
+- 【已完成】`list_enabled("direct_message_collector")` 能返回已批准 p2p scope。
 - 【未完成】群列表发现只能写入 `candidate group_chat`，不会自动同步群正文。
-- 【未完成】用户可以通过最小命令查看、批准、禁用 scope。
-- 【未完成】权限失败能标记为 `permission_denied`，collector 不盲重试。
-- 【未完成】scope 和 sync_state 分离，scope 文件不承载同步 cursor。
-- 【未完成】所有 scope 文件可人工检查，并能追溯来源、批准和 collector 消费关系。
+- 【已完成】用户可以通过最小命令查看、批准、禁用 scope。
+- 【已完成】权限失败能标记为 `permission_denied`，collector 不盲重试。
+- 【已完成】scope 和 sync_state 分离，scope 文件不承载同步 cursor。
+- 【已完成】所有 scope 文件可人工检查，并能追溯来源、批准和 collector 消费关系。
 
 ### 待实现和风险
 
@@ -2747,6 +2747,12 @@ data/feishu/
 - 【未完成】direct_message 当前仍可以绕过 registry 显式传 `chat_id` 调试；正式调度前需要收口。
 - 【未完成】历史 `sync_state` 目前没有 account 维度，是否迁移到 `data/feishu/sync_state/<account_id>/` 需要后续单独评估。
 - 【未完成】后续 Resource Index 只记录发现结果，不能反向决定同步许可。
+
+### 测试记录
+
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_scope_registry test.test_app_entry test.test_cli_chat test.test_feishu_events`，43 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_events test.test_feishu_scope_registry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider test.test_feishu_oauth`，163 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，573 tests OK。
 
 ## Step 13: 完整 Demo 链路验收
 
