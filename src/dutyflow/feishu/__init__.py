@@ -15,6 +15,8 @@ __all__ = [
     "FeishuEventEnvelope",
     "FeishuIngressResult",
     "FeishuIngressService",
+    "FeishuCollectorSyncState",
+    "FeishuSyncStateStore",
     "FeishuUserRequest",
     "FeishuUserRequestClient",
     "FeishuUserResponse",
@@ -38,6 +40,11 @@ _EXPORT_MAP = {
     "FeishuEventEnvelope": ("dutyflow.feishu.events", "FeishuEventEnvelope"),
     "FeishuIngressResult": ("dutyflow.feishu.runtime", "FeishuIngressResult"),
     "FeishuIngressService": ("dutyflow.feishu.runtime", "FeishuIngressService"),
+    "FeishuCollectorSyncState": (
+        "dutyflow.feishu.sync_state",
+        "FeishuCollectorSyncState",
+    ),
+    "FeishuSyncStateStore": ("dutyflow.feishu.sync_state", "FeishuSyncStateStore"),
     "FeishuUserRequest": ("dutyflow.feishu.user_request", "FeishuUserRequest"),
     "FeishuUserRequestClient": (
         "dutyflow.feishu.user_request",
@@ -72,12 +79,14 @@ def _self_test() -> None:
     from dutyflow.feishu.collector_budget import CollectorBudget
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
+    from dutyflow.feishu.sync_state import FeishuSyncStateStore
     from dutyflow.feishu.user_request import FeishuUserRequestClient
     from dutyflow.feishu.user_token_provider import FeishuUserTokenProvider
 
     assert CollectorBudget is not None
     assert FeishuClient is not None
     assert FeishuIngressService is not None
+    assert FeishuSyncStateStore is not None
     assert FeishuUserRequestClient is not None
     assert FeishuUserTokenProvider is not None
 

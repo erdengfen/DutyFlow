@@ -2209,9 +2209,9 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 当前决策
 
-状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘、collector 预算控制和对应测试。继续补 sync_state 和现有用户资源客户端迁移。
+状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘、collector 预算控制、sync_state 最小接口和对应测试。继续补现有用户资源客户端迁移。
 
-验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，535 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
+验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，542 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
 
 主动感知后续会拆成 6 个 collector：
 
@@ -2501,13 +2501,13 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
    - 覆盖失败退避增长。
    - 覆盖权限错误不进入普通重试路径。
 
-10. 【未完成】新增 `src/dutyflow/feishu/sync_state.py`。
+10. 【已完成】新增 `src/dutyflow/feishu/sync_state.py`。
     - 实现 `FeishuCollectorSyncState`。
     - 实现 `FeishuSyncStateStore` 的 `read()`、`mark_success()`、`mark_failure()`、`next_cursor()`。
     - 使用 Markdown 落盘到 `data/feishu/sync_state/<collector_name>/<safe_scope_id>.md`。
     - 第一版 cursor 和 next_cursor 只保存字符串，不保存复杂对象。
 
-11. 【未完成】补充 sync_state 测试。
+11. 【已完成】补充 sync_state 测试。
     - 覆盖状态不存在时返回空 cursor 初始状态。
     - 覆盖成功后写入 cursor、next_cursor、last_success_at。
     - 覆盖失败后写入 last_failure_at、last_error_kind、last_error_detail。
