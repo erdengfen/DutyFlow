@@ -1120,7 +1120,70 @@ data/ambient_context/<source_type>/index.md
 |---|---|---|---|---|---|---|---|---|
 ```
 
-### 5.2.1 私信主动感知记录
+### 5.2.1 主动感知 Context Packet
+
+Context Packet 是把一批已落盘 `ambient_context` 记录送入正式 Agent Runtime 的稳定输入结构。它不是新的落盘来源，不保存正文全文，只承载 record 锚点、时间窗口、摘要预览和可按需补读的引用。
+
+扫描条件：
+
+```yaml
+source_type: direct_message | group_message | user_document | ""
+collector_name: direct_message_collector | group_message_collector | user_document_collector | ""
+created_after: 2026-05-07T09:00:00+08:00
+created_before: 2026-05-07T10:00:00+08:00
+record_ids:
+  - dm_om_xxx
+limit: 50
+```
+
+约束：
+
+- `created_after` 表示只返回严格晚于该时间的记录；`created_before` 表示返回不晚于该时间的记录。
+- 第一版单个 packet 最多 50 条记录，避免主动分析输入过大。
+- `packet_id` 由有序 `record_ids` 生成稳定哈希；空 packet 使用 `ambpkt_empty`。
+- 单一来源时 `source_type` 使用该来源；混合来源时使用 `mixed`。
+- Agent 如需详情，应通过 `read_context_ref(ref_type=ambient_context, ref_id=<record_id>)` 读取原始记录；如需 docx 正文，应通过 `feishu_read_doc` 按 token 补读并写入 Evidence。
+
+Runtime 输入 payload：
+
+```json
+{
+  "packet_id": "ambpkt_xxxxxxxxxxxx",
+  "source_type": "group_message",
+  "collector_names": ["group_message_collector"],
+  "record_ids": ["gm_om_xxx"],
+  "scope_ids": ["oc_xxx"],
+  "time_window": {
+    "start": "2026-05-07T09:00:00+08:00",
+    "end": "2026-05-07T10:00:00+08:00"
+  },
+  "record_count": 1,
+  "records": [
+    {
+      "record_id": "gm_om_xxx",
+      "source_type": "group_message",
+      "collector_name": "group_message_collector",
+      "source_id": "oc_xxx",
+      "sync_scope_id": "oc_xxx",
+      "created_at": "2026-05-07T09:30:00+08:00",
+      "fetched_at": "2026-05-07T09:31:00+08:00",
+      "detail_file": "data/ambient_context/group_message/2026-05-07/gm_om_xxx.md",
+      "text_preview": "短文本预览",
+      "summary": "一句话摘要",
+      "doc_links": [
+        {
+          "url": "https://example.feishu.cn/docx/token",
+          "resource_type": "docx",
+          "token": "token"
+        }
+      ],
+      "file_clues": []
+    }
+  ]
+}
+```
+
+### 5.2.2 私信主动感知记录
 
 `direct_message_collector` 只保存用户显式指定或绑定的 p2p 会话历史消息，不代表全量监听用户所有私聊。
 
@@ -1152,7 +1215,7 @@ update_time: "1770000000000"
 - `doc_links`：在正文 `Doc Links` 表中保存 URL、资源类型和 token 线索。
 - `file_clues`：在正文 `File Clues` 表中保存附件类消息线索，不在本 collector 下载二进制正文。
 
-### 5.2.2 用户云文档主动感知记录
+### 5.2.3 用户云文档主动感知记录
 
 `user_document_collector` 第一版只枚举用户已批准 `drive_folder` scope 的当前层级清单，不递归子文件夹，不读取大文档正文，不依赖搜索接口。
 

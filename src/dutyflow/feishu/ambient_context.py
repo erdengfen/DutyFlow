@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Mapping
 
@@ -16,6 +17,8 @@ AMBIENT_CONTEXT_INDEX_SCHEMA = "dutyflow.ambient_context_index.v1"
 MAX_SAFE_FILE_PART_CHARS = 120
 # 关键开关：索引中的文本预览最多保留 120 字符，避免 index.md 快速膨胀。
 MAX_INDEX_PREVIEW_CHARS = 120
+# 关键开关：单个 ambient context packet 第一版最多包含 50 条记录，避免主动分析输入过大。
+MAX_CONTEXT_PACKET_RECORDS = 50
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,84 @@ class AmbientContextWriteResult:
     source_index_path: Path
 
 
+@dataclass(frozen=True)
+class AmbientContextScanQuery:
+    """表示主动感知记录扫描条件，供后续分析入队层复用。"""
+
+    source_type: str = ""
+    collector_name: str = ""
+    created_after: str = ""
+    created_before: str = ""
+    record_ids: tuple[str, ...] = ()
+    limit: int = MAX_CONTEXT_PACKET_RECORDS
+
+
+@dataclass(frozen=True)
+class AmbientContextPacketRecord:
+    """表示 context packet 中单条主动感知记录的模型可见摘要。"""
+
+    record_id: str
+    source_type: str
+    collector_name: str
+    source_id: str
+    sync_scope_id: str
+    created_at: str
+    fetched_at: str
+    detail_file: str
+    text_preview: str
+    summary: str
+    doc_links: tuple[AmbientDocLink, ...] = ()
+    file_clues: tuple[AmbientFileClue, ...] = ()
+
+    def to_payload(self) -> dict[str, object]:
+        """转换为稳定 JSON 结构。"""
+        return {
+            "record_id": self.record_id,
+            "source_type": self.source_type,
+            "collector_name": self.collector_name,
+            "source_id": self.source_id,
+            "sync_scope_id": self.sync_scope_id,
+            "created_at": self.created_at,
+            "fetched_at": self.fetched_at,
+            "detail_file": self.detail_file,
+            "text_preview": self.text_preview,
+            "summary": self.summary,
+            "doc_links": [dict(link.__dict__) for link in self.doc_links],
+            "file_clues": [dict(clue.__dict__) for clue in self.file_clues],
+        }
+
+
+@dataclass(frozen=True)
+class AmbientContextPacket:
+    """表示一批待送入正式 runtime 分析的主动感知上下文包。"""
+
+    packet_id: str
+    source_type: str
+    collector_names: tuple[str, ...]
+    record_ids: tuple[str, ...]
+    scope_ids: tuple[str, ...]
+    time_window_start: str
+    time_window_end: str
+    record_count: int
+    records: tuple[AmbientContextPacketRecord, ...]
+
+    def to_payload(self) -> dict[str, object]:
+        """转换为 runtime 可消费的稳定 JSON 结构。"""
+        return {
+            "packet_id": self.packet_id,
+            "source_type": self.source_type,
+            "collector_names": list(self.collector_names),
+            "record_ids": list(self.record_ids),
+            "scope_ids": list(self.scope_ids),
+            "time_window": {
+                "start": self.time_window_start,
+                "end": self.time_window_end,
+            },
+            "record_count": self.record_count,
+            "records": [record.to_payload() for record in self.records],
+        }
+
+
 class AmbientContextStore:
     """统一写入飞书用户面主动感知 Markdown 记录。"""
 
@@ -112,6 +193,31 @@ class AmbientContextStore:
             if path.stem == target:
                 return self._read_record(path)
         return None
+
+    def scan_records(self, query: AmbientContextScanQuery | None = None) -> tuple[AmbientContextRecord, ...]:
+        """按来源、collector、时间和 record_id 条件扫描主动感知记录。"""
+        resolved = query or AmbientContextScanQuery()
+        records = [self._read_record(path) for path in self._iter_record_paths()]
+        filtered = [record for record in records if _record_matches_query(record, resolved)]
+        filtered.sort(key=lambda item: (_datetime_order_key(item.created_at), item.record_id))
+        return tuple(filtered[: _scan_limit(resolved.limit)])
+
+    def build_context_packet(self, query: AmbientContextScanQuery | None = None) -> AmbientContextPacket:
+        """把扫描结果转换为后续 runtime 可消费的稳定 context packet。"""
+        records = self.scan_records(query)
+        packet_records = tuple(_packet_record(self.project_root, self, record) for record in records)
+        record_ids = tuple(record.record_id for record in records)
+        return AmbientContextPacket(
+            packet_id=_packet_id(record_ids),
+            source_type=_packet_source_type(records),
+            collector_names=_unique(record.collector_name for record in records),
+            record_ids=record_ids,
+            scope_ids=_unique(record.sync_scope_id for record in records),
+            time_window_start=records[0].created_at if records else "",
+            time_window_end=records[-1].created_at if records else "",
+            record_count=len(records),
+            records=packet_records,
+        )
 
     def _record_with_relative_refs(self, record: AmbientContextRecord) -> AmbientContextRecord:
         """把项目内引用路径规整为相对路径，避免 Markdown 记录绑定本机绝对目录。"""
@@ -374,6 +480,116 @@ def _extra_frontmatter(frontmatter: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in frontmatter.items() if key not in _BASE_FRONTMATTER_KEYS}
 
 
+def _record_matches_query(record: AmbientContextRecord, query: AmbientContextScanQuery) -> bool:
+    """判断记录是否符合扫描条件。"""
+    if query.source_type and record.source_type != query.source_type:
+        return False
+    if query.collector_name and record.collector_name != query.collector_name:
+        return False
+    if query.record_ids and record.record_id not in query.record_ids:
+        return False
+    return _created_at_in_window(record.created_at, query.created_after, query.created_before)
+
+
+def _created_at_in_window(created_at: str, created_after: str, created_before: str) -> bool:
+    """判断 created_at 是否落在查询时间窗口内。"""
+    current = _normalized_datetime(created_at)
+    after = _normalized_datetime(created_after)
+    before = _normalized_datetime(created_before)
+    if after is not None and (current is None or current <= after):
+        return False
+    if before is not None and (current is None or current > before):
+        return False
+    return True
+
+
+def _scan_limit(limit: int) -> int:
+    """限制单次扫描返回记录数，避免 context packet 超过主动分析预算。"""
+    if limit <= 0:
+        return 0
+    return min(limit, MAX_CONTEXT_PACKET_RECORDS)
+
+
+def _datetime_order_key(value: str) -> str:
+    """把时间转为稳定排序键，空时间排在最前。"""
+    current = _normalized_datetime(value)
+    if current is None:
+        return ""
+    return current.isoformat()
+
+
+def _normalized_datetime(value: str) -> datetime | None:
+    """把 ISO-8601 时间规整为 UTC aware datetime，便于比较。"""
+    current = _parse_datetime(value)
+    if current is None:
+        return None
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc)
+
+
+def _packet_record(
+    project_root: Path,
+    store: AmbientContextStore,
+    record: AmbientContextRecord,
+) -> AmbientContextPacketRecord:
+    """把完整 ambient_context 记录裁剪为 packet 单条摘要。"""
+    return AmbientContextPacketRecord(
+        record_id=record.record_id,
+        source_type=record.source_type,
+        collector_name=record.collector_name,
+        source_id=record.source_id,
+        sync_scope_id=record.sync_scope_id,
+        created_at=record.created_at,
+        fetched_at=record.fetched_at,
+        detail_file=_relative_path(project_root, store.path_for(record)),
+        text_preview=_truncate(record.text_preview or record.text, MAX_INDEX_PREVIEW_CHARS),
+        summary=record.summary,
+        doc_links=record.doc_links,
+        file_clues=record.file_clues,
+    )
+
+
+def _packet_id(record_ids: tuple[str, ...]) -> str:
+    """按 record_ids 生成稳定 packet ID。"""
+    if not record_ids:
+        return "ambpkt_empty"
+    digest = sha256("|".join(record_ids).encode("utf-8")).hexdigest()[:12]
+    return "ambpkt_" + digest
+
+
+def _packet_source_type(records: tuple[AmbientContextRecord, ...]) -> str:
+    """生成 packet 的来源类型摘要。"""
+    source_types = _unique(record.source_type for record in records)
+    if len(source_types) == 1:
+        return source_types[0]
+    if source_types:
+        return "mixed"
+    return ""
+
+
+def _unique(values) -> tuple[str, ...]:
+    """保留输入顺序去重并过滤空字符串。"""
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in result:
+            result.append(text)
+    return tuple(result)
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    """解析 ISO-8601 时间；空值返回 None，非法值抛出清晰错误。"""
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("invalid ambient_context datetime: " + text) from exc
+
+
 def _table_header(headers: tuple[str, ...]) -> str:
     """渲染 Markdown 表头和分隔行。"""
     head = "| " + " | ".join(headers) + " |"
@@ -508,6 +724,9 @@ def _self_test() -> None:
         result = store.write(record)
         assert result.path.exists()
         assert result.source_index_path.exists()
+        packet = store.build_context_packet(AmbientContextScanQuery(source_type="direct_message"))
+        assert packet.record_ids == ("dm_om_1",)
+        assert packet.to_payload()["records"][0]["detail_file"].endswith("dm_om_1.md")
 
 
 if __name__ == "__main__":

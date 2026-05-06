@@ -9,7 +9,10 @@ __all__ = [
     "CollectorBudget",
     "CollectorBudgetGuard",
     "CollectorBudgetUsage",
+    "AmbientContextPacket",
+    "AmbientContextPacketRecord",
     "AmbientContextRecord",
+    "AmbientContextScanQuery",
     "AmbientContextStore",
     "AmbientContextWriteResult",
     "AmbientDocLink",
@@ -37,7 +40,13 @@ __all__ = [
 ]
 
 _EXPORT_MAP = {
+    "AmbientContextPacket": ("dutyflow.feishu.ambient_context", "AmbientContextPacket"),
+    "AmbientContextPacketRecord": (
+        "dutyflow.feishu.ambient_context",
+        "AmbientContextPacketRecord",
+    ),
     "AmbientContextRecord": ("dutyflow.feishu.ambient_context", "AmbientContextRecord"),
+    "AmbientContextScanQuery": ("dutyflow.feishu.ambient_context", "AmbientContextScanQuery"),
     "AmbientContextStore": ("dutyflow.feishu.ambient_context", "AmbientContextStore"),
     "AmbientContextWriteResult": (
         "dutyflow.feishu.ambient_context",

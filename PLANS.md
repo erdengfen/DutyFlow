@@ -2818,7 +2818,7 @@ FeishuProactiveService
 ### 分步开发进度
 
 - [x] 13.1 设计并实现 `read_context_ref` 只读工具，使 Agent 和后台 subagent 能按 `perception_id`、`ambient record_id`、`evidence_id`、`task_id` 读取已落盘上下文详情。
-- [ ] 13.2 扩展 ambient_context 读取层，支持按 source_type、collector_name、created_at、record_id 扫描新增主动感知记录，并返回稳定 context packet。
+- [x] 13.2 扩展 ambient_context 读取层，支持按 source_type、collector_name、created_at、record_id 扫描新增主动感知记录，并返回稳定 context packet。
 - [ ] 13.3 实现 `AmbientAnalysisIntakeService`，把新 ambient_context 批量封装为正式 runtime 输入，不伪装成用户实时消息。
 - [ ] 13.4 扩展 `RuntimeLoopInput` / `RuntimeAgentLoop`，支持 `trigger_kind=ambient_context_batch`，并把 context packet 注入 tool_content。
 - [ ] 13.5 实现 `FeishuProactiveService`，随 app bootstrap 常驻运行，按预算和间隔执行发现、审批请求、enabled scope 采集和 ambient 分析入队。
@@ -3029,12 +3029,16 @@ FeishuProactiveService
 
 ### 阶段状态
 
-当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力；下一步进入 13.2，扩展 ambient_context 扫描和 context packet。
+当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和按 source_type、collector_name、created_at、record_id 的 bounded scan；下一步进入 13.3，实现 `AmbientAnalysisIntakeService`，把 packet 送入正式 runtime 输入。
 
 ### Step 13 测试记录
 
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_context_ref_tools test.test_runtime_tool_registry test.test_feishu_ambient_context`，15 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，622 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_context_ref_tools`，15 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.ambient_context`，模块自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m py_compile src/dutyflow/feishu/ambient_context.py src/dutyflow/feishu/__init__.py`，编译检查通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，626 tests OK。
 
 ## Step 14: 完整 Demo 链路验收
 
