@@ -11,3 +11,6 @@ __pycache__/
 data/
 docs/learn-claude-code/
 *.egg-info/
+test/
+PLANS.md
+codex_skills/

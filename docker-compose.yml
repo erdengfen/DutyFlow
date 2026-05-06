@@ -5,6 +5,20 @@ services:
     env_file:
       - .env
     volumes:
+      # 本地运行时产物目录挂载，确保重启后数据持久
       - ./data:/app/data
+      # 允许在容器外修改 skills 后立即生效，无需重建镜像
+      - ./skills:/app/skills
+    ports:
+      # OAuth callback server：/oauth 授权流程会在此端口接收飞书回调
+      # redirect_uri 须设置为 http://127.0.0.1:9768/feishu/oauth/callback
+      - "9768:9768"
     stdin_open: true
     tty: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "src/dutyflow/app.py", "--health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
