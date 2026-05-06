@@ -257,7 +257,7 @@ class FeishuProactiveService:
         return sent
 
     def _run_collection(self, user_client: Any) -> tuple[int, str]:
-        """对 enabled scope 运行 DM 和 group message 采集，返回 (写入数, 错误信息)。"""
+        """对 enabled scope 运行私聊、群聊和云盘文档采集，返回 (写入数, 错误信息)。"""
         total = 0
         last_error = ""
         end_time = int(_now_dt().timestamp())
@@ -278,6 +278,14 @@ class FeishuProactiveService:
             total += sum(r.items_written for r in gm_results if r.ok)
         except Exception as exc:  # noqa: BLE001
             last_error = last_error or f"gm_collect_failed: {exc}"
+
+        try:
+            doc_results = UserDocumentCollector(
+                self.project_root, user_client, registry=self._registry
+            ).collect_enabled_scopes(self.config)
+            total += sum(r.items_written for r in doc_results if r.ok)
+        except Exception as exc:  # noqa: BLE001
+            last_error = last_error or f"doc_collect_failed: {exc}"
 
         with self._lock:
             self._state = replace(self._state, last_collect_at=_now(), updated_at=_now())

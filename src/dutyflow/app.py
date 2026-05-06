@@ -48,6 +48,7 @@ from dutyflow.feishu.scope_registry import (
 )
 from dutyflow.feishu.proactive_service import FeishuProactiveService
 from dutyflow.feishu.scope_approval import FeishuScopeApprovalService
+from dutyflow.feishu.summary_task_intake import SummaryTaskIntakeService
 from dutyflow.feishu.user_client import FeishuUserClient
 from dutyflow.feedback.gateway import FeedbackGateway
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
@@ -509,26 +510,21 @@ class DutyFlowApp:
             if any(t.source_id.startswith(p) for p in proactive_prefixes)
         ]
         tasks_sorted = sorted(tasks, key=lambda t: t.created_at, reverse=True)[:20]
+        status_counts = _task_status_counts(tasks)
+        queued_count = status_counts.get("queued", 0)
         return _feishu_debug_payload(
             status="ok",
             action="proactive_tasks",
             event_id="",
             message_id="",
             record_path="",
-            detail=f"{len(tasks)} proactive tasks total",
+            detail=f"{len(tasks)} proactive tasks total, {queued_count} queued will run on worker scan",
             payload={
                 "total": len(tasks),
                 "shown": len(tasks_sorted),
-                "tasks": [
-                    {
-                        "task_id": t.task_id,
-                        "title": t.title,
-                        "status": t.status,
-                        "source_id": t.source_id,
-                        "created_at": t.created_at,
-                    }
-                    for t in tasks_sorted
-                ],
+                "status_counts": status_counts,
+                "queued_will_run_count": queued_count,
+                "tasks": [_proactive_task_payload(t) for t in tasks_sorted],
             },
         )
 
@@ -578,6 +574,24 @@ class DutyFlowApp:
             record_path="",
             detail=state.last_error or "tick completed",
             payload=_proactive_state_payload(state),
+        )
+
+    def run_feishu_proactive_summary_debug(self) -> str:
+        """手动创建一轮系统预制总结任务，供人工测试周期总结链路。"""
+        try:
+            result = SummaryTaskIntakeService(self.project_root).create_due_summary_tasks(
+                cooldown_hours=0
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("proactive_summary_failed", str(exc))
+        return _feishu_debug_payload(
+            status="ok",
+            action="proactive_summary",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=result.detail,
+            payload=_summary_task_result_payload(result),
         )
 
     def disable_feishu_scope_debug(self, identifier: str) -> str:
@@ -1484,6 +1498,55 @@ def _proactive_state_payload(state: object) -> dict[str, Any]:
         "last_summary_tasks_created": int(getattr(state, "last_summary_tasks_created", 0)),
         "last_error": str(getattr(state, "last_error", "")),
         "updated_at": str(getattr(state, "updated_at", "")),
+    }
+
+
+def _summary_task_result_payload(result: object) -> dict[str, Any]:
+    """把系统预制总结任务创建结果转换为 CLI 调试 payload。"""
+    items = []
+    for item in getattr(result, "results", ()):
+        items.append(
+            {
+                "ok": bool(getattr(item, "ok", False)),
+                "summary_type": str(getattr(item, "summary_type", "")),
+                "task_id": str(getattr(item, "task_id", "")),
+                "task_file": str(getattr(item, "task_file", "")),
+                "context_ref_count": int(getattr(item, "context_ref_count", 0)),
+                "skipped_reason": str(getattr(item, "skipped_reason", "")),
+                "detail": str(getattr(item, "detail", "")),
+            }
+        )
+    return {
+        "ok": bool(getattr(result, "ok", False)),
+        "tasks_created": int(getattr(result, "tasks_created", 0)),
+        "results": items,
+        "detail": str(getattr(result, "detail", "")),
+    }
+
+
+def _task_status_counts(tasks: Sequence[object]) -> dict[str, int]:
+    """统计 proactive 任务状态，便于判断哪些旧任务会被 worker 扫描执行。"""
+    counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(getattr(task, "status", "") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _proactive_task_payload(task: object) -> dict[str, Any]:
+    """构造 proactive task 的 CLI 可观察字段。"""
+    status = str(getattr(task, "status", ""))
+    task_id = str(getattr(task, "task_id", ""))
+    return {
+        "task_id": task_id,
+        "title": str(getattr(task, "title", "")),
+        "status": status,
+        "will_run_on_worker_scan": status == "queued",
+        "source_id": str(getattr(task, "source_id", "")),
+        "created_at": str(getattr(task, "created_at", "")),
+        "updated_at": str(getattr(task, "updated_at", "")),
+        "last_result_summary": str(getattr(task, "last_result_summary", "")),
+        "result_file": f"data/tasks/results/result_{task_id}.md" if task_id else "",
     }
 
 

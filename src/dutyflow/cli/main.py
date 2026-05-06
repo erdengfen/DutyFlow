@@ -65,6 +65,9 @@ class HealthCheckProvider(Protocol):
     def run_feishu_proactive_once_debug(self) -> str:
         """手动触发一次主动感知调度 tick。"""
 
+    def run_feishu_proactive_summary_debug(self) -> str:
+        """手动创建一轮系统预制总结任务。"""
+
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态。"""
 
@@ -248,6 +251,8 @@ class CliConsole:
             return self.app.get_feishu_proactive_approvals_debug()
         if normalized == "/feishu proactive once":
             return self.app.run_feishu_proactive_once_debug()
+        if normalized == "/feishu proactive summary":
+            return self.app.run_feishu_proactive_summary_debug()
         if normalized == "/feishu gm" or normalized.startswith("/feishu gm "):
             arg_text = normalized.removeprefix("/feishu gm").strip()
             return self.app.run_feishu_gm_debug(arg_text)
@@ -300,6 +305,7 @@ class CliConsole:
             "/feishu proactive tasks - 查看最近主动感知服务创建的后台任务\n"
             "/feishu proactive approvals - 查看各 scope 的审批请求记录\n"
             "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
+            "/feishu proactive summary - 手动创建一轮系统预制总结任务\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
             "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -353,6 +359,7 @@ def _feishu_help_text() -> str:
         "/feishu proactive tasks - 查看最近主动感知服务创建的后台任务（总结/分析）\n"
         "/feishu proactive approvals - 查看各 scope 的审批请求记录\n"
         "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
+        "/feishu proactive summary - 手动创建一轮系统预制总结任务\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
         "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
@@ -473,6 +480,10 @@ class _SelfTestApp:
         """返回自测主动感知 once 结果。"""
         return '{"action": "proactive_once", "detail": "tick completed"}'
 
+    def run_feishu_proactive_summary_debug(self) -> str:
+        """返回自测主动感知总结任务创建结果。"""
+        return '{"action": "proactive_summary", "detail": "created 4 summary tasks"}'
+
     def get_feishu_status_debug(self) -> str:
         """返回自测飞书状态。"""
         return '{"action": "listener_status", "detail": "running"}'
@@ -517,6 +528,7 @@ def _self_test() -> None:
     assert '"action": "proactive_tasks"' in cli.handle_command("/feishu proactive tasks")
     assert '"action": "proactive_approvals"' in cli.handle_command("/feishu proactive approvals")
     assert '"action": "proactive_once"' in cli.handle_command("/feishu proactive once")
+    assert '"action": "proactive_summary"' in cli.handle_command("/feishu proactive summary")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")
     assert '"action": "no_state"' in cli.handle_command("/context compress")

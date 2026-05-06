@@ -517,11 +517,16 @@ def _build_feedback_text(
 
 
 def _send_feedback(gateway: FeedbackGateway, chat_id: str, text: str) -> FeedbackResult:
-    """按任务来源会话优先回推，缺失时退回 owner 汇报会话。"""
+    """按飞书来源会话优先回推；系统来源或缺失时退回 owner 汇报会话。"""
     clean_chat_id = chat_id.strip()
-    if clean_chat_id:
+    if _looks_like_feishu_chat_id(clean_chat_id):
         return gateway.send_text(clean_chat_id, text)
     return gateway.send_owner_text(text)
+
+
+def _looks_like_feishu_chat_id(value: str) -> bool:
+    """判断任务 source_id 是否像飞书会话 ID，避免把系统来源当 chat_id 发送。"""
+    return value.startswith("oc_")
 
 
 def _safe_send_feedback(gateway: FeedbackGateway, chat_id: str, text: str) -> FeedbackResult:

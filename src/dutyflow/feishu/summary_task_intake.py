@@ -193,6 +193,7 @@ class SummaryTaskIntakeService:
         resume_payload = _build_resume_payload(
             goal=goal,
             success_criteria=success_criteria,
+            source_types=source_types,
             context_refs=context_refs,
         )
         try:
@@ -285,13 +286,28 @@ def _build_resume_payload(
     *,
     goal: str,
     success_criteria: str,
+    source_types: tuple[str, ...],
     context_refs: tuple[str, ...],
 ) -> str:
     """把总结任务参数序列化为单行 resume_payload 字符串。"""
     goal_text = goal.replace("\n", " ").strip()
     success_text = success_criteria.replace("\n", " ").strip()
     refs_text = ",".join(context_refs)
-    return f"goal={goal_text}; success_criteria={success_text}; context_refs={refs_text}"
+    source_text = ",".join(source_types)
+    usage_text = (
+        "context_refs 均为 ambient_context record_id；如非空，必须调用 read_context_ref，"
+        "参数 ref_type=ambient_context、ref_id=对应 record_id。"
+    )
+    empty_text = (
+        "如果 context_ref_count=0，表示最近窗口没有对应来源的已采集记录；"
+        "请按 success_criteria 输出无新增或无重要信息，不要要求用户补充上下文。"
+    )
+    return (
+        f"goal={goal_text}; success_criteria={success_text}; source_types={source_text}; "
+        f"context_ref_type=ambient_context; context_ref_count={len(context_refs)}; "
+        f"context_refs={refs_text}; context_ref_usage={usage_text}; "
+        f"empty_context_behavior={empty_text}"
+    )
 
 
 def _cooldown_expired(last_created_at: str, cooldown_hours: int) -> bool:

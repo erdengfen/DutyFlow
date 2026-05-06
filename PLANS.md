@@ -3029,7 +3029,7 @@ FeishuProactiveService
 
 ### 阶段状态
 
-当前状态：**Step 13 全部完成**。13.1–13.11 均已完成。13.10 新增三条 CLI 可观察命令：`/feishu proactive ambient`（ambient 记录摘要）、`/feishu proactive tasks`（主动感知后台任务）、`/feishu proactive approvals`（审批请求记录）。13.11 新增 `test_feishu_proactive_integration.py`（19 tests），覆盖 ambient 入队、总结任务链路、审批去重、CLI 可观察、context_ref 读取、后台 worker 执行；CI 698 tests OK。
+当前状态：**Step 13 全部完成并已复核补齐**。13.1–13.11 均已完成。13.10 现有 CLI 可观察和测试入口包括：`/feishu proactive ambient`（ambient 记录摘要）、`/feishu proactive tasks`（主动感知后台任务）、`/feishu proactive approvals`（审批请求记录）、`/feishu proactive summary`（手动创建一轮系统预制总结任务）。2026-05-07 复核时补齐 proactive 采集阶段的 `user_document_collector.collect_enabled_scopes()`，确保正式主动 tick 覆盖 direct_message、group_message、user_document 三个已有 collector；同时修正系统预制总结任务回推目标，`summary_task_intake:*` 这类系统 source_id 会退回 owner 汇报会话，不再被误当成飞书 chat_id。随后补强总结任务 prompt 和任务列表可观察性：`context_ref_count=0` 明确表示近期无已采集记录，不再让模型要求用户补充上下文；`/feishu proactive tasks` 输出状态计数和 `will_run_on_worker_scan`，便于判断重启后哪些旧任务会被执行。
 
 ### Step 13 测试记录
 
@@ -3039,6 +3039,14 @@ FeishuProactiveService
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.ambient_context`，模块自测通过。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m py_compile src/dutyflow/feishu/ambient_context.py src/dutyflow/feishu/__init__.py`，编译检查通过。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，626 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_proactive_service test.test_feishu_proactive_integration test.test_cli_chat`，48 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.cli.main`，CLI 自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.proactive_service`，主动感知服务自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，700 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_background_task_worker test.test_feishu_proactive_integration test.test_summary_task_intake`，44 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.agent.background_task_worker`，后台任务 worker 自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_summary_task_intake test.test_feishu_proactive_integration test.test_background_task_worker`，45 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.summary_task_intake`，总结任务 intake 自测通过。
 
 ## Step 14: 完整 Demo 链路验收
 
@@ -3117,4 +3125,4 @@ FeishuProactiveService
 | Step 10 | completed | 2026-05-03 | FeedbackGateway 已实现 send_text / send_status_update / send_approval_card，接入飞书 client 和审批层，测试通过。 |
 | Step 11 | pending |  |  |
 | Step 12 | pending |  |  |
-| Step 13 | pending |  |  |
+| Step 13 | completed | 2026-05-07 | 已完成主动感知与正式 Agent Loop 集成；复核补齐 user_document 主动采集和 `/feishu proactive summary` 手动总结入口。 |

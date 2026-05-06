@@ -29,6 +29,7 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("/feishu gm", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu docs", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu request", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu proactive summary", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_submits_non_blocking_task(self) -> None:
@@ -110,6 +111,12 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"action": "scope_approved"', cli.handle_command("/feishu approve oc_1"))
         self.assertIn('"action": "scope_disabled"', cli.handle_command("/feishu disable oc_1"))
 
+    def test_feishu_proactive_summary_command_calls_app_debug_entry(self) -> None:
+        """CLI 应暴露手动创建系统预制总结任务的测试入口。"""
+        output = CliConsole(_FakeApp()).handle_command("/feishu proactive summary")
+
+        self.assertIn('"action": "proactive_summary"', output)
+
     def test_interactive_feishu_doctor_session_keeps_running(self) -> None:
         """交互式 /feishu doctor 应进入诊断子会话，直到 /back。"""
         cli = CliConsole(_FakeApp())
@@ -185,6 +192,10 @@ class _FakeApp:
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """返回测试 scope 禁用结果。"""
         return f'{{"action": "scope_disabled", "detail": "{identifier}"}}'
+
+    def run_feishu_proactive_summary_debug(self) -> str:
+        """返回测试主动感知总结任务创建结果。"""
+        return '{"action": "proactive_summary", "detail": "created 4 summary tasks"}'
 
     def get_feishu_status_debug(self) -> str:
         """返回测试飞书监听状态。"""

@@ -362,6 +362,18 @@ class TestCliProactiveObservable(unittest.TestCase):
         payload = json.loads(result)
         self.assertEqual(payload["payload"]["total"], 1)
         self.assertIn("dm_summary", payload["payload"]["tasks"][0]["source_id"])
+        self.assertEqual(payload["payload"]["status_counts"]["queued"], 1)
+        self.assertTrue(payload["payload"]["tasks"][0]["will_run_on_worker_scan"])
+
+    def test_proactive_summary_manual_entry_creates_summary_tasks(self) -> None:
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            app = self._make_app(Path(tmp))
+            result = app.run_feishu_proactive_summary_debug()
+        payload = json.loads(result)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "proactive_summary")
+        self.assertEqual(payload["payload"]["tasks_created"], 4)
 
     def test_proactive_approvals_returns_ok_with_no_scopes(self) -> None:
         import json

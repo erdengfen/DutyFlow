@@ -209,7 +209,7 @@ class TestFeishuProactiveService(unittest.TestCase):
             ):
                 state = service.run_once()
 
-        self.assertGreaterEqual(state.last_records_collected, 0)
+        self.assertEqual(state.last_records_collected, 5)
         self.assertNotEqual(state.last_collect_at, "")
 
     def test_approval_requests_sent_for_candidate_scopes(self) -> None:

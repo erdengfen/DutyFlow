@@ -123,6 +123,22 @@ class TestSummaryTaskIntakeService(unittest.TestCase):
 
         self.assertEqual(len(tasks), 1)
         self.assertIn("dm_ref_1", tasks[0].resume_payload)
+        self.assertIn("context_ref_type=ambient_context", tasks[0].resume_payload)
+        self.assertIn("ref_type=ambient_context", tasks[0].resume_payload)
+
+    def test_empty_context_refs_are_not_a_blocking_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task_store = TaskStore(root)
+            service = SummaryTaskIntakeService(root, task_store=task_store)
+            service.create_due_summary_tasks(
+                summary_types=("group_summary",), lookback_hours=1
+            )
+            tasks = task_store.list_tasks()
+
+        self.assertEqual(len(tasks), 1)
+        self.assertIn("context_ref_count=0", tasks[0].resume_payload)
+        self.assertIn("不要要求用户补充上下文", tasks[0].resume_payload)
 
     def test_specific_summary_types_subset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

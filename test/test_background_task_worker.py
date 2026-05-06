@@ -146,6 +146,30 @@ class TestBackgroundTaskWorker(unittest.TestCase):
         assert loaded is not None
         self.assertIn("已通过飞书回推", loaded.next_action)
 
+    def test_system_source_task_feedback_falls_back_to_owner_chat(self) -> None:
+        """系统预制任务的 source_id 不是飞书会话时，应回推到 owner 汇报会话。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = TaskStore(root)
+            store.create_task(
+                title="summary",
+                task_id="task_summary_source",
+                status="queued",
+                source_id="summary_task_intake:dm_summary",
+            )
+            feedback = _FakeFeedbackGateway()
+            worker = BackgroundTaskWorker(
+                store,
+                model_client=_FakeModelClient("这是总结结果。"),
+                feedback_gateway=feedback,
+                queue_poll_seconds=0.01,
+            )
+            worker.start()
+            worker.enqueue_task("task_summary_source", source="test")
+            _wait_for_state(worker, lambda item: item.processed_count == 1)
+            worker.stop()
+        self.assertEqual(feedback.sent_texts, [("owner", "这是总结结果。")])
+
     def test_feedback_failure_keeps_task_completed(self) -> None:
         """结果回推失败时，不应把已完成任务改成执行失败。"""
         with tempfile.TemporaryDirectory() as temp_dir:
