@@ -182,6 +182,111 @@ def _record(
     )
 
 
+class TestDocxReadableTokens(unittest.TestCase):
+    """验证 docx 正文补读策略：readable_doc_tokens 只包含 docx/docs 类型。"""
+
+    def test_packet_record_readable_doc_tokens_docx(self) -> None:
+        """docx 类型 doc_link 的 token 应出现在 readable_doc_tokens 中。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            rec = _record(record_id="ud_docx_tok1", source_type="user_document",
+                          collector_name="user_document_collector")
+            store.write(rec)
+            packet = store.build_context_packet()
+
+        self.assertEqual(len(packet.records), 1)
+        self.assertIn("token_1", packet.records[0].readable_doc_tokens)
+
+    def test_packet_record_readable_doc_tokens_non_docx_excluded(self) -> None:
+        """sheet、wiki、file 类型不应出现在 readable_doc_tokens 中。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            rec = AmbientContextRecord(
+                record_id="ud_sheet_tok2",
+                source_type="user_document",
+                collector_name="user_document_collector",
+                source_id="tok2",
+                sync_scope_id="fld_root",
+                created_at="2026-05-07T09:00:00+08:00",
+                fetched_at="2026-05-07T09:01:00+08:00",
+                doc_links=(
+                    AmbientDocLink("https://example.feishu.cn/sheets/tok2", "sheets", "tok2"),
+                    AmbientDocLink("https://example.feishu.cn/wiki/tok3", "wiki", "tok3"),
+                ),
+            )
+            store.write(rec)
+            packet = store.build_context_packet()
+
+        self.assertEqual(packet.records[0].readable_doc_tokens, ())
+
+    def test_packet_readable_doc_tokens_aggregates_across_records(self) -> None:
+        """packet 级别 readable_doc_tokens 应汇聚所有 record 的 docx token。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            rec1 = _record(record_id="ud_docx_t1", source_type="user_document",
+                           collector_name="user_document_collector")
+            rec2 = AmbientContextRecord(
+                record_id="ud_docx_t2",
+                source_type="user_document",
+                collector_name="user_document_collector",
+                source_id="tok2",
+                sync_scope_id="fld_root",
+                created_at="2026-05-07T10:00:00+08:00",
+                fetched_at="2026-05-07T10:01:00+08:00",
+                doc_links=(AmbientDocLink("https://example.feishu.cn/docx/tok2", "docx", "tok2"),),
+            )
+            store.write(rec1)
+            store.write(rec2)
+            packet = store.build_context_packet(AmbientContextScanQuery(source_type="user_document"))
+
+        self.assertIn("token_1", packet.readable_doc_tokens)
+        self.assertIn("tok2", packet.readable_doc_tokens)
+
+    def test_packet_payload_includes_readable_doc_tokens(self) -> None:
+        """to_payload() 应在包级别输出 readable_doc_tokens 字段。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            store.write(_record(record_id="ud_docx_tok3", source_type="user_document",
+                                collector_name="user_document_collector"))
+            packet = store.build_context_packet()
+
+        payload = packet.to_payload()
+        self.assertIn("readable_doc_tokens", payload)
+        self.assertIn("token_1", payload["readable_doc_tokens"])
+
+    def test_record_payload_includes_readable_doc_tokens(self) -> None:
+        """单条 record 的 to_payload() 应包含 readable_doc_tokens 字段。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            store.write(_record(record_id="ud_docx_tok4", source_type="user_document",
+                                collector_name="user_document_collector"))
+            packet = store.build_context_packet()
+
+        record_payload = packet.records[0].to_payload()
+        self.assertIn("readable_doc_tokens", record_payload)
+        self.assertIn("token_1", record_payload["readable_doc_tokens"])
+
+    def test_packet_readable_doc_tokens_empty_for_dm_source(self) -> None:
+        """direct_message 来源的批次在无 docx 链接时 readable_doc_tokens 应为空。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AmbientContextStore(Path(tmp))
+            rec = AmbientContextRecord(
+                record_id="dm_no_doc",
+                source_type="direct_message",
+                collector_name="direct_message_collector",
+                source_id="msg_1",
+                sync_scope_id="oc_1",
+                created_at="2026-05-07T09:00:00+08:00",
+                fetched_at="2026-05-07T09:01:00+08:00",
+                text="普通消息，无文档链接",
+            )
+            store.write(rec)
+            packet = store.build_context_packet(AmbientContextScanQuery(source_type="direct_message"))
+
+        self.assertEqual(packet.readable_doc_tokens, ())
+        self.assertEqual(packet.to_payload()["readable_doc_tokens"], [])
+
+
 def _self_test() -> None:
     """运行本文件所有单元测试。"""
     unittest.main(verbosity=2)

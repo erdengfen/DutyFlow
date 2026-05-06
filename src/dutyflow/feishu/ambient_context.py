@@ -19,6 +19,8 @@ MAX_SAFE_FILE_PART_CHARS = 120
 MAX_INDEX_PREVIEW_CHARS = 120
 # 关键开关：单个 ambient context packet 第一版最多包含 50 条记录，避免主动分析输入过大。
 MAX_CONTEXT_PACKET_RECORDS = 50
+# 关键开关：只有这些 resource_type 的文档链接才支持通过 feishu_read_doc 补读正文；sheet、wiki、file 不在此列。
+_DOCX_READABLE_RESOURCE_TYPES = frozenset({"docx", "docs"})
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,15 @@ class AmbientContextPacketRecord:
     doc_links: tuple[AmbientDocLink, ...] = ()
     file_clues: tuple[AmbientFileClue, ...] = ()
 
+    @property
+    def readable_doc_tokens(self) -> tuple[str, ...]:
+        """返回可通过 feishu_read_doc 读取正文的 docx token 列表。"""
+        return tuple(
+            link.token
+            for link in self.doc_links
+            if link.token and link.resource_type in _DOCX_READABLE_RESOURCE_TYPES
+        )
+
     def to_payload(self) -> dict[str, object]:
         """转换为稳定 JSON 结构。"""
         return {
@@ -124,6 +135,7 @@ class AmbientContextPacketRecord:
             "summary": self.summary,
             "doc_links": [dict(link.__dict__) for link in self.doc_links],
             "file_clues": [dict(clue.__dict__) for clue in self.file_clues],
+            "readable_doc_tokens": list(self.readable_doc_tokens),
         }
 
 
@@ -141,6 +153,18 @@ class AmbientContextPacket:
     record_count: int
     records: tuple[AmbientContextPacketRecord, ...]
 
+    @property
+    def readable_doc_tokens(self) -> tuple[str, ...]:
+        """返回整批次中可通过 feishu_read_doc 补读正文的 docx token 列表。"""
+        seen: set[str] = set()
+        result: list[str] = []
+        for record in self.records:
+            for token in record.readable_doc_tokens:
+                if token not in seen:
+                    seen.add(token)
+                    result.append(token)
+        return tuple(result)
+
     def to_payload(self) -> dict[str, object]:
         """转换为 runtime 可消费的稳定 JSON 结构。"""
         return {
@@ -155,6 +179,7 @@ class AmbientContextPacket:
             },
             "record_count": self.record_count,
             "records": [record.to_payload() for record in self.records],
+            "readable_doc_tokens": list(self.readable_doc_tokens),
         }
 
 

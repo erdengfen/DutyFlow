@@ -256,12 +256,20 @@ def _build_ambient_batch_user_text(loop_input: Mapping[str, Any]) -> str:
     time_window = packet.get("time_window") or {}
     start = str(time_window.get("start") or "")
     end = str(time_window.get("end") or "")
+    readable_doc_tokens = list(packet.get("readable_doc_tokens") or [])
+    docx_hint = ""
+    if readable_doc_tokens:
+        docx_hint = (
+            f"本批次包含 {len(readable_doc_tokens)} 个可补读正文的 docx 文档（token 见 readable_doc_tokens），"
+            "如需分析正文内容，可调用 feishu_read_doc 按 token 读取并写入 Evidence Store。"
+        )
     return (
         "你正在执行主动感知批次分析任务，这不是用户实时发送的消息。\n"
         f"本批次包含 {record_count} 条来源为 {source_type} 的新增感知记录，"
         f"时间窗口：{start} 至 {end}。\n"
         f"{_build_time_context(loop_input)}\n"
-        "请阅读 tool_content 中的 ambient_context_batch，判断是否有需要提醒用户、"
+        + (docx_hint + "\n" if docx_hint else "")
+        + "请阅读 tool_content 中的 ambient_context_batch，判断是否有需要提醒用户、"
         "创建后台任务、安排定时总结或发起审批的事项。"
         "可以使用 read_context_ref 补充记录详情；"
         "只在有明确判断结果时才输出回复或创建任务。"
