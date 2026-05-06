@@ -2791,7 +2791,247 @@ data/feishu/
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_group_candidate_discovery test.test_feishu_group_message_collector test.test_cli_chat test.test_app_entry`，50 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，597 tests OK。
 
-## Step 13: 完整 Demo 链路验收
+## Step 13: 主动感知与正式 Agent Loop 集成
+
+### 最终效果
+
+系统具备从飞书用户面主动发现、审批、采集、分析到任务派发的正式业务闭环，而不是只依赖 CLI 手动触发 collector。
+
+最终应达到：
+
+```text
+FeishuProactiveService
+  -> 定期发现用户面 scope candidate
+  -> 对需要读取的 candidate 发起飞书审批卡片
+  -> 用户批准后启用 enabled scope
+  -> 定期采集 enabled scope
+  -> ambient_context / evidence / context_ref 全量落盘
+  -> AmbientAnalysisIntakeService 推送正式 RuntimeAgentLoop
+  -> Agent 主动补读正文、补身份、判断权重
+  -> 发送提醒、创建后台任务、创建定时总结任务或发起进一步审批
+  -> BackgroundTaskWorker 执行系统预制总结/事项派发任务
+  -> 飞书回馈和 Markdown 留痕
+```
+
+这一步的核心目标是让当前已分散完成的 `scope discovery`、`scope approval`、`collector`、`ambient_context`、`feishu_read_doc`、`create_background_task`、`schedule_background_task` 和后台 worker 真正进入正式 loop。
+
+### 分步开发进度
+
+- [ ] 13.1 设计并实现 `read_context_ref` 只读工具，使 Agent 和后台 subagent 能按 `perception_id`、`ambient record_id`、`evidence_id`、`task_id` 读取已落盘上下文详情。
+- [ ] 13.2 扩展 ambient_context 读取层，支持按 source_type、collector_name、created_at、record_id 扫描新增主动感知记录，并返回稳定 context packet。
+- [ ] 13.3 实现 `AmbientAnalysisIntakeService`，把新 ambient_context 批量封装为正式 runtime 输入，不伪装成用户实时消息。
+- [ ] 13.4 扩展 `RuntimeLoopInput` / `RuntimeAgentLoop`，支持 `trigger_kind=ambient_context_batch`，并把 context packet 注入 tool_content。
+- [ ] 13.5 实现 `FeishuProactiveService`，随 app bootstrap 常驻运行，按预算和间隔执行发现、审批请求、enabled scope 采集和 ambient 分析入队。
+- [ ] 13.6 为 scope 审批补去重状态，避免同一个 candidate 反复发送审批卡片；状态必须可人工查看。
+- [ ] 13.7 将 `group_candidate_discovery`、`user_document_collector.discover_root()`、`collect_enabled_scopes()` 接入主动感知调度层。
+- [ ] 13.8 对 `docx` 类型文档线索建立正文补读策略：默认只保存 token 和元数据，Agent 需要正文时通过 `feishu_read_doc` 按 token 读取并写入 Evidence Store。
+- [ ] 13.9 创建系统预制的定时总结任务：按日或按固定间隔汇总私聊、群聊、云盘文档线索，输出提醒、摘要、待办和风险。
+- [ ] 13.10 补 CLI 可观察入口，查看 proactive service 状态、最近采集批次、最近 ambient 分析任务、最近审批请求和最近总结任务。
+- [ ] 13.11 补完整测试，覆盖发现、审批去重、enabled 采集、ambient 入队、context_ref 读取、定时总结任务创建和后台 worker 执行链路。
+
+### 业务规则
+
+- 主动发现只能写 `candidate`，不得直接同步正文或消息内容。
+- `candidate -> enabled` 必须经过用户审批；Agent 可以请求权限，但不能绕过审批改 scope 状态。
+- `enabled` 才能被 collector 消费；collector 只负责采集和落盘，不负责事项判断。
+- Agent 只分析已落盘且可追溯的 context packet；必要时通过工具补读文档正文或详情。
+- 文档正文读取遵循“先 token/元数据，后按需正文”的原则；普通云盘 file、sheet、bitable、wiki 不得假装已有正文能力。
+- 系统预制总结任务由后台 worker 执行，结果必须回写 task/result Markdown，并通过飞书回推 owner。
+- 所有自动周期任务必须有预算、间隔、最大页数、最大 items 和超时说明，避免主动感知层无限扫盘或频繁请求飞书 API。
+- 重要提醒、事项派发、审批请求和定时总结必须保留 `perception_id`、`ambient record_id`、`evidence_id`、`task_id`、`approval_id` 等锚点。
+
+### 主要模块设计
+
+#### `read_context_ref` 工具
+
+定位：让 Agent 和后台 subagent 可按引用读取本地已落盘上下文。
+
+建议支持：
+
+- `ref_type=perception`
+- `ref_type=ambient_context`
+- `ref_type=evidence`
+- `ref_type=task`
+- `ref_type=approval`
+
+输出应包含：
+
+- `ref_id`
+- `ref_type`
+- `detail_file`
+- `summary`
+- `text_preview`
+- `anchors`
+
+约束：
+
+- 只读工具，不改变外部状态。
+- 不返回超长正文；长正文继续通过 Evidence Store 或文件引用承载。
+- 不读取项目外文件。
+
+#### `AmbientAnalysisIntakeService`
+
+定位：把 collector 新增的 ambient_context 变成正式 runtime 可消费的分析输入。
+
+职责：
+
+- 扫描新增 ambient_context 记录。
+- 按 source_type、scope、时间窗口合并成 context packet。
+- 为每个 packet 生成稳定 `analysis_id`。
+- 去重已分析记录，避免重复派发任务。
+- 调用 `RuntimeService.enqueue_perception()` 或新增等价入口，把 `ambient_context_batch` 送入正式 loop。
+
+输入示意：
+
+```json
+{
+  "trigger_kind": "ambient_context_batch",
+  "source_type": "group_message",
+  "record_ids": ["gm_om_xxx"],
+  "scope_ids": ["oc_xxx"],
+  "time_window": {
+    "start": "2026-05-07T09:00:00+08:00",
+    "end": "2026-05-07T10:00:00+08:00"
+  }
+}
+```
+
+#### `FeishuProactiveService`
+
+定位：正式主动感知调度层，和 runtime service、background worker、task scheduler 同级启动。
+
+职责：
+
+- 周期运行 group discovery 和 docs root discovery。
+- 扫描 candidate scope，并在符合策略时调用 scope approval 发送飞书审批卡片。
+- 周期运行 enabled scope collector，包括 direct message、group message 和 user document。
+- 将新增 ambient_context 交给 `AmbientAnalysisIntakeService`。
+- 定期创建系统预制总结任务。
+- 写入服务状态 Markdown 或调试 payload，便于 CLI 查看。
+
+建议第一版关键开关：
+
+- `DISCOVERY_INTERVAL_SECONDS`
+- `COLLECT_INTERVAL_SECONDS`
+- `SUMMARY_TASK_INTERVAL_SECONDS`
+- `MAX_SCOPES_PER_TICK`
+- `MAX_APPROVAL_REQUESTS_PER_TICK`
+- `MAX_AMBIENT_RECORDS_PER_ANALYSIS`
+- `MAX_ANALYSIS_JOBS_PER_TICK`
+
+所有常量必须在代码旁用中文注释说明用途。
+
+#### 系统预制总结任务
+
+定位：不等用户显式提问，系统按固定节奏总结主动采集的信息。
+
+第一版任务类型：
+
+- 私聊摘要：总结 owner 私聊近段时间的重要事项、待回复消息和时间承诺。
+- 群聊摘要：总结 enabled 群聊中与 owner 相关的 @、任务、风险和决策。
+- 文档线索摘要：总结云盘 root/folder 中新增或修改的文档、可疑待办和需要正文补读的候选。
+- 每日综合摘要：合并私聊、群聊、文档线索，形成当日事项清单。
+
+任务创建方式：
+
+- 由 proactive service 直接创建预制 `schedule_background_task` 等价任务，或调用内部 task intake service。
+- `context_refs` 必须引用 ambient record ids 和 evidence ids。
+- `preferred_tools` 第一版至少包含 `read_context_ref`，必要时包含 `feishu_read_doc`。
+
+### 与现有模块关系
+
+- `FeishuScopeRegistry`：继续作为权限边界控制面。
+- `FeishuScopeApprovalService`：继续负责 candidate scope 的用户审批确认。
+- `DirectMessageCollector` / `GroupMessageCollector` / `UserDocumentCollector`：继续只消费 enabled scope 并落盘 ambient_context。
+- `RuntimeService`：继续作为正式 agent 分析队列，但需要支持 ambient context 输入。
+- `RuntimeAgentLoop`：继续负责模型分析、工具调用和飞书回馈。
+- `BackgroundTaskWorker`：继续负责执行已创建的后台任务和系统预制总结任务。
+- `EvidenceStore`：继续保存长文档正文和工具结果全文。
+
+### 验收标准
+
+- [ ] 系统启动后可定期发现飞书用户面 scope candidate。
+- [ ] Agent 或 proactive service 发现需要读取 candidate 时，能主动发送飞书权限审批卡片。
+- [ ] 用户批准后，scope 自动变为 enabled；用户拒绝后，scope 保持 candidate 或进入可解释的未授权状态。
+- [ ] enabled 私聊、群聊和云盘文件夹能定期采集并落盘到 ambient_context。
+- [ ] ambient_context 能被正式 RuntimeAgentLoop 看见、引用和分析。
+- [ ] Agent 能通过 `read_context_ref` 获取本地已落盘上下文。
+- [ ] Agent 能在已有 token 情况下通过 `feishu_read_doc` 获取 docx 正文，并把正文写入 Evidence Store。
+- [ ] Agent 能基于主动采集信息创建后台 task、定时 task、审批请求或飞书提醒。
+- [ ] 系统能创建并执行预制的定时总结任务。
+- [ ] 总结任务结果能写入 task result Markdown，并通过飞书回推 owner。
+- [ ] CLI 能查看 proactive service 状态、最近审批、最近采集、最近分析和最近总结任务。
+- [ ] 全链路关键产物均可追溯到 scope、ambient record、evidence、task 和 approval。
+
+### 涉及文件、类、方法、模块
+
+计划新增或修改：
+
+- `src/dutyflow/feishu/proactive_service.py`
+  - `FeishuProactiveService`
+  - `FeishuProactiveState`
+  - `run_once`
+  - `start`
+  - `stop`
+- `src/dutyflow/feishu/ambient_analysis_intake.py`
+  - `AmbientAnalysisIntakeService`
+  - `AmbientAnalysisPacket`
+  - `enqueue_new_records`
+- `src/dutyflow/agent/tools/contracts/context_tools/read_context_ref_contract.py`
+- `src/dutyflow/agent/tools/logic/context_tools/read_context_ref.py`
+- `src/dutyflow/feishu/scope_registry.py`
+  - 补 scope 审批请求去重字段或配套索引。
+- `src/dutyflow/app.py`
+  - bootstrap proactive service。
+  - CLI debug payload。
+- `src/dutyflow/cli/main.py`
+  - `/feishu proactive status`
+  - `/feishu proactive once`
+  - `/feishu proactive latest`
+- `src/dutyflow/agent/runtime_service.py`
+  - 支持 ambient context work item 或新增同级 enqueue 入口。
+- `src/dutyflow/agent/runtime_loop.py`
+  - 支持 `ambient_context_batch` prompt 和 tool_content。
+- `src/dutyflow/tasks/background_task_intake.py`
+  - 支持系统预制任务来源和 context_refs。
+- `src/dutyflow/agent/background_subagent_executor.py`
+  - 确认后台任务可使用 `read_context_ref`。
+- `docs/DATA_MODEL.md`
+  - 补 proactive state、ambient analysis packet、context ref 工具输出和 scope approval 去重字段。
+- `docs/TESTING.md`
+  - 补主动感知人工测试流程。
+
+### 测试计划
+
+- [ ] `test/test_context_ref_tools.py`：覆盖 perception、ambient_context、evidence、task、approval 读取。
+- [ ] `test/test_feishu_ambient_analysis_intake.py`：覆盖新增 ambient 扫描、批量 packet、去重和 runtime 入队。
+- [ ] `test/test_feishu_proactive_service.py`：覆盖 discovery、approval request 去重、enabled collector 调度和状态输出。
+- [ ] `test/test_runtime_loop_ambient_context.py`：覆盖 `ambient_context_batch` 进入正式 agent loop。
+- [ ] `test/test_scheduled_summary_task.py`：覆盖系统预制总结任务创建、执行和结果回推。
+- [ ] 更新 `test/test_app_entry.py` 和 `test/test_cli_chat.py`，覆盖 bootstrap 和 CLI 可观察入口。
+- [ ] 完整回归：`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`。
+
+### 人工确认
+
+- [ ] 开发者确认主动发现和采集的默认间隔，第一版建议偏保守，避免飞书 API 调用过频。
+- [ ] 开发者确认 owner 飞书会话可接收 scope 审批卡片和总结任务回推。
+- [ ] 开发者确认是否允许启动后自动发送 candidate scope 审批，或先只在 Agent 判断“需要相关信息”时发送。
+- [ ] 开发者确认系统预制总结任务的默认时间，例如每日固定时间或每 N 小时。
+- [ ] 开发者确认 docx 正文读取的默认预算和是否允许在总结任务中自动触发。
+
+### 当前风险
+
+- [ ] OAuth token 刷新仍在热路径中，主动感知服务启动前应先修复或降低调用频率。
+- [ ] ambient_context 量增长后会影响模型输入，需要严格 packet 上限和 `read_context_ref` 按需读取。
+- [ ] 后台 subagent 当前只按 task resolved_tools 构造工具面，预制总结任务必须显式带上允许工具。
+- [ ] 自动审批请求若缺少去重，会导致飞书端卡片噪音。
+- [ ] `feishu_read_doc` 当前主要支持 docx raw_content，不应把 wiki、sheet、bitable 或普通 file 误认为正文可读。
+
+### 阶段状态
+
+当前状态：未开始。前置能力已具备：Step 12A/12B/12C 已完成用户 OAuth、collector、scope registry、scope 审批、docx token 读正文工具和后台 task 基础链路。本阶段开始后以 13.1 `read_context_ref` 为第一实现切入点。
+
+## Step 14: 完整 Demo 链路验收
 
 ### 最终效果
 
