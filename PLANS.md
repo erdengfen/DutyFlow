@@ -2826,8 +2826,8 @@ FeishuProactiveService
 - [x] 13.7 将 `group_candidate_discovery`、`user_document_collector.discover_root()`、`collect_enabled_scopes()` 接入主动感知调度层。
 - [x] 13.8 对 `docx` 类型文档线索建立正文补读策略：默认只保存 token 和元数据，Agent 需要正文时通过 `feishu_read_doc` 按 token 读取并写入 Evidence Store。
 - [x] 13.9 创建系统预制的定时总结任务：按日或按固定间隔汇总私聊、群聊、云盘文档线索，输出提醒、摘要、待办和风险。
-- [ ] 13.10 补 CLI 可观察入口，查看 proactive service 状态、最近采集批次、最近 ambient 分析任务、最近审批请求和最近总结任务。
-- [ ] 13.11 补完整测试，覆盖发现、审批去重、enabled 采集、ambient 入队、context_ref 读取、定时总结任务创建和后台 worker 执行链路。
+- [x] 13.10 补 CLI 可观察入口，查看 proactive service 状态、最近采集批次、最近 ambient 分析任务、最近审批请求和最近总结任务。
+- [x] 13.11 补完整测试，覆盖发现、审批去重、enabled 采集、ambient 入队、context_ref 读取、定时总结任务创建和后台 worker 执行链路。
 
 ### 业务规则
 
@@ -3029,7 +3029,7 @@ FeishuProactiveService
 
 ### 阶段状态
 
-当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和 bounded scan。13.3 已完成 `AmbientAnalysisIntakeService`。13.4 已完成 `RuntimeAgentLoop` ambient_context_batch 支持。13.5 已完成 `FeishuProactiveService`。13.6 已完成 scope 审批去重。13.7 已完成全部 collector 接入主动感知调度层。13.8 已完成 docx 正文补读策略。13.9 已完成系统预制定时总结任务：`SummaryTaskIntakeService`（dm/group/doc/daily 四类，20h 冷却，水位线持久化）、`FeishuProactiveService._run_summary_tasks()` 每小时检查一次，`_build_resume_payload` 单行格式；CI 679 tests OK；下一步进入 13.10。
+当前状态：**Step 13 全部完成**。13.1–13.11 均已完成。13.10 新增三条 CLI 可观察命令：`/feishu proactive ambient`（ambient 记录摘要）、`/feishu proactive tasks`（主动感知后台任务）、`/feishu proactive approvals`（审批请求记录）。13.11 新增 `test_feishu_proactive_integration.py`（19 tests），覆盖 ambient 入队、总结任务链路、审批去重、CLI 可观察、context_ref 读取、后台 worker 执行；CI 698 tests OK。
 
 ### Step 13 测试记录
 

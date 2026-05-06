@@ -463,6 +463,106 @@ class DutyFlowApp:
             payload=_proactive_state_payload(state),
         )
 
+    def get_feishu_proactive_ambient_debug(self) -> str:
+        """返回最近 24 小时内各 source_type 的 ambient_context 记录摘要。"""
+        from dutyflow.feishu.ambient_context import AmbientContextScanQuery, AmbientContextStore
+        from datetime import timedelta
+        store = AmbientContextStore(self.project_root)
+        lookback_hours = 24
+        created_after = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat(timespec="seconds")
+        source_types = ("direct_message", "group_message", "user_document")
+        summary: dict[str, Any] = {}
+        total = 0
+        for source_type in source_types:
+            query = AmbientContextScanQuery(
+                source_type=source_type,
+                created_after=created_after,
+                limit=50,
+            )
+            try:
+                records = store.scan_records(query)
+            except Exception:
+                records = ()
+            ids = [r.record_id for r in records]
+            summary[source_type] = {"count": len(ids), "record_ids": ids[:5]}
+            total += len(ids)
+        return _feishu_debug_payload(
+            status="ok",
+            action="proactive_ambient",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=f"{total} ambient records in last {lookback_hours}h",
+            payload={"lookback_hours": lookback_hours, "by_source_type": summary},
+        )
+
+    def get_feishu_proactive_tasks_debug(self) -> str:
+        """返回最近由主动感知服务创建的后台任务（ambient 分析和总结任务）。"""
+        task_store = TaskStore(self.project_root)
+        try:
+            all_tasks = task_store.list_tasks()
+        except Exception:
+            all_tasks = ()
+        proactive_prefixes = ("ambient_analysis_intake:", "summary_task_intake:")
+        tasks = [
+            t for t in all_tasks
+            if any(t.source_id.startswith(p) for p in proactive_prefixes)
+        ]
+        tasks_sorted = sorted(tasks, key=lambda t: t.created_at, reverse=True)[:20]
+        return _feishu_debug_payload(
+            status="ok",
+            action="proactive_tasks",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=f"{len(tasks)} proactive tasks total",
+            payload={
+                "total": len(tasks),
+                "shown": len(tasks_sorted),
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "title": t.title,
+                        "status": t.status,
+                        "source_id": t.source_id,
+                        "created_at": t.created_at,
+                    }
+                    for t in tasks_sorted
+                ],
+            },
+        )
+
+    def get_feishu_proactive_approvals_debug(self) -> str:
+        """返回当前各 scope 的审批请求记录（包含 candidate 和 last_approval_requested_at）。"""
+        from dutyflow.feishu.scope_registry import FeishuScopeRegistry, scope_account_id_from_config
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+        account_id = scope_account_id_from_config(config)
+        candidates = registry.list_records(account_id=account_id, status="candidate")
+        enabled = registry.list_records(account_id=account_id, status="enabled")
+        approval_records = [
+            {
+                "scope_id": r.scope_id,
+                "scope_type": r.scope_type,
+                "status": r.status,
+                "last_approval_requested_at": r.last_approval_requested_at,
+            }
+            for r in list(candidates) + list(enabled)
+            if r.last_approval_requested_at
+        ]
+        return _feishu_debug_payload(
+            status="ok",
+            action="proactive_approvals",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=f"{len(candidates)} candidates, {len(approval_records)} with approval requests",
+            payload={
+                "candidate_count": len(candidates),
+                "approval_requests": approval_records,
+            },
+        )
+
     def run_feishu_proactive_once_debug(self) -> str:
         """手动触发一次主动感知调度 tick。"""
         service = self._get_or_create_feishu_proactive_service()

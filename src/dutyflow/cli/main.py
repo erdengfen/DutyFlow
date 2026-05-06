@@ -53,6 +53,15 @@ class HealthCheckProvider(Protocol):
     def get_feishu_proactive_status_debug(self) -> str:
         """返回主动感知服务当前状态。"""
 
+    def get_feishu_proactive_ambient_debug(self) -> str:
+        """返回最近 24 小时 ambient_context 记录摘要。"""
+
+    def get_feishu_proactive_tasks_debug(self) -> str:
+        """返回最近由主动感知服务创建的后台任务。"""
+
+    def get_feishu_proactive_approvals_debug(self) -> str:
+        """返回当前各 scope 的审批请求记录。"""
+
     def run_feishu_proactive_once_debug(self) -> str:
         """手动触发一次主动感知调度 tick。"""
 
@@ -231,6 +240,12 @@ class CliConsole:
             return self.app.run_feishu_discover_groups_debug()
         if normalized == "/feishu proactive status":
             return self.app.get_feishu_proactive_status_debug()
+        if normalized == "/feishu proactive ambient":
+            return self.app.get_feishu_proactive_ambient_debug()
+        if normalized == "/feishu proactive tasks":
+            return self.app.get_feishu_proactive_tasks_debug()
+        if normalized == "/feishu proactive approvals":
+            return self.app.get_feishu_proactive_approvals_debug()
         if normalized == "/feishu proactive once":
             return self.app.run_feishu_proactive_once_debug()
         if normalized == "/feishu gm" or normalized.startswith("/feishu gm "):
@@ -281,6 +296,9 @@ class CliConsole:
             "/feishu docs - 拉取 enabled 云盘文件夹清单用于 collector 调试\n"
             "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
             "/feishu proactive status - 查看主动感知服务状态\n"
+            "/feishu proactive ambient - 查看最近 24h ambient_context 记录摘要\n"
+            "/feishu proactive tasks - 查看最近主动感知服务创建的后台任务\n"
+            "/feishu proactive approvals - 查看各 scope 的审批请求记录\n"
             "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
             "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
@@ -331,6 +349,9 @@ def _feishu_help_text() -> str:
         "/feishu docs - 拉取所有 enabled drive_folder 的当前层级清单\n"
         "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
         "/feishu proactive status - 查看主动感知服务状态\n"
+        "/feishu proactive ambient - 查看最近 24h ambient_context 记录摘要（按 source_type 分组）\n"
+        "/feishu proactive tasks - 查看最近主动感知服务创建的后台任务（总结/分析）\n"
+        "/feishu proactive approvals - 查看各 scope 的审批请求记录\n"
         "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
@@ -436,6 +457,18 @@ class _SelfTestApp:
         """返回自测主动感知服务状态。"""
         return '{"action": "proactive_status", "detail": "initialized"}'
 
+    def get_feishu_proactive_ambient_debug(self) -> str:
+        """返回自测 ambient 记录摘要。"""
+        return '{"action": "proactive_ambient", "detail": "0 ambient records in last 24h"}'
+
+    def get_feishu_proactive_tasks_debug(self) -> str:
+        """返回自测主动感知后台任务列表。"""
+        return '{"action": "proactive_tasks", "detail": "0 proactive tasks total"}'
+
+    def get_feishu_proactive_approvals_debug(self) -> str:
+        """返回自测审批请求记录。"""
+        return '{"action": "proactive_approvals", "detail": "0 candidates"}'
+
     def run_feishu_proactive_once_debug(self) -> str:
         """返回自测主动感知 once 结果。"""
         return '{"action": "proactive_once", "detail": "tick completed"}'
@@ -480,6 +513,9 @@ def _self_test() -> None:
     assert '"action": "approval_requested"' in cli.handle_command("/feishu request oc_1")
     assert '"action": "discover_groups"' in cli.handle_command("/feishu discover groups")
     assert '"action": "proactive_status"' in cli.handle_command("/feishu proactive status")
+    assert '"action": "proactive_ambient"' in cli.handle_command("/feishu proactive ambient")
+    assert '"action": "proactive_tasks"' in cli.handle_command("/feishu proactive tasks")
+    assert '"action": "proactive_approvals"' in cli.handle_command("/feishu proactive approvals")
     assert '"action": "proactive_once"' in cli.handle_command("/feishu proactive once")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")
