@@ -2209,7 +2209,9 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 当前决策
 
-状态：待实现。先补用户面主动感知的共享底层，不先展开完整平台化调度，也不先实现 6 个 collector 的具体字段、落盘详情和业务判断。
+状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步和对应测试。继续补用户面请求封装、预算控制、sync_state 和现有用户资源客户端迁移。
+
+验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，518 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
 
 主动感知后续会拆成 6 个 collector：
 
@@ -2452,17 +2454,17 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
    - 明确可复用 `oauth.py`、`env.py`、`user_resource.py`、`client.py`、Markdown storage、audit log、runtime worker 模式和 evidence store。
    - 明确现有能力不能直接承载 6 个用户面 collector，需要先补公共底层。
 
-2. 【未完成】新增 `src/dutyflow/feishu/user_token_provider.py`。
+2. 【已完成】新增 `src/dutyflow/feishu/user_token_provider.py`。
    - 实现 `FeishuUserTokenProvider`。
    - 收束 user token 获取、过期前刷新、强制刷新、刷新失败状态和 account scope。
    - 使用进程内锁避免多个 collector 并发重复刷新。
    - 刷新成功后同时更新 `.env` 和当前进程内 `EnvConfig`。
 
-3. 【未完成】修复 `/oauth` 首次授权后的进程内 token 过期时间同步。
+3. 【已完成】修复 `/oauth` 首次授权后的进程内 token 过期时间同步。
    - 当前 OAuth completion 需要同步 `feishu_owner_user_token_expires_at`。
    - 避免首次授权后当前进程仍误判 token 状态。
 
-4. 【未完成】补充 `FeishuUserTokenProvider` 测试。
+4. 【已完成】补充 `FeishuUserTokenProvider` 测试。
    - 覆盖 token 未过期直接返回。
    - 覆盖临近过期刷新。
    - 覆盖并发刷新只实际刷新一次。

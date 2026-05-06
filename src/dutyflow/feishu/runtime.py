@@ -23,7 +23,7 @@ from dutyflow.config.env import EnvConfig, save_env_values, validate_feishu_ingr
 from dutyflow.feedback.gateway import FeedbackGateway, FeedbackResult
 from dutyflow.feishu.client import FeishuClient, FeishuClientResult
 from dutyflow.feishu.events import FeishuEventAdapter, FeishuEventEnvelope
-from dutyflow.feishu.oauth import FeishuOAuthManager
+from dutyflow.feishu.oauth import FeishuOAuthManager, _compute_expires_at
 from dutyflow.perception.store import PerceptionRecordService
 from dutyflow.storage.file_store import FileStore
 from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore
@@ -464,6 +464,8 @@ class FeishuIngressService:
         )
         self.config.feishu_owner_user_access_token = access_token
         self.config.feishu_owner_user_refresh_token = token_data.get("refresh_token", "")
+        expires_in = int(token_data.get("expires_in", 0))
+        self.config.feishu_owner_user_token_expires_at = _compute_expires_at(expires_in)
         self.config.feishu_owner_user_id = user_info.get("user_id", "")
         self.config.feishu_owner_union_id = user_info.get("union_id", "")
 

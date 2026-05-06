@@ -12,6 +12,8 @@ __all__ = [
     "FeishuEventEnvelope",
     "FeishuIngressResult",
     "FeishuIngressService",
+    "FeishuUserTokenHealth",
+    "FeishuUserTokenProvider",
 ]
 
 _EXPORT_MAP = {
@@ -21,6 +23,14 @@ _EXPORT_MAP = {
     "FeishuEventEnvelope": ("dutyflow.feishu.events", "FeishuEventEnvelope"),
     "FeishuIngressResult": ("dutyflow.feishu.runtime", "FeishuIngressResult"),
     "FeishuIngressService": ("dutyflow.feishu.runtime", "FeishuIngressService"),
+    "FeishuUserTokenHealth": (
+        "dutyflow.feishu.user_token_provider",
+        "FeishuUserTokenHealth",
+    ),
+    "FeishuUserTokenProvider": (
+        "dutyflow.feishu.user_token_provider",
+        "FeishuUserTokenProvider",
+    ),
 }
 
 
@@ -40,9 +50,11 @@ def _self_test() -> None:
     """验证飞书接入层包导出的核心类型可被正常导入。"""
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
+    from dutyflow.feishu.user_token_provider import FeishuUserTokenProvider
 
     assert FeishuClient is not None
     assert FeishuIngressService is not None
+    assert FeishuUserTokenProvider is not None
 
 
 if __name__ == "__main__":

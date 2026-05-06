@@ -96,19 +96,27 @@ class FeishuOAuthManager:
         token_data: dict[str, Any],
         user_info: dict[str, Any],
     ) -> list[str]:
-        """把 token 和用户身份字段写入 .env，返回实际写入的字段名列表。"""
+        """把 token 和用户身份字段写入 .env，并同步当前进程内配置。"""
         access_token = token_data.get("access_token") or token_data.get(
             "user_access_token", ""
         )
         expires_in = int(token_data.get("expires_in", 0))
+        refresh_token = token_data.get("refresh_token", "")
+        expires_at = _compute_expires_at(expires_in)
         env_values = {
             "DUTYFLOW_FEISHU_OWNER_USER_ACCESS_TOKEN": access_token,
-            "DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN": token_data.get("refresh_token", ""),
-            "DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT": _compute_expires_at(expires_in),
+            "DUTYFLOW_FEISHU_OWNER_USER_REFRESH_TOKEN": refresh_token,
+            "DUTYFLOW_FEISHU_OWNER_USER_TOKEN_EXPIRES_AT": expires_at,
             "DUTYFLOW_FEISHU_OWNER_USER_ID": user_info.get("user_id", ""),
             "DUTYFLOW_FEISHU_OWNER_UNION_ID": user_info.get("union_id", ""),
         }
-        return save_env_values(self.project_root, env_values)
+        saved_keys = save_env_values(self.project_root, env_values)
+        self.config.feishu_owner_user_access_token = access_token
+        self.config.feishu_owner_user_refresh_token = refresh_token
+        self.config.feishu_owner_user_token_expires_at = expires_at
+        self.config.feishu_owner_user_id = user_info.get("user_id", "")
+        self.config.feishu_owner_union_id = user_info.get("union_id", "")
+        return saved_keys
 
     def refresh_token(self, refresh_token: str) -> dict[str, Any]:
         """用 refresh_token 换取新的 user_access_token，持久化到 .env 并同步更新 config。

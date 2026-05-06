@@ -226,6 +226,24 @@ class TestPersistTokenResult(unittest.TestCase):
             env_text = (root / ".env").read_text()
             self.assertIn("u.tok_xyz", env_text)
 
+    def test_persist_token_result_updates_config_in_memory(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("")
+            config = _make_config()
+            manager = FeishuOAuthManager(config, root)
+            token_data = {"access_token": "u.first", "refresh_token": "ref.first", "expires_in": 100}
+            user_info = {"user_id": "u1", "union_id": "un1"}
+
+            manager.persist_token_result(token_data, user_info)
+
+        self.assertEqual(config.feishu_owner_user_access_token, "u.first")
+        self.assertEqual(config.feishu_owner_user_refresh_token, "ref.first")
+        self.assertIn("T", config.feishu_owner_user_token_expires_at)
+        self.assertEqual(config.feishu_owner_user_id, "u1")
+        self.assertEqual(config.feishu_owner_union_id, "un1")
+
 
 class TestCallbackServerStateValidation(unittest.TestCase):
     """验证 callback server 在收到错误 state 时不提取 code，正确 state 时返回 code。"""
@@ -346,6 +364,23 @@ class TestRuntimeOAuthHandling(unittest.TestCase):
 
         self.assertEqual(result.get("oauth_action"), "started")
         self.assertIn("oauth_state", result)
+
+    def test_apply_oauth_result_syncs_token_expires_at(self) -> None:
+        service = self._make_service(has_oauth_config=True)
+        token_data = {
+            "access_token": "u.first",
+            "refresh_token": "ref.first",
+            "expires_in": 7140,
+        }
+        user_info = {"user_id": "uid_1", "union_id": "union_1"}
+
+        service._apply_oauth_result_to_config(token_data, user_info)
+
+        self.assertEqual(service.config.feishu_owner_user_access_token, "u.first")
+        self.assertEqual(service.config.feishu_owner_user_refresh_token, "ref.first")
+        self.assertIn("T", service.config.feishu_owner_user_token_expires_at)
+        self.assertEqual(service.config.feishu_owner_user_id, "uid_1")
+        self.assertEqual(service.config.feishu_owner_union_id, "union_1")
 
 
 class TestTokenNeedsRefresh(unittest.TestCase):
