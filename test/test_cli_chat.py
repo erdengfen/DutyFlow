@@ -28,6 +28,7 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("/feishu dm", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu gm", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu docs", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu request", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_submits_non_blocking_task(self) -> None:
@@ -105,6 +106,7 @@ class TestCliChat(unittest.TestCase):
 
         self.assertIn('"action": "scopes"', cli.handle_command("/feishu scopes"))
         self.assertIn('"detail": "candidates"', cli.handle_command("/feishu scopes candidates"))
+        self.assertIn('"action": "approval_requested"', cli.handle_command("/feishu request oc_1"))
         self.assertIn('"action": "scope_approved"', cli.handle_command("/feishu approve oc_1"))
         self.assertIn('"action": "scope_disabled"', cli.handle_command("/feishu disable oc_1"))
 
@@ -175,6 +177,10 @@ class _FakeApp:
     def approve_feishu_scope_debug(self, identifier: str) -> str:
         """返回测试 scope 批准结果。"""
         return f'{{"action": "scope_approved", "detail": "{identifier}"}}'
+
+    def request_feishu_scope_approval_debug(self, identifier: str) -> str:
+        """返回测试 scope 审批请求结果。"""
+        return f'{{"action": "approval_requested", "detail": "{identifier}"}}'
 
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """返回测试 scope 禁用结果。"""

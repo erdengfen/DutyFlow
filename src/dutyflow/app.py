@@ -46,6 +46,7 @@ from dutyflow.feishu.scope_registry import (
     seed_owner_p2p_scope,
     scope_account_id_from_config,
 )
+from dutyflow.feishu.scope_approval import FeishuScopeApprovalService
 from dutyflow.feishu.user_client import FeishuUserClient
 from dutyflow.feedback.gateway import FeedbackGateway
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
@@ -377,6 +378,25 @@ class DutyFlowApp:
         registry.approve_scope(record.account_id, record.scope_type, record.scope_id)
         enabled = registry.enable_scope(record.account_id, record.scope_type, record.scope_id)
         return _feishu_scopes_payload("scope_approved", (enabled,), self.project_root)
+
+    def request_feishu_scope_approval_debug(self, identifier: str) -> str:
+        """通过飞书审批卡片请求用户确认启用一个 candidate scope。"""
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+        seed_owner_p2p_scope(registry, config)
+        record = _resolve_single_scope(registry, identifier)
+        if isinstance(record, str):
+            return _feishu_error("scope_not_found", record)
+        service = FeishuScopeApprovalService(
+            self.project_root,
+            registry=registry,
+            feedback_gateway=FeedbackGateway(config),
+        )
+        try:
+            result = service.request_enable_scope(record)
+        except ValueError as exc:
+            return _feishu_error("scope_approval_failed", str(exc))
+        return _feishu_scope_approval_payload(result)
 
     def run_feishu_discover_groups_debug(self) -> str:
         """通过用户 OAuth 发现飞书群组并写入 scope registry candidate。"""
@@ -957,6 +977,19 @@ def _feishu_scopes_payload(
         record_path=_scope_record_path(records[0], project_root) if records else "",
         detail="ok",
         payload={"scopes": [_scope_payload(record, project_root) for record in records]},
+    )
+
+
+def _feishu_scope_approval_payload(result) -> str:
+    """格式化 scope 启用审批请求的调试输出。"""
+    return _feishu_debug_payload(
+        status="ok" if result.ok else "error",
+        action=result.status,
+        event_id="",
+        message_id="",
+        record_path=str(result.approval_file),
+        detail=result.detail,
+        payload=result.to_payload(),
     )
 
 

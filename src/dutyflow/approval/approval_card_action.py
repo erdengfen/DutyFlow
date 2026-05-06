@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(_SRC_ROOT))
 
 from dutyflow.approval.approval_resume_intake import ApprovalResumeIntakeService
+from dutyflow.feishu.scope_approval import FeishuScopeApprovalService
 
 _DECISION_ALIASES = {
     "approve": "approved",
@@ -51,10 +52,12 @@ class ApprovalCardActionService:
         project_root: Path,
         *,
         resume_service: ApprovalResumeIntakeService | None = None,
+        scope_approval_service: FeishuScopeApprovalService | None = None,
     ) -> None:
         """绑定工作区和审批恢复服务。"""
         self.project_root = Path(project_root).resolve()
         self.resume_service = resume_service or ApprovalResumeIntakeService(self.project_root)
+        self.scope_approval_service = scope_approval_service or FeishuScopeApprovalService(self.project_root)
 
     def handle_raw_event(self, raw_event: Mapping[str, Any]) -> ApprovalCardActionResult:
         """处理一条 `card.action.trigger` 原始事件。"""
@@ -66,17 +69,22 @@ class ApprovalCardActionService:
             result = self.resume_service.resume_after_decision(_build_resume_input(raw_event, value))
         except ValueError as exc:
             return _failed_result(event_id, value, str(exc))
+        post_result = _run_post_approval_action(self.scope_approval_service, result)
+        if post_result and not post_result.ok:
+            return _post_action_failed_result(event_id, result, post_result)
         payload = result.to_payload()
+        if post_result:
+            payload["post_approval_action"] = post_result.to_payload()
         return ApprovalCardActionResult(
             ok=True,
-            status="approval_resumed",
+            status=_status_for_success(post_result),
             event_id=event_id,
             approval_id=result.approval_id,
             decision_result=result.decision_result,
             task_id=result.task_id,
             task_status=result.task_status,
             toast_type="success",
-            toast_content=_success_toast(result.decision_result),
+            toast_content=_success_toast(result.decision_result, post_result),
             payload=payload,
         )
 
@@ -195,8 +203,40 @@ def _failed_result(event_id: str, value: Mapping[str, str], error_message: str) 
     )
 
 
-def _success_toast(decision_result: str) -> str:
+def _post_action_failed_result(event_id: str, result, post_result) -> ApprovalCardActionResult:
+    """返回审批已记录但后置恢复动作失败的错误结果。"""
+    return ApprovalCardActionResult(
+        ok=False,
+        status="approval_post_action_failed",
+        event_id=event_id,
+        approval_id=result.approval_id,
+        decision_result=result.decision_result,
+        task_id=result.task_id,
+        task_status=result.task_status,
+        toast_type="error",
+        toast_content="审批已记录，但后续启用阅读范围失败，请检查本地 scope 状态。",
+        payload={**result.to_payload(), "post_approval_action": post_result.to_payload()},
+    )
+
+
+def _run_post_approval_action(scope_service: FeishuScopeApprovalService, result):
+    """审批通过后尝试执行白名单恢复动作，普通审批会返回 skipped。"""
+    if result.decision_result != "approved":
+        return None
+    return scope_service.enable_scope_from_approval(result.approval_id)
+
+
+def _status_for_success(post_result) -> str:
+    """根据后置动作结果选择卡片回调状态。"""
+    if post_result and post_result.status == "scope_enabled":
+        return "approval_scope_enabled"
+    return "approval_resumed"
+
+
+def _success_toast(decision_result: str, post_result=None) -> str:
     """根据审批结果生成卡片按钮回调 toast。"""
+    if post_result and post_result.status == "scope_enabled":
+        return "审批已通过，阅读范围已启用。"
     if decision_result == "approved":
         return "审批已通过，任务已进入后台恢复队列。"
     if decision_result == "rejected":

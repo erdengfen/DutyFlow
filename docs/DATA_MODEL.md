@@ -1278,6 +1278,7 @@ data/feishu/scopes/index.md
 - `enabled` 才能被 `list_enabled(collector_name)` 返回给 collector 消费。
 - `disabled` 由用户禁用，不能被后续发现流程自动覆盖。
 - `permission_denied` 表示权限失败，不进入盲重试。
+- `candidate -> enabled` 可以由飞书审批卡片确认触发；审批通过后只允许 `enable_feishu_scope` 白名单恢复动作调用 `approve_scope()` 和 `enable_scope()`，不允许通用字段修改工具绕过用户确认。
 
 ## 6. 上下文摘要
 

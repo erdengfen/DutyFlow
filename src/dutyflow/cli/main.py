@@ -41,6 +41,9 @@ class HealthCheckProvider(Protocol):
     def approve_feishu_scope_debug(self, identifier: str) -> str:
         """批准并启用飞书 scope。"""
 
+    def request_feishu_scope_approval_debug(self, identifier: str) -> str:
+        """通过飞书审批卡片请求启用飞书 scope。"""
+
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """禁用飞书 scope。"""
 
@@ -235,6 +238,9 @@ class CliConsole:
         if normalized.startswith("/feishu approve "):
             identifier = normalized.removeprefix("/feishu approve").strip()
             return self.app.approve_feishu_scope_debug(identifier)
+        if normalized.startswith("/feishu request "):
+            identifier = normalized.removeprefix("/feishu request").strip()
+            return self.app.request_feishu_scope_approval_debug(identifier)
         if normalized.startswith("/feishu disable "):
             identifier = normalized.removeprefix("/feishu disable").strip()
             return self.app.disable_feishu_scope_debug(identifier)
@@ -265,6 +271,7 @@ class CliConsole:
             "/feishu docs - 拉取 enabled 云盘文件夹清单用于 collector 调试\n"
             "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
+            "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
             "/feishu doctor - 进入飞书长连接诊断模式\n"
             "/feishu latest - 查看最近一条飞书接入结果\n"
@@ -313,6 +320,7 @@ def _feishu_help_text() -> str:
         "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
+        "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
         "/feishu approve <scope_id> - 批准并启用 scope\n"
         "/feishu disable <scope_id> - 禁用 scope\n"
         "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -398,6 +406,10 @@ class _SelfTestApp:
         """返回自测 scope 批准结果。"""
         return f'{{"action": "scope_approved", "detail": "{identifier}"}}'
 
+    def request_feishu_scope_approval_debug(self, identifier: str) -> str:
+        """返回自测 scope 审批请求结果。"""
+        return f'{{"action": "approval_requested", "detail": "{identifier}"}}'
+
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """返回自测 scope 禁用结果。"""
         return f'{{"action": "scope_disabled", "detail": "{identifier}"}}'
@@ -443,6 +455,7 @@ def _self_test() -> None:
     assert '"action": "gm_collect"' in cli.handle_command("/feishu gm 3600")
     assert '"action": "docs_collect"' in cli.handle_command("/feishu docs")
     assert '"action": "scopes"' in cli.handle_command("/feishu scopes")
+    assert '"action": "approval_requested"' in cli.handle_command("/feishu request oc_1")
     assert '"action": "discover_groups"' in cli.handle_command("/feishu discover groups")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")

@@ -2758,7 +2758,8 @@ data/feishu/
 6. 【已完成】补最小命令：`/feishu scopes`、`/feishu scopes candidates`、`/feishu approve <scope_id>`、`/feishu disable <scope_id>`。
 7. 【已完成】实现 group candidate discovery：用户 OAuth 群列表 API 只写 `group_chat candidate`，不自动同步。
 8. 【已完成】用户批准 group scope 后，再接入 `group_message_collector` 消费 `enabled group_chat`，并提供 `/feishu gm` 本地调试入口。
-9. 【未完成】后续 document、meeting、bitable collector 全部改为只消费 registry 中的 enabled scope。
+9. 【已完成】复用审批卡片链路请求用户确认启用 candidate scope：`/feishu request <scope_id>` 发送“DutyFlow向您请求*某对话/群聊*阅读权限”卡片，用户批准后由 `enable_feishu_scope` 白名单恢复动作执行 `approve_scope()` + `enable_scope()`。
+10. 【未完成】后续 document、meeting、bitable collector 全部改为只消费 registry 中的 enabled scope。
 
 ### 第一版验收
 
@@ -2767,6 +2768,7 @@ data/feishu/
 - 【已完成】群列表发现只能写入 `candidate group_chat`，不会自动同步群正文。
 - 【已完成】用户批准群 scope 后，可以通过 `/feishu gm` 拉取所有 `enabled group_chat` 的群消息。
 - 【已完成】用户可以通过最小命令查看、批准、禁用 scope。
+- 【已完成】用户可以通过飞书审批卡片把 candidate scope 确认为 enabled，拒绝时 scope 保持 candidate。
 - 【已完成】权限失败能标记为 `permission_denied`，collector 不盲重试。
 - 【已完成】scope 和 sync_state 分离，scope 文件不承载同步 cursor。
 - 【已完成】所有 scope 文件可人工检查，并能追溯来源、批准和 collector 消费关系。
@@ -2783,6 +2785,8 @@ data/feishu/
 
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_scope_registry test.test_app_entry test.test_cli_chat test.test_feishu_events`，43 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_events test.test_feishu_scope_registry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider test.test_feishu_oauth`，163 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_scope_approval test.test_approval_card_action test.test_cli_chat`，18 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，615 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，573 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_group_candidate_discovery test.test_feishu_group_message_collector test.test_cli_chat test.test_app_entry`，50 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，597 tests OK。
