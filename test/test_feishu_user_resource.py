@@ -24,7 +24,7 @@ def _make_oauth_manager(
     *,
     access_token: str = "u.valid_tok",
     refresh_token: str = "ur.ref",
-    expires_at: str = "",
+    expires_at: str = "2999-01-01T00:00:00+00:00",
 ) -> FeishuOAuthManager:
     """构造绑定 mock config 的 FeishuOAuthManager。"""
     config = MagicMock()
@@ -97,7 +97,7 @@ class TestReadDocSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp("正文"), _ok_title_resp("标题")]),
+            patch("httpx.request", side_effect=[_ok_content_resp("正文"), _ok_title_resp("标题")]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertTrue(result.ok)
@@ -107,7 +107,7 @@ class TestReadDocSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp("正文内容"), _ok_title_resp()]),
+            patch("httpx.request", side_effect=[_ok_content_resp("正文内容"), _ok_title_resp()]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertEqual(result.content, "正文内容")
@@ -116,7 +116,7 @@ class TestReadDocSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp(), _ok_title_resp("我的文档")]),
+            patch("httpx.request", side_effect=[_ok_content_resp(), _ok_title_resp("我的文档")]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertEqual(result.title, "我的文档")
@@ -125,7 +125,7 @@ class TestReadDocSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp(), _ok_title_resp()]),
+            patch("httpx.request", side_effect=[_ok_content_resp(), _ok_title_resp()]),
         ):
             result = client.read_doc("doxcnABC")
         self.assertEqual(result.doc_token, "doxcnABC")
@@ -134,7 +134,7 @@ class TestReadDocSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp(), _ok_title_resp()]),
+            patch("httpx.request", side_effect=[_ok_content_resp(), _ok_title_resp()]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertIn("T", result.fetched_at)
@@ -148,7 +148,7 @@ class TestReadDocTitleFallback(unittest.TestCase):
         title_fail = _http_resp(403, {})
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp("正文"), title_fail]),
+            patch("httpx.request", side_effect=[_ok_content_resp("正文"), title_fail]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertTrue(result.ok)
@@ -157,10 +157,10 @@ class TestReadDocTitleFallback(unittest.TestCase):
 
     def test_title_api_error_still_returns_content(self) -> None:
         client = _make_client()
-        title_api_err = _http_resp(200, {"code": 99991668, "msg": "no permission"})
+        title_api_err = _http_resp(200, {"code": 99, "msg": "no permission"})
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", side_effect=[_ok_content_resp("内容"), title_api_err]),
+            patch("httpx.request", side_effect=[_ok_content_resp("内容"), title_api_err]),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertTrue(result.ok)
@@ -198,7 +198,12 @@ class TestReadDocHttpErrors(unittest.TestCase):
         fail = _http_resp(status_code, {})
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", return_value=fail),
+            patch.object(
+                client.user_client.token_provider,
+                "force_refresh",
+                side_effect=RuntimeError("refresh failed"),
+            ),
+            patch("httpx.request", return_value=fail),
         ):
             return client.read_doc("doxcnXXX")
 
@@ -207,9 +212,9 @@ class TestReadDocHttpErrors(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.status, "permission_denied")
 
-    def test_401_returns_permission_denied(self) -> None:
+    def test_401_returns_token_missing_after_refresh_failure(self) -> None:
         result = self._run(401)
-        self.assertEqual(result.status, "permission_denied")
+        self.assertEqual(result.status, "token_missing")
 
     def test_404_returns_not_found(self) -> None:
         result = self._run(404)
@@ -225,10 +230,10 @@ class TestReadDocApiError(unittest.TestCase):
 
     def test_nonzero_code_returns_api_error(self) -> None:
         client = _make_client()
-        api_err = _http_resp(200, {"code": 99991668, "msg": "no permission"})
+        api_err = _http_resp(200, {"code": 99, "msg": "no permission"})
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.get", return_value=api_err),
+            patch("httpx.request", return_value=api_err),
         ):
             result = client.read_doc("doxcnXXX")
         self.assertFalse(result.ok)
@@ -243,7 +248,7 @@ class TestGetFileMetaSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_ok_meta_resp()),
+            patch("httpx.request", return_value=_ok_meta_resp()),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertTrue(result.ok)
@@ -253,7 +258,7 @@ class TestGetFileMetaSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_ok_meta_resp(title="季报.xlsx")),
+            patch("httpx.request", return_value=_ok_meta_resp(title="季报.xlsx")),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertEqual(result.title, "季报.xlsx")
@@ -262,7 +267,7 @@ class TestGetFileMetaSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_ok_meta_resp(owner_id="ou_abc")),
+            patch("httpx.request", return_value=_ok_meta_resp(owner_id="ou_abc")),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertEqual(result.owner_id, "ou_abc")
@@ -272,7 +277,7 @@ class TestGetFileMetaSuccess(unittest.TestCase):
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
             patch(
-                "httpx.post",
+                "httpx.request",
                 return_value=_ok_meta_resp(create_time="1700000000", modify_time="1700001000"),
             ),
         ):
@@ -284,7 +289,7 @@ class TestGetFileMetaSuccess(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_ok_meta_resp()),
+            patch("httpx.request", return_value=_ok_meta_resp()),
         ):
             result = client.get_file_meta("boxcnABC", "docx")
         self.assertEqual(result.file_token, "boxcnABC")
@@ -309,7 +314,7 @@ class TestGetFileMetaErrors(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_http_resp(403, {})),
+            patch("httpx.request", return_value=_http_resp(403, {})),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertEqual(result.status, "permission_denied")
@@ -321,7 +326,7 @@ class TestGetFileMetaErrors(unittest.TestCase):
         )
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=empty_resp),
+            patch("httpx.request", return_value=empty_resp),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertFalse(result.ok)
@@ -331,11 +336,55 @@ class TestGetFileMetaErrors(unittest.TestCase):
         client = _make_client()
         with (
             patch.object(client.oauth_manager, "ensure_valid_token", return_value="u.tok"),
-            patch("httpx.post", return_value=_http_resp(200, {"code": 99, "msg": "no perm"})),
+            patch("httpx.request", return_value=_http_resp(200, {"code": 99, "msg": "no perm"})),
         ):
             result = client.get_file_meta("boxcnXXX", "file")
         self.assertEqual(result.status, "api_error")
         self.assertIn("no perm", result.detail)
+
+
+class TestSearchDrive(unittest.TestCase):
+    """验证 search_drive() 通过统一用户面请求层返回搜索结果。"""
+
+    def test_search_drive_returns_files(self) -> None:
+        client = _make_client()
+        response = _http_resp(
+            200,
+            {
+                "code": 0,
+                "data": {
+                    "files": [
+                        {
+                            "token": "doxcnAAA",
+                            "name": "项目周报",
+                            "type": "doc",
+                            "url": "https://example.feishu.cn/docx/doxcnAAA",
+                            "owner_id": "ou_owner",
+                            "modified_time": "1700001000",
+                        }
+                    ],
+                    "has_more": False,
+                    "total": 1,
+                },
+            },
+        )
+        with patch("httpx.request", return_value=response) as mocked:
+            result = client.search_drive("周报", count=20)
+
+        body = mocked.call_args.kwargs["json"]
+        self.assertTrue(result.ok)
+        self.assertEqual(result.files[0].token, "doxcnAAA")
+        self.assertEqual(result.total, 1)
+        self.assertNotIn("docx", body["docs_types"])
+        self.assertNotIn("wiki", body["docs_types"])
+
+    def test_search_drive_403_returns_permission_denied(self) -> None:
+        client = _make_client()
+        with patch("httpx.request", return_value=_http_resp(403, {})):
+            result = client.search_drive("周报", count=20)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "permission_denied")
 
 
 def _self_test() -> None:
@@ -351,6 +400,7 @@ def _self_test() -> None:
         TestGetFileMetaSuccess,
         TestGetFileMetaTokenMissing,
         TestGetFileMetaErrors,
+        TestSearchDrive,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

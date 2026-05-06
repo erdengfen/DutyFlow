@@ -1,5 +1,4 @@
-# 本文件负责以 owner 用户身份读取飞书文档正文和文件元信息，
-# 内部通过 FeishuOAuthManager.ensure_valid_token() 取得有效 token。
+# 本文件负责以 owner 用户身份读取飞书文档正文、云盘搜索和文件元信息。
 
 from __future__ import annotations
 
@@ -9,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dutyflow.feishu.oauth import FeishuOAuthManager
+from dutyflow.feishu.user_client import FeishuUserClient
+from dutyflow.feishu.user_request import FeishuUserResponse
 
 _FEISHU_DOCX_INFO_URL = "https://open.feishu.cn/open-apis/docx/v1/documents/{doc_token}"
 _FEISHU_DOCX_CONTENT_URL = (
@@ -78,13 +79,18 @@ class FileMetaResult:
 class FeishuUserResourceClient:
     """以 owner 用户身份读取飞书文档正文和文件元信息。
 
-    不直接暴露 user_access_token，内部通过 ensure_valid_token() 取得有效凭证。
+    不直接暴露 user_access_token，内部通过 FeishuUserClient 取得有效凭证并统一请求。
     所有方法均返回结果对象，不抛出异常，调用方通过 result.ok 判断成功与否。
     """
 
-    def __init__(self, oauth_manager: FeishuOAuthManager) -> None:
-        """绑定 OAuth 管理器，用于透明的 token 有效性检查和刷新。"""
+    def __init__(
+        self,
+        oauth_manager: FeishuOAuthManager,
+        user_client: FeishuUserClient | None = None,
+    ) -> None:
+        """绑定 OAuth 管理器兼容旧入口，内部统一使用 FeishuUserClient。"""
         self.oauth_manager = oauth_manager
+        self.user_client = user_client or FeishuUserClient.from_oauth_manager(oauth_manager)
 
     def read_doc(self, doc_token: str) -> DocReadResult:
         """读取飞书 docx 文档正文，title 为尽力获取（失败时返回空字符串）。
@@ -93,15 +99,7 @@ class FeishuUserResourceClient:
         """
         now = _now_iso()
         try:
-            token = self.oauth_manager.ensure_valid_token()
-        except RuntimeError as exc:
-            return DocReadResult(
-                ok=False, status="token_missing", doc_token=doc_token,
-                title="", content="", fetched_at=now, detail=str(exc),
-            )
-
-        try:
-            content = _fetch_doc_content(doc_token, token)
+            content = _fetch_doc_content(doc_token, self.user_client)
         except _FeishuResourceError as exc:
             return DocReadResult(
                 ok=False, status=exc.status, doc_token=doc_token,
@@ -110,7 +108,7 @@ class FeishuUserResourceClient:
 
         title = ""
         try:
-            title = _fetch_doc_title(doc_token, token)
+            title = _fetch_doc_title(doc_token, self.user_client)
         except Exception:  # noqa: BLE001
             pass  # title 为尽力获取，不影响正文读取结果
 
@@ -126,14 +124,7 @@ class FeishuUserResourceClient:
         """
         now = _now_iso()
         try:
-            token = self.oauth_manager.ensure_valid_token()
-        except RuntimeError as exc:
-            return DriveSearchResult(
-                ok=False, status="token_missing", query=query,
-                files=(), has_more=False, total=0, fetched_at=now, detail=str(exc),
-            )
-        try:
-            return _search_drive_files(token, query, count, now)
+            return _search_drive_files(self.user_client, query, count, now)
         except _FeishuResourceError as exc:
             return DriveSearchResult(
                 ok=False, status=exc.status, query=query,
@@ -147,16 +138,7 @@ class FeishuUserResourceClient:
         """
         now = _now_iso()
         try:
-            token = self.oauth_manager.ensure_valid_token()
-        except RuntimeError as exc:
-            return FileMetaResult(
-                ok=False, status="token_missing", file_token=file_token,
-                file_type=file_type, title="", owner_id="", create_time="",
-                edit_time="", fetched_at=now, detail=str(exc),
-            )
-
-        try:
-            meta = _batch_query_single(file_token, file_type, token)
+            meta = _batch_query_single(file_token, file_type, self.user_client)
         except _FeishuResourceError as exc:
             return FileMetaResult(
                 ok=False, status=exc.status, file_token=file_token,
@@ -184,27 +166,27 @@ class _FeishuResourceError(Exception):
         self.detail = detail
 
 
-def _fetch_doc_content(doc_token: str, user_access_token: str) -> str:
+def _fetch_doc_content(doc_token: str, user_client: FeishuUserClient) -> str:
     """调用 docx raw_content 接口，返回文档纯文本正文。"""
-    import httpx
-
     url = _FEISHU_DOCX_CONTENT_URL.format(doc_token=doc_token)
-    headers = {"Authorization": f"Bearer {user_access_token}"}
-    resp = httpx.get(url, headers=headers, timeout=15.0)
-    _check_http_status(resp)
-    data = _parse_resource_response(resp.json(), "docx 正文读取")
+    response = user_client.get(
+        url,
+        timeout_seconds=15.0,
+        collector_name="feishu_read_doc",
+    )
+    data = _data_or_raise(response, "docx 正文读取")
     return str(data.get("content", ""))
 
 
-def _fetch_doc_title(doc_token: str, user_access_token: str) -> str:
+def _fetch_doc_title(doc_token: str, user_client: FeishuUserClient) -> str:
     """调用 docx 文档信息接口，返回文档标题。失败时由调用方决定如何处理。"""
-    import httpx
-
     url = _FEISHU_DOCX_INFO_URL.format(doc_token=doc_token)
-    headers = {"Authorization": f"Bearer {user_access_token}"}
-    resp = httpx.get(url, headers=headers, timeout=10.0)
-    _check_http_status(resp)
-    data = _parse_resource_response(resp.json(), "docx 文档信息")
+    response = user_client.get(
+        url,
+        timeout_seconds=10.0,
+        collector_name="feishu_read_doc",
+    )
+    data = _data_or_raise(response, "docx 文档信息")
     doc = data.get("document")
     if not isinstance(doc, dict):
         return ""
@@ -214,19 +196,17 @@ def _fetch_doc_title(doc_token: str, user_access_token: str) -> str:
 def _batch_query_single(
     file_token: str,
     file_type: str,
-    user_access_token: str,
+    user_client: FeishuUserClient,
 ) -> dict[str, Any]:
     """调用 drive batch_query 接口，返回单条文件元信息字典。"""
-    import httpx
-
-    headers = {
-        "Authorization": f"Bearer {user_access_token}",
-        "Content-Type": "application/json",
-    }
     body = {"request_docs": [{"doc_token": file_token, "doc_type": file_type}]}
-    resp = httpx.post(_FEISHU_DRIVE_META_URL, headers=headers, json=body, timeout=10.0)
-    _check_http_status(resp)
-    data = _parse_resource_response(resp.json(), "文件元信息查询")
+    response = user_client.post(
+        _FEISHU_DRIVE_META_URL,
+        json_body=body,
+        timeout_seconds=10.0,
+        collector_name="feishu_get_file_meta",
+    )
+    data = _data_or_raise(response, "文件元信息查询")
     metas = data.get("metas") or []
     if not metas:
         failed = data.get("failed_list") or []
@@ -235,39 +215,31 @@ def _batch_query_single(
     return dict(metas[0]) if isinstance(metas[0], dict) else {}
 
 
-def _check_http_status(resp: Any) -> None:
-    """把 HTTP 4xx/5xx 转成语义化 _FeishuResourceError，200 直接返回。"""
-    code = resp.status_code
-    if code == 200:
-        return
-    if code in {401, 403}:
-        raise _FeishuResourceError("permission_denied", f"HTTP {code}：无权访问此资源")
-    if code == 404:
-        raise _FeishuResourceError("not_found", f"HTTP {code}：资源不存在")
-    raise _FeishuResourceError("api_error", f"HTTP {code}：{resp.text[:300]}")
+def _data_or_raise(response: FeishuUserResponse, context: str) -> dict[str, Any]:
+    """把统一请求响应转成资源层 data，失败时映射到资源层稳定 status。"""
+    if response.ok:
+        return dict(response.data)
+    status = _resource_status(response.status)
+    detail = response.detail or response.status
+    raise _FeishuResourceError(status, f"飞书 {context} 失败：{detail}")
 
 
-def _parse_resource_response(resp_body: dict[str, Any], context: str) -> dict[str, Any]:
-    """解析飞书 API 统一响应格式，非零 code 转为 _FeishuResourceError。"""
-    if resp_body.get("code") != 0:
-        detail = resp_body.get("msg") or json.dumps(resp_body, ensure_ascii=False)
-        raise _FeishuResourceError("api_error", f"飞书 {context} 失败：{detail}")
-    return dict(resp_body.get("data") or {})
+def _resource_status(status: str) -> str:
+    """把请求层状态收束为资源工具已公开的稳定错误状态。"""
+    if status in {"token_missing", "reauth_required"}:
+        return "token_missing"
+    if status in {"permission_denied", "not_found"}:
+        return status
+    return "api_error"
 
 
 def _search_drive_files(
-    user_access_token: str,
+    user_client: FeishuUserClient,
     query: str,
     count: int,
     fetched_at: str,
 ) -> DriveSearchResult:
     """调用飞书 Drive 搜索接口，返回结构化搜索结果。"""
-    import httpx
-
-    headers = {
-        "Authorization": f"Bearer {user_access_token}",
-        "Content-Type": "application/json",
-    }
     body = {
         "search_key": query,
         "count": min(max(1, count), _MAX_SEARCH_COUNT),
@@ -276,11 +248,13 @@ def _search_drive_files(
         # "docx"/"wiki" 不是此 API 的合法枚举值（"docx" 仅用于 docx content API），不能传入。
         "docs_types": ["doc", "sheet", "slide", "bitable", "mindnote", "file"],
     }
-    resp = httpx.post(_FEISHU_DRIVE_SEARCH_URL, headers=headers, json=body, timeout=15.0)
-    # 临时诊断日志：排查 0 结果根因后可删除。
-    print(f"[drive_search_debug] req_body={json.dumps(body, ensure_ascii=False)} HTTP={resp.status_code} raw={resp.text[:1000]}", flush=True)
-    _check_http_status(resp)
-    data = _parse_resource_response(resp.json(), "云盘搜索")
+    response = user_client.post(
+        _FEISHU_DRIVE_SEARCH_URL,
+        json_body=body,
+        timeout_seconds=15.0,
+        collector_name="feishu_search_drive",
+    )
+    data = _data_or_raise(response, "云盘搜索")
     files_raw = data.get("files") or []
     files = tuple(
         DriveFileItem(

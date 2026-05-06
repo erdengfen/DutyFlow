@@ -20,6 +20,7 @@ __all__ = [
     "FeishuUserRequest",
     "FeishuUserRequestClient",
     "FeishuUserResponse",
+    "FeishuUserClient",
     "FeishuUserTokenHealth",
     "FeishuUserTokenProvider",
 ]
@@ -51,6 +52,7 @@ _EXPORT_MAP = {
         "FeishuUserRequestClient",
     ),
     "FeishuUserResponse": ("dutyflow.feishu.user_request", "FeishuUserResponse"),
+    "FeishuUserClient": ("dutyflow.feishu.user_client", "FeishuUserClient"),
     "FeishuUserTokenHealth": (
         "dutyflow.feishu.user_token_provider",
         "FeishuUserTokenHealth",
@@ -80,6 +82,7 @@ def _self_test() -> None:
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
     from dutyflow.feishu.sync_state import FeishuSyncStateStore
+    from dutyflow.feishu.user_client import FeishuUserClient
     from dutyflow.feishu.user_request import FeishuUserRequestClient
     from dutyflow.feishu.user_token_provider import FeishuUserTokenProvider
 
@@ -87,6 +90,7 @@ def _self_test() -> None:
     assert FeishuClient is not None
     assert FeishuIngressService is not None
     assert FeishuSyncStateStore is not None
+    assert FeishuUserClient is not None
     assert FeishuUserRequestClient is not None
     assert FeishuUserTokenProvider is not None
 

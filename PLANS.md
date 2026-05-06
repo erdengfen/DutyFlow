@@ -2209,9 +2209,9 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 当前决策
 
-状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘、collector 预算控制、sync_state 最小接口和对应测试。继续补现有用户资源客户端迁移。
+状态：进行中。Step 12A 公共底层代码已完成：用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘、collector 预算控制、sync_state 最小接口、FeishuUserClient 和现有用户资源客户端迁移均已完成。后续进入 6 个 collector 具体设计前，需要补 `docs/DATA_MODEL.md` 主动感知记录和资源索引 schema。
 
-验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，542 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
+验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，547 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
 
 主动感知后续会拆成 6 个 collector：
 
@@ -2513,24 +2513,24 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
     - 覆盖失败后写入 last_failure_at、last_error_kind、last_error_detail。
     - 覆盖 `scope_id` 安全文件名转换，不能路径逃逸。
 
-12. 【未完成】新增 `src/dutyflow/feishu/user_client.py`。
+12. 【已完成】新增 `src/dutyflow/feishu/user_client.py`。
     - 实现 `FeishuUserClient`。
     - 只代表 owner 用户身份发请求。
     - 内部依赖 `FeishuUserTokenProvider` 和 `FeishuUserRequestClient`。
     - 不提供 bot/app 发送能力，继续和 `FeishuClient` 分离。
 
-13. 【未完成】迁移 `src/dutyflow/feishu/user_resource.py` 到新用户面底层。
+13. 【已完成】迁移 `src/dutyflow/feishu/user_resource.py` 到新用户面底层。
     - 保留现有 `read_doc()`、`get_file_meta()`、`search_drive()` 对外兼容。
     - 内部改为依赖 `FeishuUserClient`。
     - 移除重复 token 获取和重复请求错误处理。
 
-14. 【未完成】跑通现有用户资源工具回归。
+14. 【已完成】跑通现有用户资源工具回归。
     - `test/test_feishu_oauth.py`
     - `test/test_feishu_user_resource.py`
     - `test/test_feishu_tools.py`
 
-15. 【未完成】跑通 Step 12A 新增测试与全量测试。
-    - 新增 token provider、user request、collector budget、sync_state 测试全部通过。
+15. 【已完成】跑通 Step 12A 新增测试与全量测试。
+    - 新增 token provider、user request、collector budget、sync_state、user client 测试全部通过。
     - 全量 `python -m unittest discover -s test` 通过。
 
 16. 【未完成】进入 6 个 collector 的具体设计前更新数据模型文档。
