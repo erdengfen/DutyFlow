@@ -9,10 +9,10 @@
 当前已确定的技术链路如下：
 
 ```text
-飞书事件 / 飞书交互
-        |
-        v
-本地 Python 单进程服务
+飞书事件 / 飞书交互      飞书用户面 REST 拉取
+        |                       ^
+        v                       |
+本地 Python 单进程服务 ---------+
         |
         v
 事件入口 -> 身份与来源补全 -> 权重决策 -> 上下文处理 / 审批判断
@@ -46,11 +46,27 @@ Demo 期只实现能形成闭环的最小系统。
 - 接收飞书消息事件。
 - 接收文件或文档相关线索。
 - 将外部输入统一送入本地主流程。
+- 对 bot 可见事件保持被动接收，对 owner 用户面信息通过受限 collector 主动拉取并落盘为环境上下文。
 
 边界：
 
 - 不追求覆盖飞书全部 API。
 - 不把飞书接入层扩展成通用 API 网关。
+- 主动用户面 collector 不承诺实时监听，也不绕过用户 OAuth 授权范围。
+
+### 2.1.1 用户面主动感知 collector 层
+
+职责：
+
+- 使用 owner 用户 OAuth token，通过飞书 REST API 拉取明确范围内的用户面信息。
+- 复用统一用户请求层、token 刷新、分页、预算和 sync_state。
+- 将私信、群聊、云文档、会议记录、多维表格等零散信息先落盘为 `ambient_context`。
+
+边界：
+
+- 不直接生成任务、提醒、审批或代表用户执行动作。
+- 不做无边界全量扫描；第一版只支持显式绑定、手动触发或调试窗口。
+- 权限错误写入 sync_state 和审计日志，不盲目重试或扩大权限。
 
 ### 2.2 身份与来源补全层
 
@@ -267,6 +283,13 @@ DutyFlow/
         events.py
         client.py
         feedback.py
+        ambient_context.py
+        user_client.py
+        user_request.py
+        collector_budget.py
+        sync_state.py
+        collectors/
+          direct_message_collector.py
 
       identity/
         source_context.py
@@ -311,6 +334,10 @@ DutyFlow/
     state/
       agent_control_state.md
     events/
+    ambient_context/
+      index.md
+      direct_message/
+        index.md
     contexts/
     approvals/
       pending/
@@ -348,7 +375,8 @@ DutyFlow/
 - `src/dutyflow/app.py`：本地单进程主流程编排入口。
 - `src/dutyflow/config/`：统一读取 `.env`，不得散落读取配置。
 - `src/dutyflow/agent/`：Agent 基层工具调用、技能加载和安全边界。
-- `src/dutyflow/feishu/`：飞书事件接收、授权范围读取、用户回馈。
+- `src/dutyflow/feishu/`：飞书事件接收、授权范围读取、用户面主动感知、用户回馈。
+- `src/dutyflow/feishu/collectors/`：按用户面信息类型拆分的主动感知 collector，第一版受显式 scope 和预算限制。
 - `src/dutyflow/identity/`：身份、来源、责任语境补全。
 - `src/dutyflow/decision/`：事项权重判断。
 - `src/dutyflow/context/`：近场上下文保存和轻量压缩。
@@ -357,6 +385,7 @@ DutyFlow/
 - `src/dutyflow/storage/`：本地文件读写与关键产物留痕。
 - `src/dutyflow/cli/`：本地调试、观察和人工检查入口。
 - `src/dutyflow/logging/`：运行日志与审计记录。
+- `data/ambient_context/`：用户面主动感知结果目录，保存可检索、可溯源的环境上下文 Markdown。
 - `data/`：本地运行产物目录，不存放源码；日志、计划、报告等人工检查内容优先为 Markdown。
 - `test/`：按功能分块维护独立测试，完整链路测试放在 `test_full_chain.py`。
 

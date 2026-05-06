@@ -85,6 +85,7 @@ data/
   state/
   events/
   perception/
+  ambient_context/
   contexts/
   approvals/
   tasks/
@@ -108,6 +109,7 @@ data/
     state/
     events/
     perception/
+    ambient_context/
     contexts/
     approvals/
     tasks/
@@ -1018,6 +1020,137 @@ updated_at: 2026-04-28T12:00:00+08:00
 - `Entities`：保存 sender、chat、mentions 等稳定实体，不做关系推理。
 - `Parse Targets`：保存后续内容解析工具可能消费的资源线索，不在感知层直接执行下载或解析。
 - `Lookup Hints`：保存后续身份、来源、责任工具可直接消费的稳定提示。
+
+## 5.2 主动用户面环境上下文记录
+
+主动用户面环境上下文记录用于保存 owner 用户授权范围内由 collector 主动拉取到的飞书信息。它与 `data/perception/` 的 bot 可见事件并列，第一版只作为后续身份、权重、检索和人工检查的参考输入，不直接生成任务、审批或提醒。
+
+统一根目录：
+
+```text
+data/ambient_context/
+  index.md
+  direct_message/
+    index.md
+    YYYY-MM-DD/
+      dm_<message_id>.md
+  group_message/
+  user_document/
+  group_document/
+  meeting_minutes/
+  bitable/
+```
+
+约束：
+
+- 所有 collector 产物必须落在 `data/ambient_context/` 下，禁止散落到临时目录或工具私有目录。
+- 单条记录必须是 Markdown，并使用简单字符串 frontmatter。
+- frontmatter 必须包含 `schema`、`record_id`、`source_type`、`collector_name`、`source_id`、`sync_scope_id`、`created_at`、`fetched_at`。
+- 单条记录只保存可检索的摘要、文本预览和溯源 ID；大正文、大文档全文、会议记录全文和多维表格大快照应落到 Evidence 或等价大对象文件，再以路径引用。
+- 记录不得保存 `user_access_token`、`refresh_token`、`Authorization` 或其他密钥。
+- collector 失败状态不写入 ambient_context，应写入 `data/feishu/sync_state/` 和请求审计日志。
+
+基础 frontmatter：
+
+```yaml
+schema: dutyflow.ambient_context.v1
+record_id: dm_om_xxx
+source_type: direct_message
+collector_name: direct_message_collector
+source_id: oc_xxx
+sync_scope_id: oc_xxx
+created_at: 2026-05-06T12:00:00+08:00
+fetched_at: 2026-05-06T12:01:00+08:00
+text_preview: 项目进展文档见 https://example.feishu.cn/docx/xxx
+doc_link_count: 1
+file_clue_count: 0
+raw_message_ref: ""
+```
+
+正文结构：
+
+```md
+# Ambient Context dm_om_xxx
+
+## Summary
+
+一句话描述这条主动感知记录的来源和内容预览。
+
+## Extracted Text
+
+可检索文本预览或短正文。第一版由 collector 按预算裁剪，不承诺保存完整长内容。
+
+## Source Metadata
+
+| key | value |
+|---|---|
+| source_type | direct_message |
+| collector_name | direct_message_collector |
+| source_id | oc_xxx |
+| sync_scope_id | oc_xxx |
+
+## Doc Links
+
+| url | resource_type | token |
+|---|---|---|
+| https://example.feishu.cn/docx/xxx | docx | xxx |
+
+## File Clues
+
+| message_id | msg_type | file_key | file_name |
+|---|---|---|---|
+
+## Raw Reference
+
+- raw_message_ref:
+- sync_state: data/feishu/sync_state/direct_message_collector/oc_xxx.md
+```
+
+索引文件：
+
+```text
+data/ambient_context/index.md
+data/ambient_context/<source_type>/index.md
+```
+
+索引表字段：
+
+```md
+| record_id | source_type | collector_name | source_id | sync_scope_id | created_at | fetched_at | detail_file | text_preview |
+|---|---|---|---|---|---|---|---|---|
+```
+
+### 5.2.1 私信主动感知记录
+
+`direct_message_collector` 只保存用户显式指定或绑定的 p2p 会话历史消息，不代表全量监听用户所有私聊。
+
+文件位置：
+
+```text
+data/ambient_context/direct_message/YYYY-MM-DD/dm_<message_id>.md
+```
+
+私信记录额外 frontmatter：
+
+```yaml
+message_id: om_xxx
+chat_id: oc_xxx
+root_id: om_xxx
+parent_id: ""
+sender_id: ou_xxx
+sender_id_type: open_id
+msg_type: text
+create_time: "1770000000000"
+update_time: "1770000000000"
+```
+
+字段说明：
+
+- `message_id`：飞书消息 ID，是私信记录的主要溯源 ID。
+- `chat_id`：飞书 p2p 会话 ID，也是第一版 sync scope。
+- `create_time` / `update_time`：保留飞书返回的毫秒时间戳字符串。
+- `doc_links`：在正文 `Doc Links` 表中保存 URL、资源类型和 token 线索。
+- `file_clues`：在正文 `File Clues` 表中保存附件类消息线索，不在本 collector 下载二进制正文。
 
 ## 6. 上下文摘要
 

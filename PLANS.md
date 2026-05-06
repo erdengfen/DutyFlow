@@ -2584,16 +2584,16 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 
 ### 当前决策
 
-状态：设计中。6 个 collector 共享 Step 12A 的 `FeishuUserClient`、统一请求封装、collector budget 和 sync_state，不再各自处理 token、重试、分页和状态续跑。每个 collector 先明确读取范围、授权边界、请求方式、落盘目标和第一版不做事项，再进入代码实现。
+状态：推进中。6 个 collector 共享 Step 12A 的 `FeishuUserClient`、统一请求封装、collector budget 和 sync_state，不再各自处理 token、重试、分页和状态续跑。`direct_message_collector` 已完成第一版实现和测试，其余 collector 继续按“先设计字段和落盘，再实现代码”的节奏推进。
 
 第一批 collector 设计顺序：
 
-1. direct_message_collector
-2. group_message_collector
-3. user_document_collector
-4. group_document_collector
-5. meeting_minutes_collector
-6. bitable_collector
+1. 【已完成】direct_message_collector
+2. 【未完成】group_message_collector
+3. 【未完成】user_document_collector
+4. 【未完成】group_document_collector
+5. 【未完成】meeting_minutes_collector
+6. 【未完成】bitable_collector
 
 ### 统一落盘约定
 
@@ -2630,27 +2630,30 @@ data/ambient_context/<collector_family>/index.md
 
 Step 12B 预计新增：
 
-- `src/dutyflow/feishu/collectors/__init__.py`
-- `src/dutyflow/feishu/collectors/direct_message_collector.py`
+- 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
+- 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
 - `src/dutyflow/feishu/collectors/group_message_collector.py`
 - `src/dutyflow/feishu/collectors/user_document_collector.py`
 - `src/dutyflow/feishu/collectors/group_document_collector.py`
 - `src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
 - `src/dutyflow/feishu/collectors/bitable_collector.py`
-- `src/dutyflow/feishu/ambient_context.py`
-- `test/test_feishu_direct_message_collector.py`
+- 【已完成】`src/dutyflow/feishu/ambient_context.py`
+- 【已完成】`test/test_feishu_ambient_context.py`
+- 【已完成】`test/test_feishu_direct_message_collector.py`
 - 后续对应其他 collector 测试文件。
 
 Step 12B 预计调整：
 
-- `docs/DATA_MODEL.md`：补充 ambient_context 基础 schema、collector 子类型 schema、索引表字段。
-- `docs/ARCHITECTURE.md`：补充主动感知 collector 层和统一落盘链路。
-- `PLANS.md`：逐个 collector 记录设计、状态和验收。
-- `src/dutyflow/feishu/__init__.py`：按需导出 collector 或共享 ambient_context 类型。
+- 【已完成】`docs/DATA_MODEL.md`：补充 ambient_context 基础 schema、direct_message 子类型 schema、索引表字段。
+- 【已完成】`docs/ARCHITECTURE.md`：补充主动感知 collector 层和统一落盘链路。
+- 【进行中】`PLANS.md`：逐个 collector 记录设计、状态和验收。
+- 【已完成】`src/dutyflow/feishu/__init__.py`：导出 ambient_context 和 direct_message_collector 类型。
 - `src/dutyflow/config/env.py` / `.env.example`：如实现需要，补充允许同步的 p2p/group/resource scope 配置和默认预算开关。
 - CLI 相关文件：如需要手动触发/调试 collector，再补 `/feishu collect ...` 或等价本地命令入口。
 
 ### 1. direct_message_collector
+
+状态：【已完成】2026-05-06 已完成第一版实现、文档更新和测试。当前只提供代码层 collector，不新增 CLI 调度入口。
 
 #### 目标
 
@@ -2841,13 +2844,27 @@ data/ambient_context/direct_message/index.md
 
 #### 第一版验收
 
-- 能对一个已绑定 p2p `chat_id` 拉取最近 N 条消息。
-- 能按 `page_token/has_more` 分页，并受 `CollectorBudget` 页数和条数上限控制。
-- 能把 text 消息解析为 ambient_context。
-- 能从消息文本中抽取飞书文档链接线索。
-- 能把文件/附件类消息保留为 file clue，不拉二进制正文。
-- 能按 `chat_id` 写入 sync_state 成功和失败状态。
-- 权限错误不重试，并可在 sync_state 和审计日志中看到原因。
+- 【已完成】能对一个已绑定 p2p `chat_id` 按显式时间窗口拉取消息。
+- 【已完成】能按 `page_token/has_more` 分页，并受 `CollectorBudget` 页数和条数上限控制。
+- 【已完成】能把 text 消息解析为 ambient_context。
+- 【已完成】能从消息文本中抽取飞书文档链接线索。
+- 【已完成】能把文件/附件类消息保留为 file clue，不拉二进制正文。
+- 【已完成】能按 `chat_id` 写入 sync_state 成功和失败状态。
+- 【已完成】权限错误不推进 cursor，不写 ambient_context，并可在 sync_state 中看到原因。
+
+实现文件：
+
+- 【已完成】`src/dutyflow/feishu/ambient_context.py`
+- 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
+- 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
+- 【已完成】`test/test_feishu_ambient_context.py`
+- 【已完成】`test/test_feishu_direct_message_collector.py`
+
+测试记录：
+
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector`，9 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，68 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，556 tests OK。
 
 ## Step 13: 完整 Demo 链路验收
 

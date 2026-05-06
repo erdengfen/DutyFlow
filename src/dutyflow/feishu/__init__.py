@@ -9,6 +9,13 @@ __all__ = [
     "CollectorBudget",
     "CollectorBudgetGuard",
     "CollectorBudgetUsage",
+    "AmbientContextRecord",
+    "AmbientContextStore",
+    "AmbientContextWriteResult",
+    "AmbientDocLink",
+    "AmbientFileClue",
+    "DirectMessageCollectResult",
+    "DirectMessageCollector",
     "FeishuClient",
     "FeishuClientResult",
     "FeishuEventAdapter",
@@ -26,6 +33,14 @@ __all__ = [
 ]
 
 _EXPORT_MAP = {
+    "AmbientContextRecord": ("dutyflow.feishu.ambient_context", "AmbientContextRecord"),
+    "AmbientContextStore": ("dutyflow.feishu.ambient_context", "AmbientContextStore"),
+    "AmbientContextWriteResult": (
+        "dutyflow.feishu.ambient_context",
+        "AmbientContextWriteResult",
+    ),
+    "AmbientDocLink": ("dutyflow.feishu.ambient_context", "AmbientDocLink"),
+    "AmbientFileClue": ("dutyflow.feishu.ambient_context", "AmbientFileClue"),
     "CollectorBudget": ("dutyflow.feishu.collector_budget", "CollectorBudget"),
     "CollectorBudgetGuard": (
         "dutyflow.feishu.collector_budget",
@@ -34,6 +49,14 @@ _EXPORT_MAP = {
     "CollectorBudgetUsage": (
         "dutyflow.feishu.collector_budget",
         "CollectorBudgetUsage",
+    ),
+    "DirectMessageCollectResult": (
+        "dutyflow.feishu.collectors.direct_message_collector",
+        "DirectMessageCollectResult",
+    ),
+    "DirectMessageCollector": (
+        "dutyflow.feishu.collectors.direct_message_collector",
+        "DirectMessageCollector",
     ),
     "FeishuClient": ("dutyflow.feishu.client", "FeishuClient"),
     "FeishuClientResult": ("dutyflow.feishu.client", "FeishuClientResult"),
@@ -78,7 +101,9 @@ def __getattr__(name: str) -> Any:
 
 def _self_test() -> None:
     """验证飞书接入层包导出的核心类型可被正常导入。"""
+    from dutyflow.feishu.ambient_context import AmbientContextStore
     from dutyflow.feishu.collector_budget import CollectorBudget
+    from dutyflow.feishu.collectors.direct_message_collector import DirectMessageCollector
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
     from dutyflow.feishu.sync_state import FeishuSyncStateStore
@@ -86,7 +111,9 @@ def _self_test() -> None:
     from dutyflow.feishu.user_request import FeishuUserRequestClient
     from dutyflow.feishu.user_token_provider import FeishuUserTokenProvider
 
+    assert AmbientContextStore is not None
     assert CollectorBudget is not None
+    assert DirectMessageCollector is not None
     assert FeishuClient is not None
     assert FeishuIngressService is not None
     assert FeishuSyncStateStore is not None
