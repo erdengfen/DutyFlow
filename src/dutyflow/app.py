@@ -1380,6 +1380,8 @@ def _proactive_state_payload(state: object) -> dict[str, Any]:
         "last_records_collected": int(getattr(state, "last_records_collected", 0)),
         "last_approval_requests_sent": int(getattr(state, "last_approval_requests_sent", 0)),
         "last_packets_enqueued": int(getattr(state, "last_packets_enqueued", 0)),
+        "last_summary_tasks_at": str(getattr(state, "last_summary_tasks_at", "")),
+        "last_summary_tasks_created": int(getattr(state, "last_summary_tasks_created", 0)),
         "last_error": str(getattr(state, "last_error", "")),
         "updated_at": str(getattr(state, "updated_at", "")),
     }

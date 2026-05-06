@@ -26,6 +26,7 @@ from dutyflow.feishu.scope_registry import (
     FeishuScopeRegistry,
     scope_account_id_from_config,
 )
+from dutyflow.feishu.summary_task_intake import SummaryTaskIntakeService
 
 # 关键开关：主循环轮询间隔秒数，决定服务最大响应延迟。
 TICK_INTERVAL_SECONDS = 60
@@ -39,6 +40,8 @@ APPROVAL_REQUEST_COOLDOWN_HOURS = 24
 MAX_APPROVAL_REQUESTS_PER_TICK = 3
 # 关键开关：单次 tick 最多采集的 scope 数，防止单次调度耗时过长。
 MAX_SCOPES_PER_TICK = 10
+# 关键开关：系统预制总结任务的创建检查间隔秒数，按小时节奏创建，避免总结任务过频。
+SUMMARY_TASK_INTERVAL_SECONDS = 3600
 
 
 def _now() -> str:
@@ -67,6 +70,8 @@ class FeishuProactiveState:
     last_records_collected: int = 0
     last_approval_requests_sent: int = 0
     last_packets_enqueued: int = 0
+    last_summary_tasks_at: str = ""
+    last_summary_tasks_created: int = 0
     last_error: str = ""
     updated_at: str = field(default_factory=_now)
 
@@ -83,6 +88,7 @@ class FeishuProactiveService:
         runtime_service: Any = None,
         approval_service: Any = None,
         registry: FeishuScopeRegistry | None = None,
+        summary_task_intake: SummaryTaskIntakeService | None = None,
     ) -> None:
         """绑定工作区、配置和可注入服务依赖。"""
         self.project_root = Path(project_root).resolve()
@@ -91,6 +97,7 @@ class FeishuProactiveService:
         self._runtime_service = runtime_service
         self._approval_service = approval_service
         self._registry = registry or FeishuScopeRegistry(self.project_root)
+        self._summary_task_intake = summary_task_intake or SummaryTaskIntakeService(self.project_root)
         self._state = FeishuProactiveState()
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -166,6 +173,7 @@ class FeishuProactiveService:
         records_collected = 0
         approval_requests_sent = 0
         packets_enqueued = 0
+        summary_tasks_created = 0
         last_error = ""
 
         if force or _is_due(state.last_discovery_at, DISCOVERY_INTERVAL_SECONDS):
@@ -179,11 +187,15 @@ class FeishuProactiveService:
 
         packets_enqueued = self._run_intake()
 
+        if force or _is_due(state.last_summary_tasks_at, SUMMARY_TASK_INTERVAL_SECONDS):
+            summary_tasks_created = self._run_summary_tasks()
+
         return self._update_state_after_tick(
             scopes_discovered=scopes_discovered,
             records_collected=records_collected,
             approval_requests_sent=approval_requests_sent,
             packets_enqueued=packets_enqueued,
+            summary_tasks_created=summary_tasks_created,
             last_error=last_error,
         )
 
@@ -282,6 +294,22 @@ class FeishuProactiveService:
             self._state = replace(self._state, last_intake_at=_now(), updated_at=_now())
         return result.packets_enqueued
 
+    def _run_summary_tasks(self) -> int:
+        """为冷却期已过的总结类型创建系统预制后台任务，返回本次创建数。"""
+        try:
+            result = self._summary_task_intake.create_due_summary_tasks()
+            with self._lock:
+                self._state = replace(
+                    self._state, last_summary_tasks_at=_now(), updated_at=_now()
+                )
+            return result.tasks_created
+        except Exception:  # noqa: BLE001
+            with self._lock:
+                self._state = replace(
+                    self._state, last_summary_tasks_at=_now(), updated_at=_now()
+                )
+            return 0
+
     def _update_state_after_tick(
         self,
         *,
@@ -289,6 +317,7 @@ class FeishuProactiveService:
         records_collected: int,
         approval_requests_sent: int,
         packets_enqueued: int,
+        summary_tasks_created: int,
         last_error: str,
     ) -> FeishuProactiveState:
         """把单次 tick 的结果写回服务状态。"""
@@ -301,6 +330,7 @@ class FeishuProactiveService:
                 last_records_collected=records_collected,
                 last_approval_requests_sent=approval_requests_sent,
                 last_packets_enqueued=packets_enqueued,
+                last_summary_tasks_created=summary_tasks_created,
                 last_error=last_error,
                 updated_at=_now(),
             )
