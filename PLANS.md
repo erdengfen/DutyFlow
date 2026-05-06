@@ -2578,7 +2578,276 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 - 第一版请求封装只服务飞书用户面 API，不抽象成通用 HTTP 客户端；后续如出现多个外部平台，再评估是否抽象。
 - 第一版预算只做固定上限，不做动态优先级和全局配额；后续需要结合联系人关系、群重要性、资源活跃度做分层调度。
 - 第一版主动感知不保证实时发现所有用户面变化；需要结合被动事件线索、增量轮询、按需补拉和可订阅资源事件逐步提升时效性。
-- 第一版只记录公共底层，不确定 6 个 collector 的落盘字段和触发细则；具体数据结构必须在实现前补充到 `docs/DATA_MODEL.md` 和本计划。
+- 公共底层代码已完成，下一阶段开始逐个明确 6 个 collector 的触发、权限、请求和落盘边界；具体数据结构必须在实现前补充到 `docs/DATA_MODEL.md` 和本计划。
+
+## Step 12B: 用户面主动感知 collector 设计
+
+### 当前决策
+
+状态：设计中。6 个 collector 共享 Step 12A 的 `FeishuUserClient`、统一请求封装、collector budget 和 sync_state，不再各自处理 token、重试、分页和状态续跑。每个 collector 先明确读取范围、授权边界、请求方式、落盘目标和第一版不做事项，再进入代码实现。
+
+第一批 collector 设计顺序：
+
+1. direct_message_collector
+2. group_message_collector
+3. user_document_collector
+4. group_document_collector
+5. meeting_minutes_collector
+6. bitable_collector
+
+### 统一落盘约定
+
+6 个用户面 collector 的 Markdown 结果统一落在 `data/ambient_context/` 总目录下，每个 collector 使用独立子目录。这样后续检索工具可以只扫描一个总目录，再按 `source_type/collector_name` 过滤，不需要散扫多个不相关路径。
+
+统一目录形态：
+
+```text
+data/ambient_context/
+  direct_message/
+  group_message/
+  user_document/
+  group_document/
+  meeting_minutes/
+  bitable/
+```
+
+统一索引建议：
+
+```text
+data/ambient_context/index.md
+data/ambient_context/<collector_family>/index.md
+```
+
+统一规则：
+
+- 单条记录必须是 Markdown，便于人工检查和现有本地检索工具扫描。
+- 单条记录 frontmatter 必须包含 `source_type`、`collector_name`、`record_id`、`source_id`、`created_at/fetched_at`、`sync_scope_id`。
+- 各 collector 可以有自己的子目录和字段，但必须共享一套 ambient_context 基础 formatter。
+- 大正文、大文档全文、会议记录全文、多维表格大快照不直接塞进单条 ambient_context；只保留摘要、hash、token/source_id 和 Evidence 或等价大对象路径。
+- 具体 schema 必须先补 `docs/DATA_MODEL.md`，再开始实现。
+
+### 预计新增/调整文件
+
+Step 12B 预计新增：
+
+- `src/dutyflow/feishu/collectors/__init__.py`
+- `src/dutyflow/feishu/collectors/direct_message_collector.py`
+- `src/dutyflow/feishu/collectors/group_message_collector.py`
+- `src/dutyflow/feishu/collectors/user_document_collector.py`
+- `src/dutyflow/feishu/collectors/group_document_collector.py`
+- `src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
+- `src/dutyflow/feishu/collectors/bitable_collector.py`
+- `src/dutyflow/feishu/ambient_context.py`
+- `test/test_feishu_direct_message_collector.py`
+- 后续对应其他 collector 测试文件。
+
+Step 12B 预计调整：
+
+- `docs/DATA_MODEL.md`：补充 ambient_context 基础 schema、collector 子类型 schema、索引表字段。
+- `docs/ARCHITECTURE.md`：补充主动感知 collector 层和统一落盘链路。
+- `PLANS.md`：逐个 collector 记录设计、状态和验收。
+- `src/dutyflow/feishu/__init__.py`：按需导出 collector 或共享 ambient_context 类型。
+- `src/dutyflow/config/env.py` / `.env.example`：如实现需要，补充允许同步的 p2p/group/resource scope 配置和默认预算开关。
+- CLI 相关文件：如需要手动触发/调试 collector，再补 `/feishu collect ...` 或等价本地命令入口。
+
+### 1. direct_message_collector
+
+#### 目标
+
+采集用户私信面，但第一版不承诺“全量监听用户所有私聊”。第一版只同步明确授权和明确范围内的 p2p 会话，作为用户面 ambient_context 的输入来源之一。
+
+第一版同步范围：
+
+- 用户显式绑定的 p2p `chat_id`。
+- 用户和 Bot 建立过上下文的 p2p 会话。
+- 用户指定 `message_id` / `chat_id` 的私聊范围。
+
+第一版不做：
+
+- 不做全量私信同步。
+- 不做“监听用户所有私聊”的产品承诺。
+- 不扫未知 p2p 会话列表。
+- 不把私信采集结果直接升级为任务或提醒；先作为 ambient_context 落盘，后续由权重层读取。
+
+#### 权限
+
+核心权限：
+
+- `im:message.p2p_msg:get_as_user`
+
+该权限用于以用户身份获取单聊消息。后续实现时如果接口返回权限错误，再按飞书权限页和错误码补充最小必要权限。
+
+可能需要但第一版不预先扩大：
+
+- `im:chat` 相关只读权限。
+- `im:message` 相关只读权限。
+
+权限原则：
+
+- 只读取用户授权范围内的 p2p 消息。
+- 权限错误映射为 `permission_denied`，写 sync_state 失败状态，不盲目重试。
+- 任何新增权限都必须在计划和 `.env`/OAuth scope 说明中可见。
+
+#### 请求方式
+
+不是长连接，不依赖飞书应用事件回调。使用 REST 拉取历史消息：
+
+```text
+GET /open-apis/im/v1/messages
+Authorization: Bearer <user_access_token>
+```
+
+Query 参数第一版形态：
+
+```json
+{
+  "container_id": "oc_xxx 或 p2p chat id",
+  "container_id_type": "chat",
+  "start_time": "Unix 秒级时间戳",
+  "end_time": "Unix 秒级时间戳",
+  "sort_type": "ByCreateTimeAsc 或 ByCreateTimeDesc",
+  "page_size": 50,
+  "page_token": "上一页返回的 page_token"
+}
+```
+
+请求约束：
+
+- 使用 `FeishuUserClient.get()` 或 `FeishuUserRequestClient.paged_request()`。
+- `collector_name` 固定为 `direct_message_collector`。
+- `scope_id` 使用 p2p `chat_id`。
+- `container_id_type` 第一版固定为 `chat`。
+- `page_size` 第一版使用 50，并受 collector budget 控制。
+- `start_time/end_time` 必须来自显式同步窗口或 sync_state，不做无边界历史回溯。
+- `sort_type` 第一版优先使用 `ByCreateTimeAsc`，便于按时间推进 cursor。
+
+#### 返回结构
+
+接口概念返回：
+
+```json
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "items": [
+      {
+        "message_id": "om_xxx",
+        "root_id": "om_xxx",
+        "parent_id": "om_xxx",
+        "create_time": "毫秒时间戳字符串",
+        "update_time": "毫秒时间戳字符串",
+        "chat_id": "oc_xxx",
+        "sender": {
+          "id": "ou_xxx",
+          "id_type": "open_id"
+        },
+        "body": {
+          "content": "{\"text\":\"...\"}"
+        },
+        "msg_type": "text | image | file | post | interactive"
+      }
+    ],
+    "has_more": true,
+    "page_token": "xxx"
+  }
+}
+```
+
+第一版解析字段：
+
+- `message_id`
+- `root_id`
+- `parent_id`
+- `create_time`
+- `update_time`
+- `chat_id`
+- `sender.id`
+- `sender.id_type`
+- `msg_type`
+- `body.content`
+
+第一版内容提取：
+
+- `text`：解析 `body.content` 中的文本。
+- `file_clues`：记录文件类消息的 `message_id`、`msg_type` 和可解析附件线索；正文和二进制不在本 collector 拉取。
+- `doc_links`：从文本或富文本内容中解析飞书云文档链接，保留 URL、资源类型和 token 线索。
+
+#### sync_state
+
+状态范围：
+
+```text
+collector_name = direct_message_collector
+surface_type = direct_message
+scope_id = <p2p_chat_id>
+```
+
+第一版 cursor 约定：
+
+- `cursor` 保存本轮已成功处理到的最大 `create_time`。
+- `next_cursor` 保存下一轮建议 `start_time`，从最大 `create_time` 推导为秒级时间戳。
+- 如果本轮失败，不推进 `cursor/next_cursor`，只写 `last_failure_at`、`last_error_kind`、`last_error_detail`。
+
+后续如果发现同毫秒多消息导致边界重复或遗漏，再补 `last_message_id` 或复合 cursor；第一版不引入复杂对象。
+
+#### 落盘目标
+
+第一版落盘为 ambient_context，不直接进入任务层。路径必须位于统一总目录 `data/ambient_context/` 下，便于后续本地检索工具集中扫描。
+
+建议路径：
+
+```text
+data/ambient_context/direct_message/YYYY-MM-DD/dm_<message_id>.md
+```
+
+建议索引路径：
+
+```text
+data/ambient_context/direct_message/index.md
+```
+
+单条 ambient_context 记录至少保留：
+
+- `source_type = direct_message`
+- `collector_name = direct_message_collector`
+- `chat_id`
+- `message_id`
+- `root_id`
+- `parent_id`
+- `sender_id`
+- `sender_id_type`
+- `msg_type`
+- `create_time`
+- `update_time`
+- `text_preview`
+- `doc_links`
+- `file_clues`
+- `raw_message_ref`
+- `sync_scope_id`
+- `fetched_at`
+
+注意：具体 frontmatter、section 和索引表结构必须先补进 `docs/DATA_MODEL.md`，再写实现代码。
+
+#### 第一版触发机制
+
+第一版只支持受限触发：
+
+- 手动触发：用户指定 `chat_id` 或 `message_id` 后补拉对应 p2p 范围。
+- 绑定触发：用户显式绑定 p2p `chat_id` 后，collector 才可按预算拉取最近 N 条。
+- 调试触发：CLI 或本地命令指定同步窗口，便于验证权限和落盘结构。
+
+不做实时性承诺。后续可在被动事件线索、用户显式绑定和轻量轮询之间组合，但第一版不建设复杂调度器。
+
+#### 第一版验收
+
+- 能对一个已绑定 p2p `chat_id` 拉取最近 N 条消息。
+- 能按 `page_token/has_more` 分页，并受 `CollectorBudget` 页数和条数上限控制。
+- 能把 text 消息解析为 ambient_context。
+- 能从消息文本中抽取飞书文档链接线索。
+- 能把文件/附件类消息保留为 file clue，不拉二进制正文。
+- 能按 `chat_id` 写入 sync_state 成功和失败状态。
+- 权限错误不重试，并可在 sync_state 和审计日志中看到原因。
 
 ## Step 13: 完整 Demo 链路验收
 
