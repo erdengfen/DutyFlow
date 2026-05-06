@@ -6,6 +6,9 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
+    "CollectorBudget",
+    "CollectorBudgetGuard",
+    "CollectorBudgetUsage",
     "FeishuClient",
     "FeishuClientResult",
     "FeishuEventAdapter",
@@ -20,6 +23,15 @@ __all__ = [
 ]
 
 _EXPORT_MAP = {
+    "CollectorBudget": ("dutyflow.feishu.collector_budget", "CollectorBudget"),
+    "CollectorBudgetGuard": (
+        "dutyflow.feishu.collector_budget",
+        "CollectorBudgetGuard",
+    ),
+    "CollectorBudgetUsage": (
+        "dutyflow.feishu.collector_budget",
+        "CollectorBudgetUsage",
+    ),
     "FeishuClient": ("dutyflow.feishu.client", "FeishuClient"),
     "FeishuClientResult": ("dutyflow.feishu.client", "FeishuClientResult"),
     "FeishuEventAdapter": ("dutyflow.feishu.events", "FeishuEventAdapter"),
@@ -57,11 +69,13 @@ def __getattr__(name: str) -> Any:
 
 def _self_test() -> None:
     """验证飞书接入层包导出的核心类型可被正常导入。"""
+    from dutyflow.feishu.collector_budget import CollectorBudget
     from dutyflow.feishu.client import FeishuClient
     from dutyflow.feishu.runtime import FeishuIngressService
     from dutyflow.feishu.user_request import FeishuUserRequestClient
     from dutyflow.feishu.user_token_provider import FeishuUserTokenProvider
 
+    assert CollectorBudget is not None
     assert FeishuClient is not None
     assert FeishuIngressService is not None
     assert FeishuUserRequestClient is not None

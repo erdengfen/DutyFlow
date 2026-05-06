@@ -2209,9 +2209,9 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 当前决策
 
-状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘和对应测试。继续补预算控制、sync_state 和现有用户资源客户端迁移。
+状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘、collector 预算控制和对应测试。继续补 sync_state 和现有用户资源客户端迁移。
 
-验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，528 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
+验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，535 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
 
 主动感知后续会拆成 6 个 collector：
 
@@ -2489,12 +2489,12 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
    - 覆盖 403 不重试并映射 `permission_denied`。
    - 覆盖 timeout、5xx、非零 code、无效响应和分页预算停止。
 
-8. 【未完成】新增 `src/dutyflow/feishu/collector_budget.py`。
+8. 【已完成】新增 `src/dutyflow/feishu/collector_budget.py`。
    - 实现 `CollectorBudget`、`CollectorBudgetUsage` 和 `CollectorBudgetGuard`。
    - 控制每轮最大页数、最大条数、正文最大读取量、请求超时、最大重试和失败退避。
    - 所有页数、条数、大小、超时、重试、退避默认值旁必须写中文注释说明用途。
 
-9. 【未完成】补充 collector budget 测试。
+9. 【已完成】补充 collector budget 测试。
    - 覆盖页数上限。
    - 覆盖条数上限。
    - 覆盖正文大小裁剪。
