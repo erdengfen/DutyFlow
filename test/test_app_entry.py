@@ -17,8 +17,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from dutyflow.app import DutyFlowApp
 from dutyflow.feishu.scope_registry import (  # noqa: E402
+    DRIVE_FOLDER_SCOPE,
     GROUP_CHAT_SCOPE,
     GROUP_MESSAGE_COLLECTOR,
+    USER_DOCUMENT_COLLECTOR,
     FeishuScopeRecord,
     FeishuScopeRegistry,
 )
@@ -220,6 +222,63 @@ class TestAppEntry(unittest.TestCase):
         self.assertEqual(payload["action"], "gm_collect")
         self.assertIn("/feishu discover groups", payload["detail"])
 
+    def test_feishu_docs_debug_discovers_root_candidate(self) -> None:
+        """应用层 /feishu docs discover root 应写入 root folder candidate。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DutyFlowApp(root)
+            fake_collector = _FakeUserDocumentCollector()
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                with patch.object(app, "_create_user_document_collector", return_value=fake_collector):
+                    payload = json.loads(app.run_feishu_docs_debug("discover root"))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "docs_discover_root")
+        self.assertEqual(payload["payload"]["root_folder_token"], "fld_root")
+        self.assertTrue(fake_collector.discover_root_called)
+
+    def test_feishu_docs_debug_runs_enabled_folder_collector(self) -> None:
+        """应用层 /feishu docs 应只消费 enabled drive_folder scope。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = DutyFlowApp(root)
+            _enable_user_document_scope(root, "fld_root")
+            fake_collector = _FakeUserDocumentCollector()
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                with patch.object(app, "_create_user_document_collector", return_value=fake_collector):
+                    payload = json.loads(app.run_feishu_docs_debug(""))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "docs_collect")
+        self.assertEqual(payload["payload"]["scope_count"], 1)
+        self.assertTrue(fake_collector.collect_enabled_called)
+
+    def test_feishu_docs_debug_reports_empty_without_enabled_folder_scope(self) -> None:
+        """未批准 root folder 时，/feishu docs 应提示先 discover root 和 approve。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = DutyFlowApp(Path(temp_dir))
+            config = SimpleNamespace(
+                feishu_tenant_key="tenant_1",
+                feishu_owner_open_id="ou_1",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app.load_env_config", return_value=config):
+                payload = json.loads(app.run_feishu_docs_debug(""))
+
+        self.assertEqual(payload["status"], "empty")
+        self.assertEqual(payload["action"], "docs_collect")
+        self.assertIn("/feishu docs discover root", payload["detail"])
+
     def test_feishu_scopes_debug_lists_seeded_owner_scope(self) -> None:
         """Scope Registry 调试入口应能 seed 并列出 owner p2p scope。"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -384,6 +443,55 @@ class _FakeGroupMessageCollector:
         )
 
 
+class _FakeUserDocumentCollector:
+    """模拟 user_document_collector，记录应用层调用。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.discover_root_called = False
+        self.collect_enabled_called = False
+
+    def discover_root(self, config: object, **kwargs: object) -> object:
+        """模拟 root folder 发现成功。"""
+        self.discover_root_called = True
+        record = FeishuScopeRecord(
+            account_id="tenant_1_ou_1",
+            scope_type=DRIVE_FOLDER_SCOPE,
+            scope_id="fld_root",
+            collector_names=(USER_DOCUMENT_COLLECTOR,),
+            discovered_from="oauth_drive_root",
+        )
+        return SimpleNamespace(
+            ok=True,
+            status="ok",
+            root_folder_token="fld_root",
+            scope_record=record,
+            detail="",
+        )
+
+    def collect_enabled_scopes(self, config: object, **kwargs: object) -> tuple[object, ...]:
+        """模拟 enabled folder 批量采集成功。"""
+        self.collect_enabled_called = True
+        return (
+            SimpleNamespace(
+                ok=True,
+                status="ok",
+                scope_id="fld_root",
+                scope_type=DRIVE_FOLDER_SCOPE,
+                items_written=1,
+                candidate_scopes_written=1,
+                record_paths=("data/ambient_context/user_document/2026-05-07/ud_docx_doxcn_1.md",),
+                cursor="1778040000",
+                next_cursor="",
+                has_more=False,
+                next_page_token="",
+                sync_state_path="data/feishu/sync_state/user_document_collector/fld_root.md",
+                stopped_reason="",
+                detail="",
+            ),
+        )
+
+
 def _enable_group_message_scope(root: Path, chat_id: str) -> None:
     """写入并启用一个 group_chat scope，供应用层 CLI 调试测试使用。"""
     registry = FeishuScopeRegistry(root)
@@ -392,6 +500,21 @@ def _enable_group_message_scope(root: Path, chat_id: str) -> None:
         scope_type=GROUP_CHAT_SCOPE,
         scope_id=chat_id,
         collector_names=(GROUP_MESSAGE_COLLECTOR,),
+        discovered_from="manual_add",
+    )
+    registry.upsert_candidate(record)
+    registry.approve_scope(record.account_id, record.scope_type, record.scope_id)
+    registry.enable_scope(record.account_id, record.scope_type, record.scope_id)
+
+
+def _enable_user_document_scope(root: Path, folder_token: str) -> None:
+    """写入并启用一个 drive_folder scope，供应用层 CLI 调试测试使用。"""
+    registry = FeishuScopeRegistry(root)
+    record = FeishuScopeRecord(
+        account_id="tenant_1_ou_1",
+        scope_type=DRIVE_FOLDER_SCOPE,
+        scope_id=folder_token,
+        collector_names=(USER_DOCUMENT_COLLECTOR,),
         discovered_from="manual_add",
     )
     registry.upsert_candidate(record)

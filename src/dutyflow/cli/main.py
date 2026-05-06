@@ -32,6 +32,9 @@ class HealthCheckProvider(Protocol):
     def run_feishu_gm_debug(self, arg_text: str) -> str:
         """运行飞书群消息 collector 调试。"""
 
+    def run_feishu_docs_debug(self, arg_text: str) -> str:
+        """运行飞书云文档 collector 调试。"""
+
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """查看飞书 Scope Registry。"""
 
@@ -220,6 +223,9 @@ class CliConsole:
         if normalized == "/feishu gm" or normalized.startswith("/feishu gm "):
             arg_text = normalized.removeprefix("/feishu gm").strip()
             return self.app.run_feishu_gm_debug(arg_text)
+        if normalized == "/feishu docs" or normalized.startswith("/feishu docs "):
+            arg_text = normalized.removeprefix("/feishu docs").strip()
+            return self.app.run_feishu_docs_debug(arg_text)
         if normalized == "/feishu dm" or normalized.startswith("/feishu dm "):
             arg_text = normalized.removeprefix("/feishu dm").strip()
             return self.app.run_feishu_dm_debug(arg_text)
@@ -256,6 +262,7 @@ class CliConsole:
             "/feishu status - 查看当前飞书监听状态\n"
             "/feishu dm - 拉取默认 p2p 私信窗口用于 collector 调试\n"
             "/feishu gm - 拉取 enabled 群消息范围用于 collector 调试\n"
+            "/feishu docs - 拉取 enabled 云盘文件夹清单用于 collector 调试\n"
             "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -301,6 +308,8 @@ def _feishu_help_text() -> str:
         "/feishu gm - 拉取所有 enabled group_chat 最近群消息用于 collector 调试\n"
         "/feishu gm 3600 - 拉取所有 enabled group_chat 最近 3600 秒群消息\n"
         "/feishu gm start end - 拉取所有 enabled group_chat 指定秒级时间窗口\n"
+        "/feishu docs discover root - 发现我的空间 root folder 并写入 candidate\n"
+        "/feishu docs - 拉取所有 enabled drive_folder 的当前层级清单\n"
         "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
@@ -377,6 +386,10 @@ class _SelfTestApp:
         """返回自测群消息 collector 结果。"""
         return f'{{"action": "gm_collect", "detail": "{arg_text}"}}'
 
+    def run_feishu_docs_debug(self, arg_text: str) -> str:
+        """返回自测云文档 collector 结果。"""
+        return f'{{"action": "docs_collect", "detail": "{arg_text}"}}'
+
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """返回自测 scope registry 结果。"""
         return f'{{"action": "scopes", "detail": "{arg_text}"}}'
@@ -428,6 +441,7 @@ def _self_test() -> None:
     assert "listener_status" in cli.handle_command("/feishu")
     assert '"action": "dm_collect"' in cli.handle_command("/feishu dm")
     assert '"action": "gm_collect"' in cli.handle_command("/feishu gm 3600")
+    assert '"action": "docs_collect"' in cli.handle_command("/feishu docs")
     assert '"action": "scopes"' in cli.handle_command("/feishu scopes")
     assert '"action": "discover_groups"' in cli.handle_command("/feishu discover groups")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")

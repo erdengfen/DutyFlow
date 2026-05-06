@@ -2590,7 +2590,7 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 
 1. 【已完成】`direct_message_collector`
 2. 【已完成】`group_message_collector`
-3. 【未完成】`user_document_collector`
+3. 【已完成】`user_document_collector`
 4. 【未完成】`group_document_collector`
 5. 【未完成】`meeting_minutes_collector`
 6. 【未完成】`bitable_collector`
@@ -2609,14 +2609,14 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 - 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
 - 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
 - 【已完成】`src/dutyflow/feishu/collectors/group_message_collector.py`
-- 【未完成】`src/dutyflow/feishu/collectors/user_document_collector.py`
+- 【已完成】`src/dutyflow/feishu/collectors/user_document_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/group_document_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
 - 【未完成】`src/dutyflow/feishu/collectors/bitable_collector.py`
 - 【已完成】`docs/DATA_MODEL.md`：已补 ambient_context 和 direct_message 第一版数据结构。
 - 【已完成】`docs/ARCHITECTURE.md`：已补主动感知 collector 层和统一落盘链路。
-- 【已完成】`src/dutyflow/app.py`、`src/dutyflow/cli/main.py`：已补 `/feishu dm` 手动调试入口。
-- 【已完成】`test/test_feishu_ambient_context.py`、`test/test_feishu_direct_message_collector.py`、`test/test_cli_chat.py`、`test/test_app_entry.py`
+- 【已完成】`src/dutyflow/app.py`、`src/dutyflow/cli/main.py`：已补 `/feishu dm`、`/feishu gm`、`/feishu docs` 手动调试入口。
+- 【已完成】`test/test_feishu_ambient_context.py`、`test/test_feishu_direct_message_collector.py`、`test/test_feishu_group_message_collector.py`、`test/test_feishu_user_document_collector.py`、`test/test_cli_chat.py`、`test/test_app_entry.py`
 
 ### direct_message_collector
 
@@ -2635,6 +2635,31 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 - 【已完成】`/feishu dm 3600` 成功拉取用户与 bot 的 p2p 历史消息并落盘 14 条。
 - 【已完成】`/feishu dm 600` 成功拉取 9 条窗口内消息，普通文本、长文本和 wiki 链接均可落盘；wiki token `ETu9w4qYlity6Akiqypcy2kwnTf` 可被提取。
 
+### user_document_collector
+
+状态：【已完成】2026-05-07 完成第一版 root folder 发现、enabled drive_folder 当前层级清单采集、测试和 CLI 调试入口。当前只枚举文件夹清单，不递归子文件夹，不读取云文档正文。
+
+权限边界：
+
+- 【已确认】基础只读权限：`drive:drive:readonly`、`docx:document:readonly`。
+- 【已记录】搜索补充权限：`search:docs:read`、`drive:drive.search:readonly`。第一版不使用搜索接口；此前搜索 API 找不到云盘文件的路径先作为风险记录，当前优先使用 root folder + folder list。
+
+核心边界：
+
+- 【已完成】`/feishu docs discover root` 调用 `GET /open-apis/drive/explorer/v2/root_folder/meta`，只写 `candidate drive_folder`，不自动同步清单。
+- 【已完成】用户通过 `/feishu approve <folder_token>` 批准后，`/feishu docs` 消费 enabled `drive_folder`。
+- 【已完成】文件夹清单调用 `GET /open-apis/drive/v1/files`，固定使用 `order_by=EditedTime`、`direction=DESC`、`page_size=50`，支持 `page_token` 分页和预算停止。
+- 【已完成】清单 item 落盘为 `data/ambient_context/user_document/YYYY-MM-DD/ud_<file_type>_<token>.md`，只保存标题、类型、URL、owner、创建/修改时间、文档链接和普通文件线索。
+- 【已完成】文件夹清单中发现的子文件夹、文档、wiki 和普通文件只写 `candidate` scope，不自动 enabled，不读取正文或二进制。
+- 【已完成】如用户后续批准 `doc`、`wiki`、`file` 直接 scope，第一版只落一条 scope 元数据记录，不发起正文或二进制读取。
+- 【已完成】sync_state 按 folder token 写入；如果单轮因页数预算停止，`next_cursor` 保存下一页 `page_token` 供后续继续。
+
+待补边界：
+
+- 【未完成】不递归子文件夹；子文件夹需要用户批准后作为新的 enabled `drive_folder` 再采集。
+- 【未完成】不读取 docx 正文；后续如需要文档正文，应单独设计大正文 Evidence 落盘和预算。
+- 【未完成】不接搜索接口；如后续要按关键词补查用户可见云文档，再单独接入搜索权限和接口。
+
 ### 已知缺陷和后续项
 
 - 【未完成】当前不是“全量私信监听”，也不主动发现用户所有私聊；后续如要扩大范围，需要 p2p scope registry，让用户显式登记或确认候选 scope。
@@ -2650,6 +2675,9 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，562 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector`，10 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，563 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_user_document_collector test.test_cli_chat test.test_app_entry`，44 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.collectors.user_document_collector`，模块自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，612 tests OK。
 
 ## Step 12C: Feishu Scope Registry
 
@@ -2680,7 +2708,7 @@ Scope Registry
 - 【已完成】支持最小状态：`candidate`、`approved`、`enabled`、`disabled`、`permission_denied`、`stale`。
 - 【已完成】支持最小接口：`upsert_candidate()`、`approve_scope()`、`enable_scope()`、`disable_scope()`、`list_enabled()`、`mark_success()`、`mark_permission_denied()`。
 - 【已完成】支持最小 scope 类型：`p2p_chat`、`group_chat`、`drive_folder`、`doc`、`wiki`、`file`、`bitable_app`、`bitable_table`、`meeting_minutes`。
-- 【已完成】支持来源记录：`env`、`bind_command`、`bot_event`、`manual_add`、`oauth_chat_list`、`group_message_link`、`user_shared_url`。
+- 【已完成】支持来源记录：`env`、`bind_command`、`bot_event`、`manual_add`、`oauth_chat_list`、`oauth_drive_root`、`drive_folder_list`、`group_message_link`、`user_shared_url`。
 - 【已完成】把 `approved` 和 `enabled` 分开：前者表示用户允许，后者表示当前运行中消费。
 - 【已完成】权限失败只标记状态，不盲重试，不自动扩大权限。
 
@@ -2714,7 +2742,7 @@ data/feishu/
 
 - 【已完成】`direct_message_collector` 消费 `p2p_chat`。
 - 【已完成】`group_message_collector` 消费 `group_chat`。
-- 【未完成】`user_document_collector` 消费 `drive_folder`、`doc`、`wiki`、`file`。
+- 【已完成】`user_document_collector` 第一版消费 `drive_folder`，并对已批准的 `doc`、`wiki`、`file` 直接 scope 只沉淀元数据；文件夹清单发现的新资源只写 candidate，不读取正文。
 - 【未完成】`group_document_collector` 消费 `group_chat`、`doc`、`wiki`、`file`。
 - 【未完成】`meeting_minutes_collector` 消费 `meeting_minutes`。
 - 【未完成】`bitable_collector` 消费 `bitable_app`、`bitable_table`。

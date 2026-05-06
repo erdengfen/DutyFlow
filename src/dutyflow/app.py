@@ -33,11 +33,14 @@ from dutyflow.config.env import load_env_config
 from dutyflow.feishu.collectors.direct_message_collector import DirectMessageCollector
 from dutyflow.feishu.collectors.group_candidate_discovery import GroupCandidateDiscovery
 from dutyflow.feishu.collectors.group_message_collector import GroupMessageCollector
+from dutyflow.feishu.collectors.user_document_collector import UserDocumentCollector
 from dutyflow.feishu.oauth import FeishuOAuthManager
 from dutyflow.feishu.runtime import FeishuIngressService
 from dutyflow.feishu.scope_registry import (
     DIRECT_MESSAGE_COLLECTOR,
+    DRIVE_FOLDER_SCOPE,
     GROUP_MESSAGE_COLLECTOR,
+    USER_DOCUMENT_COLLECTOR,
     FeishuScopeRecord,
     FeishuScopeRegistry,
     seed_owner_p2p_scope,
@@ -337,6 +340,23 @@ class DutyFlowApp:
             return _feishu_error("gm_collect_failed", str(exc))
         return _gm_collect_debug_payload(results, parsed)
 
+    def run_feishu_docs_debug(self, arg_text: str) -> str:
+        """用 owner 用户身份运行云文档 root 发现或 enabled folder 清单采集。"""
+        config = load_env_config(self.project_root)
+        action = arg_text.strip()
+        if action in {"discover root", "root"}:
+            return self._run_feishu_docs_root_discovery(config)
+        if action not in {"", "collect"}:
+            return _feishu_error("invalid_args", _docs_usage_text())
+        if not _has_enabled_user_document_scope(self.project_root, config):
+            return _docs_collect_debug_payload(())
+        try:
+            collector = self._create_user_document_collector(config)
+            results = collector.collect_enabled_scopes(config, save_raw=True)
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("docs_collect_failed", str(exc))
+        return _docs_collect_debug_payload(results)
+
     def run_feishu_scopes_debug(self, arg_text: str) -> str:
         """查看飞书 Scope Registry 当前记录。"""
         config = load_env_config(self.project_root)
@@ -387,6 +407,25 @@ class DutyFlowApp:
                 "scopes": [_scope_payload(r, self.project_root) for r in result.scope_records],
             },
         )
+
+    def _run_feishu_docs_root_discovery(self, config: object) -> str:
+        """执行云盘 root folder 发现调试链路。"""
+        try:
+            collector = self._create_user_document_collector(config)
+            result = collector.discover_root(config, save_raw=True)
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("docs_discover_root_failed", str(exc))
+        return _docs_root_discovery_payload(result, self.project_root)
+
+    def _create_user_document_collector(self, config: object) -> UserDocumentCollector:
+        """构造 user_document_collector 及其用户面请求 client。"""
+        oauth_manager = FeishuOAuthManager(config, self.project_root)
+        user_client = FeishuUserClient.from_oauth_manager(
+            oauth_manager,
+            audit_logger=self._create_audit_logger(config),
+            raw_response_enabled=True,
+        )
+        return UserDocumentCollector(self.project_root, user_client)
 
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """禁用一个飞书 scope。"""
@@ -877,6 +916,16 @@ def _has_enabled_group_message_scope(project_root: Path, config: object) -> bool
     return bool(registry.list_enabled(GROUP_MESSAGE_COLLECTOR, account_id=account_id))
 
 
+def _has_enabled_user_document_scope(project_root: Path, config: object) -> bool:
+    """判断当前账号是否已有 enabled drive_folder 可供云文档 collector 消费。"""
+    registry = FeishuScopeRegistry(project_root)
+    account_id = scope_account_id_from_config(config)
+    return any(
+        scope.scope_type == DRIVE_FOLDER_SCOPE
+        for scope in registry.list_enabled(USER_DOCUMENT_COLLECTOR, account_id=account_id)
+    )
+
+
 def _dm_args_need_default_chat_id(arg_text: str) -> bool:
     """判断 /feishu dm 参数是否需要默认 chat_id。"""
     tokens = [_clean_dm_token(token) for token in arg_text.split()]
@@ -1055,6 +1104,80 @@ def _gm_collect_debug_payload(results: Sequence[object], parsed: _GmDebugArgs) -
     )
 
 
+def _docs_root_discovery_payload(result: object, project_root: Path) -> str:
+    """把云盘 root folder 发现结果格式化为 CLI 调试 JSON。"""
+    record = getattr(result, "scope_record", None)
+    payload = {
+        "root_folder_token": str(getattr(result, "root_folder_token", "")),
+        "scope": _scope_payload(record, project_root) if record is not None else {},
+    }
+    return _feishu_debug_payload(
+        status="ok" if bool(getattr(result, "ok", False)) else "error",
+        action="docs_discover_root",
+        event_id="",
+        message_id="",
+        record_path=_scope_record_path(record, project_root) if record is not None else "",
+        detail=str(getattr(result, "detail", "") or getattr(result, "status", "")),
+        payload=payload,
+    )
+
+
+def _docs_collect_debug_payload(results: Sequence[object]) -> str:
+    """把 user_document_collector 批量结果格式化为 CLI 调试 JSON。"""
+    records = tuple(results)
+    return _feishu_debug_payload(
+        status=_docs_collect_status(records),
+        action="docs_collect",
+        event_id="",
+        message_id="",
+        record_path=_first_collect_record_path(records),
+        detail=_docs_collect_detail(records),
+        payload={
+            "scope_count": len(records),
+            "items_written_total": sum(int(getattr(item, "items_written", 0) or 0) for item in records),
+            "candidate_scopes_written_total": sum(
+                int(getattr(item, "candidate_scopes_written", 0) or 0) for item in records
+            ),
+            "results": [_document_collect_result_payload(item) for item in records],
+        },
+    )
+
+
+def _docs_collect_status(results: Sequence[object]) -> str:
+    """返回云文档批量调试的总体状态。"""
+    if not results:
+        return "empty"
+    return "ok" if all(bool(getattr(item, "ok", False)) for item in results) else "error"
+
+
+def _docs_collect_detail(results: Sequence[object]) -> str:
+    """返回云文档批量调试的人可读摘要。"""
+    if not results:
+        return "no enabled drive_folder scope; run /feishu docs discover root then /feishu approve <folder_token>"
+    for item in results:
+        if not bool(getattr(item, "ok", False)):
+            return str(getattr(item, "detail", "") or getattr(item, "status", ""))
+    return "ok"
+
+
+def _document_collect_result_payload(result: object) -> dict[str, object]:
+    """构造单个云文档 collector 结果的 CLI payload。"""
+    return {
+        "scope_id": str(getattr(result, "scope_id", "")),
+        "scope_type": str(getattr(result, "scope_type", "")),
+        "collector_status": str(getattr(result, "status", "")),
+        "items_written": int(getattr(result, "items_written", 0) or 0),
+        "candidate_scopes_written": int(getattr(result, "candidate_scopes_written", 0) or 0),
+        "record_paths": tuple(getattr(result, "record_paths", ()) or ()),
+        "cursor": str(getattr(result, "cursor", "")),
+        "next_cursor": str(getattr(result, "next_cursor", "")),
+        "has_more": bool(getattr(result, "has_more", False)),
+        "next_page_token": str(getattr(result, "next_page_token", "")),
+        "sync_state_path": str(getattr(result, "sync_state_path", "")),
+        "stopped_reason": str(getattr(result, "stopped_reason", "")),
+    }
+
+
 def _gm_collect_status(results: Sequence[object]) -> str:
     """返回群消息批量调试的总体状态。"""
     if not results:
@@ -1118,6 +1241,11 @@ def _dm_usage_text() -> str:
 def _gm_usage_text() -> str:
     """返回 /feishu gm 的短用法说明。"""
     return "usage: /feishu gm [lookback_seconds] or /feishu gm <start_time> <end_time>"
+
+
+def _docs_usage_text() -> str:
+    """返回 /feishu docs 的短用法说明。"""
+    return "usage: /feishu docs discover root or /feishu docs"
 
 
 def _is_integer_text(value: str) -> bool:

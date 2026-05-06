@@ -1152,6 +1152,40 @@ update_time: "1770000000000"
 - `doc_links`：在正文 `Doc Links` 表中保存 URL、资源类型和 token 线索。
 - `file_clues`：在正文 `File Clues` 表中保存附件类消息线索，不在本 collector 下载二进制正文。
 
+### 5.2.2 用户云文档主动感知记录
+
+`user_document_collector` 第一版只枚举用户已批准 `drive_folder` scope 的当前层级清单，不递归子文件夹，不读取大文档正文，不依赖搜索接口。
+
+文件位置：
+
+```text
+data/ambient_context/user_document/YYYY-MM-DD/ud_<file_type>_<token>.md
+```
+
+用户云文档记录额外 frontmatter：
+
+```yaml
+file_token: doxcn_xxx
+file_name: 项目计划
+file_type: docx
+file_url: https://example.feishu.cn/docx/xxx
+created_time: "1770000000"
+modified_time: "1770000000"
+owner_id: ou_xxx
+parent_folder_token: fldxxx
+```
+
+字段说明：
+
+- `file_token`：飞书云盘清单返回的资源 token，是记录主要溯源 ID。
+- `file_type`：飞书返回的资源类型，例如 `docx`、`doc`、`sheet`、`bitable`、`mindnote`、`folder`、`file`、`shortcut`。
+- `parent_folder_token`：本轮被枚举的文件夹 token，也是第一版 sync scope。
+- `doc_links`：云文档类资源在正文 `Doc Links` 表中保存 URL、资源类型和 token。
+- `file_clues`：普通文件只保存文件线索，不下载二进制内容。
+- 文件夹清单中发现的子文件夹、文档、wiki 和普通文件只写入 `candidate` scope，不自动启用。
+- 用户批准 `doc`、`wiki`、`file` 直接 scope 后，第一版只落一条 scope 元数据记录，不读取正文或二进制内容。
+- 搜索接口仅作为后续补充能力记录：如需要关键词搜索当前用户可见云文档，可再接 `search:docs:read` 和 `drive:drive.search:readonly`；当前实现优先使用 root folder + folder list，避免继续依赖此前效果不稳定的搜索路径。
+
 ## 5.3 飞书同步范围注册表
 
 Feishu Scope Registry 是用户授权后的飞书资源同步边界控制面，只记录哪些范围允许被 collector 同步，不保存正文、二进制、token 或同步 cursor。
