@@ -302,7 +302,12 @@ def _http_error_response(
     raw_path: str,
 ) -> FeishuUserResponse:
     """把 HTTP 非 200 响应映射成稳定状态。"""
-    if http_status == 401:
+    code = _int_value(body.get("code"), -1)
+    if code in _TOKEN_INVALID_FEISHU_CODES:
+        status = "reauth_required"
+    elif code in _PERMISSION_DENIED_FEISHU_CODES:
+        status = "permission_denied"
+    elif http_status == 401:
         status = "reauth_required"
     elif http_status == 403:
         status = "permission_denied"
@@ -317,7 +322,7 @@ def _http_error_response(
     return _error_response(
         status,
         http_status,
-        _int_value(body.get("code"), -1),
+        code,
         body,
         raw_path,
     )

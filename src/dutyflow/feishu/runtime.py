@@ -81,6 +81,8 @@ class FeishuIngressService:
         self.latest_result: FeishuIngressResult | None = None
         self._ensure_events_dir()
         self.seen_event_ids, self.seen_message_ids = self._load_dedup_state()
+        self._oauth_lock = threading.Lock()
+        self._oauth_in_progress = False
 
     def start_long_connection(self) -> FeishuClientResult:
         """启动长连接接入骨架，收到事件后交给当前服务处理。"""
@@ -394,6 +396,9 @@ class FeishuIngressService:
             )
             return {"oauth_action": "config_missing"}
 
+        if not self._reserve_oauth_flow(envelope.chat_id):
+            return {"oauth_action": "already_running"}
+
         manager = FeishuOAuthManager(self.config, self.project_root)
         state = secrets.token_hex(16)
         auth_url = manager.build_authorize_url(state)
@@ -414,6 +419,18 @@ class FeishuIngressService:
             "oauth_action": "started",
             "oauth_state": state,
         }
+
+    def _reserve_oauth_flow(self, chat_id: str) -> bool:
+        """确保同一进程内一次只运行一个 OAuth callback server。"""
+        with self._oauth_lock:
+            if self._oauth_in_progress:
+                self.feedback_gateway.send_text(
+                    chat_id,
+                    "已有 OAuth 授权流程正在等待浏览器回调，请先完成当前链接或等待超时后再重试。",
+                )
+                return False
+            self._oauth_in_progress = True
+            return True
 
     def _run_oauth_background(
         self,
@@ -452,6 +469,9 @@ class FeishuIngressService:
             print(f"[OAuth] 后台线程异常: {exc}", flush=True)
             traceback.print_exc()
             self.feedback_gateway.send_text(chat_id, f"OAuth 授权失败：{exc}")
+        finally:
+            with self._oauth_lock:
+                self._oauth_in_progress = False
 
     def _apply_oauth_result_to_config(
         self,

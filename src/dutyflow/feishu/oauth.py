@@ -213,7 +213,7 @@ def _wait_for_oauth_code(port: int, state: str, timeout: float) -> str:
         def log_message(self, format: str, *args: object) -> None:
             pass  # 抑制 HTTP server 默认 stderr 输出，避免污染日志
 
-    server = http.server.HTTPServer(("127.0.0.1", port), _CallbackHandler)
+    server = _OAuthCallbackHTTPServer(("127.0.0.1", port), _CallbackHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
@@ -222,10 +222,17 @@ def _wait_for_oauth_code(port: int, state: str, timeout: float) -> str:
     finally:
         server.shutdown()
         server_thread.join(timeout=5.0)
+        server.server_close()
 
     if not result_holder:
         raise TimeoutError(f"等待 OAuth callback 超时（{timeout:.0f} 秒）")
     return result_holder[0]
+
+
+class _OAuthCallbackHTTPServer(http.server.HTTPServer):
+    """允许 OAuth callback 临时端口在短时间内重复绑定。"""
+
+    allow_reuse_address = True
 
 
 def _write_html_response(

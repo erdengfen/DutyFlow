@@ -2649,11 +2649,11 @@ Step 12B 预计调整：
 - 【进行中】`PLANS.md`：逐个 collector 记录设计、状态和验收。
 - 【已完成】`src/dutyflow/feishu/__init__.py`：导出 ambient_context 和 direct_message_collector 类型。
 - `src/dutyflow/config/env.py` / `.env.example`：如实现需要，补充允许同步的 p2p/group/resource scope 配置和默认预算开关。
-- CLI 相关文件：如需要手动触发/调试 collector，再补 `/feishu collect ...` 或等价本地命令入口。
+- 【已完成】CLI 相关文件：已补 `/feishu dm` 轻量调试入口，用于手动触发 `direct_message_collector`。
 
 ### 1. direct_message_collector
 
-状态：【已完成】2026-05-06 已完成第一版实现、文档更新和测试。当前只提供代码层 collector，不新增 CLI 调度入口。
+状态：【已完成】2026-05-06 已完成第一版实现、文档更新、测试和轻量 CLI 调试入口。当前只提供手动调试入口，不接正式 loop 调度。
 
 #### 目标
 
@@ -2838,9 +2838,28 @@ data/ambient_context/direct_message/index.md
 
 - 手动触发：用户指定 `chat_id` 或 `message_id` 后补拉对应 p2p 范围。
 - 绑定触发：用户显式绑定 p2p `chat_id` 后，collector 才可按预算拉取最近 N 条。
-- 调试触发：CLI 或本地命令指定同步窗口，便于验证权限和落盘结构。
+- 调试触发：CLI `/feishu dm` 或本地命令指定同步窗口，便于验证权限和落盘结构。
 
 不做实时性承诺。后续可在被动事件线索、用户显式绑定和轻量轮询之间组合，但第一版不建设复杂调度器。
+
+#### p2p scope 获取策略
+
+第一版不是主动发现用户所有私聊，而是显式 scope 注册模型：
+
+- 【已完成】用户与 bot 私聊发送 `/bind` 后，接入层会把当前 p2p `chat_id` 写入 `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID`，`/feishu dm` 默认使用该 scope。
+- 【已完成】如果已有 bot 可见事件落盘，可从 `data/perception/YYYY-MM-DD/per_*.md` 中筛选 `chat_type: p2p` 的 `chat_id` 作为 scope。
+- 【已完成】CLI 调试允许显式传入 `chat_id`：`/feishu dm oc_xxx 3600` 或 `/feishu dm oc_xxx start end`。
+- 【未完成】后续如要“自助收集更多私聊”，应先建设 p2p scope registry，让用户用明确命令登记允许同步的 p2p 会话；不默认扫未知私聊列表。
+- 【未完成】主动发现只能作为后续增强，前提是飞书权限、接口和产品确认都允许列出用户会话；即便支持，也必须先生成候选 scope 供用户确认，不直接同步正文。
+
+#### 2026-05-06 调试修复
+
+- 【已完成】修复 `/feishu dm 3600：` 尾随中英文冒号导致 `3600：` 被误解析为 `chat_id` 的问题。
+- 【已完成】修复飞书 HTTP 400 + `code=99991679` 被归一为 `api_error` 的问题；现在会映射为 `permission_denied`。
+- 【已确认】真实 `oc_xxx` 失败的 raw 响应来自飞书端用户授权不足，缺少用户身份下 `im:message.history:readonly`、`im:message:readonly` 或 `im:message` 之一；需要在飞书开放平台增加权限并重新执行 `/oauth`。
+- 【已完成】修复 OAuth callback 临时 server 未显式 `server_close()` 的问题，并允许短时间端口重绑。
+- 【已完成】同一进程内重复发送 `/oauth` 时不再启动第二个 callback server，避免固定端口 `9768` 被并发流程抢占。
+- 【已调整】OAuth callback 单测改用动态临时端口，避免测试占用真实飞书 redirect URI 端口。
 
 #### 第一版验收
 
@@ -2857,14 +2876,24 @@ data/ambient_context/direct_message/index.md
 - 【已完成】`src/dutyflow/feishu/ambient_context.py`
 - 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
 - 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
+- 【已完成】`src/dutyflow/cli/main.py`
+- 【已完成】`src/dutyflow/app.py`
 - 【已完成】`test/test_feishu_ambient_context.py`
 - 【已完成】`test/test_feishu_direct_message_collector.py`
+- 【已完成】`test/test_cli_chat.py`
+- 【已完成】`test/test_app_entry.py`
 
 测试记录：
 
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，90 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector`，9 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，68 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，556 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，559 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_app_entry test.test_cli_chat test.test_feishu_user_request test.test_feishu_direct_message_collector`，40 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，92 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，561 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_oauth test.test_feishu_user_token_provider test.test_feishu_user_request`，67 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_oauth test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，142 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，562 tests OK。
 
 ## Step 13: 完整 Demo 链路验收
 

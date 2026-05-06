@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import json
+import socket
 import sys
 import threading
 import time
@@ -17,11 +18,11 @@ if str(SRC_ROOT) not in sys.path:
 
 from dutyflow.feishu.oauth import (  # noqa: E402
     FeishuOAuthManager,
-    OAUTH_CALLBACK_PORT,
     _compute_expires_at,
     _build_basic_credentials,
     _parse_feishu_response,
     _token_needs_refresh,
+    _wait_for_oauth_code,
 )
 from dutyflow.feishu.events import FeishuEventAdapter  # noqa: E402
 
@@ -248,13 +249,13 @@ class TestPersistTokenResult(unittest.TestCase):
 class TestCallbackServerStateValidation(unittest.TestCase):
     """验证 callback server 在收到错误 state 时不提取 code，正确 state 时返回 code。"""
 
-    def _hit_callback(self, path: str, delay: float = 0.05) -> None:
+    def _hit_callback(self, port: int, path: str, delay: float = 0.05) -> None:
         """在后台线程向 callback server 发送 GET 请求。"""
         def _send() -> None:
             time.sleep(delay)
             try:
                 urllib.request.urlopen(
-                    f"http://127.0.0.1:{OAUTH_CALLBACK_PORT}{path}", timeout=3
+                    f"http://127.0.0.1:{port}{path}", timeout=3
                 )
             except Exception:
                 pass
@@ -262,16 +263,16 @@ class TestCallbackServerStateValidation(unittest.TestCase):
         threading.Thread(target=_send, daemon=True).start()
 
     def test_correct_state_returns_code(self) -> None:
-        self._hit_callback("/feishu/oauth/callback?code=abc123&state=good_state")
-        manager = FeishuOAuthManager(_make_config(), Path("/tmp"))
-        code = manager.start_callback_server("good_state", timeout=5.0)
+        port = _free_local_port()
+        self._hit_callback(port, "/feishu/oauth/callback?code=abc123&state=good_state")
+        code = _wait_for_oauth_code(port, "good_state", timeout=5.0)
         self.assertEqual(code, "abc123")
 
     def test_wrong_state_causes_timeout(self) -> None:
-        self._hit_callback("/feishu/oauth/callback?code=abc123&state=wrong_state")
-        manager = FeishuOAuthManager(_make_config(), Path("/tmp"))
+        port = _free_local_port()
+        self._hit_callback(port, "/feishu/oauth/callback?code=abc123&state=wrong_state")
         with self.assertRaises(TimeoutError):
-            manager.start_callback_server("expected_state", timeout=1.0)
+            _wait_for_oauth_code(port, "expected_state", timeout=1.0)
 
 
 class TestOAuthRequestDetection(unittest.TestCase):
@@ -364,6 +365,24 @@ class TestRuntimeOAuthHandling(unittest.TestCase):
 
         self.assertEqual(result.get("oauth_action"), "started")
         self.assertIn("oauth_state", result)
+
+    def test_second_oauth_request_is_rejected_while_callback_waits(self) -> None:
+        service = self._make_service(has_oauth_config=True)
+        envelope = self._make_envelope("/oauth")
+        unblock = threading.Event()
+
+        def _wait_for_test(_manager: object, _state: str, _timeout: float = 300.0) -> str:
+            unblock.wait(timeout=1.0)
+            raise TimeoutError("test")
+
+        with patch.object(FeishuOAuthManager, "start_callback_server", _wait_for_test):
+            first = service._handle_oauth_request(envelope)
+            second = service._handle_oauth_request(envelope)
+            unblock.set()
+            time.sleep(0.05)
+
+        self.assertEqual(first.get("oauth_action"), "started")
+        self.assertEqual(second.get("oauth_action"), "already_running")
 
     def test_apply_oauth_result_syncs_token_expires_at(self) -> None:
         service = self._make_service(has_oauth_config=True)
@@ -619,6 +638,13 @@ def _self_test() -> None:
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
         raise SystemExit(1)
+
+
+def _free_local_port() -> int:
+    """返回一个当前可绑定的本地临时端口，避免测试占用真实 OAuth 端口。"""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 if __name__ == "__main__":

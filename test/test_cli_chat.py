@@ -25,6 +25,7 @@ class TestCliChat(unittest.TestCase):
         self.assertIn("/chat latest", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/agent state", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu status", CliConsole(_FakeApp()).handle_command("/help"))
+        self.assertIn("/feishu dm", CliConsole(_FakeApp()).handle_command("/help"))
         self.assertIn("/feishu doctor", CliConsole(_FakeApp()).handle_command("/help"))
 
     def test_chat_command_submits_non_blocking_task(self) -> None:
@@ -75,6 +76,13 @@ class TestCliChat(unittest.TestCase):
         self.assertIn('"action": "latest"', cli.handle_command("/feishu latest"))
         self.assertIn('"action": "doctor_status"', cli.handle_command("/feishu doctor"))
 
+    def test_feishu_dm_command_calls_app_debug_entry(self) -> None:
+        """CLI /feishu dm 应委托给 app 的私信 collector 调试入口。"""
+        output = CliConsole(_FakeApp()).handle_command("/feishu dm oc_1 3600")
+
+        self.assertIn('"action": "dm_collect"', output)
+        self.assertIn('"detail": "oc_1 3600"', output)
+
     def test_interactive_feishu_doctor_session_keeps_running(self) -> None:
         """交互式 /feishu doctor 应进入诊断子会话，直到 /back。"""
         cli = CliConsole(_FakeApp())
@@ -122,6 +130,10 @@ class _FakeApp:
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """返回测试飞书 fixture 结果。"""
         return f'{{"action": "fixture", "detail": "{user_text}"}}'
+
+    def run_feishu_dm_debug(self, arg_text: str) -> str:
+        """返回测试私信 collector 结果。"""
+        return f'{{"action": "dm_collect", "detail": "{arg_text}"}}'
 
     def get_feishu_status_debug(self) -> str:
         """返回测试飞书监听状态。"""

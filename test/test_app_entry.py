@@ -3,6 +3,7 @@
 from pathlib import Path
 import io
 import json
+from types import SimpleNamespace
 import sys
 import time
 import unittest
@@ -114,6 +115,58 @@ class TestAppEntry(unittest.TestCase):
         self.assertEqual(payload["status"], "empty")
         self.assertEqual(payload["action"], "no_runtime_loop")
 
+    def test_feishu_dm_debug_runs_collector_with_explicit_window(self) -> None:
+        """应用层 /feishu dm 调试入口应按显式窗口调用 collector。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        fake_collector = _FakeDirectMessageCollector()
+        with patch("dutyflow.app.FeishuUserClient.from_oauth_manager", return_value=object()):
+            with patch("dutyflow.app.DirectMessageCollector", return_value=fake_collector):
+                payload = json.loads(
+                    app.run_feishu_dm_debug("oc_1 1778039900 1778040100")
+                )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "dm_collect")
+        self.assertEqual(payload["payload"]["chat_id"], "oc_1")
+        self.assertEqual(payload["payload"]["start_time"], 1778039900)
+        self.assertEqual(payload["payload"]["end_time"], 1778040100)
+        self.assertEqual(fake_collector.collect_args["chat_id"], "oc_1")
+        self.assertTrue(fake_collector.collect_args["save_raw"])
+
+    def test_feishu_dm_debug_requires_registered_chat_id(self) -> None:
+        """未显式传 chat_id 且未完成绑定时，应提示先提供 p2p scope。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        with patch("dutyflow.app.load_env_config") as load_config:
+            load_config.return_value = SimpleNamespace(
+                feishu_owner_report_chat_id="",
+                log_dir=Path("data/logs"),
+            )
+            payload = json.loads(app.run_feishu_dm_debug(""))
+
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["action"], "missing_chat_id")
+        self.assertIn("/feishu dm", payload["detail"])
+
+    def test_feishu_dm_debug_treats_trailing_colon_number_as_lookback(self) -> None:
+        """尾随中英文冒号的数字参数应按 lookback 解析，而不是误当 chat_id。"""
+        app = DutyFlowApp(PROJECT_ROOT)
+        fake_collector = _FakeDirectMessageCollector()
+        with patch("dutyflow.app.load_env_config") as load_config:
+            load_config.return_value = SimpleNamespace(
+                feishu_owner_report_chat_id="oc_owner",
+                log_dir=Path("data/logs"),
+            )
+            with patch("dutyflow.app._now_unix_seconds", return_value=1778069714):
+                with patch("dutyflow.app.FeishuUserClient.from_oauth_manager", return_value=object()):
+                    with patch("dutyflow.app.DirectMessageCollector", return_value=fake_collector):
+                        payload = json.loads(app.run_feishu_dm_debug("3600："))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["payload"]["chat_id"], "oc_owner")
+        self.assertEqual(payload["payload"]["start_time"], 1778066114)
+        self.assertEqual(payload["payload"]["end_time"], 1778069714)
+        self.assertEqual(fake_collector.collect_args["chat_id"], "oc_owner")
+
     def test_submit_chat_debug_task_eventually_produces_latest_result(self) -> None:
         """提交非阻塞 /chat 任务后，应能轮询拿到最近结果。"""
         app = DutyFlowApp(PROJECT_ROOT)
@@ -186,6 +239,31 @@ class _FakeIngressService:
         """模拟长连接启动。"""
         self.started = True
         return object()
+
+
+class _FakeDirectMessageCollector:
+    """模拟 direct_message_collector，记录应用层传入参数。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.collect_args: dict[str, object] = {}
+
+    def collect(self, chat_id: str, **kwargs: object) -> object:
+        """记录 collector 参数并返回成功结果。"""
+        self.collect_args = {"chat_id": chat_id, **kwargs}
+        return SimpleNamespace(
+            ok=True,
+            status="ok",
+            items_written=1,
+            record_paths=("data/ambient_context/direct_message/2026-05-06/dm_om_1.md",),
+            cursor="1778040000000",
+            next_cursor="1778040000",
+            has_more=False,
+            next_page_token="",
+            sync_state_path="data/feishu/sync_state/direct_message_collector/oc_1.md",
+            stopped_reason="",
+            detail="",
+        )
 
 
 class _FakeChatSession:

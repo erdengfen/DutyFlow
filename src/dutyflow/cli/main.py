@@ -26,6 +26,9 @@ class HealthCheckProvider(Protocol):
     def run_feishu_fixture_debug(self, user_text: str) -> str:
         """运行本地飞书 fixture 接入调试。"""
 
+    def run_feishu_dm_debug(self, arg_text: str) -> str:
+        """运行飞书私信 collector 调试。"""
+
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态。"""
 
@@ -197,6 +200,9 @@ class CliConsole:
             return _feishu_listen_deprecated_text(self.app.get_feishu_status_debug())
         if normalized == "/feishu latest":
             return self.app.get_latest_feishu_debug()
+        if normalized == "/feishu dm" or normalized.startswith("/feishu dm "):
+            arg_text = normalized.removeprefix("/feishu dm").strip()
+            return self.app.run_feishu_dm_debug(arg_text)
         if normalized.startswith("/feishu fixture "):
             user_text = normalized.removeprefix("/feishu fixture").strip()
             return self.app.run_feishu_fixture_debug(user_text)
@@ -219,6 +225,7 @@ class CliConsole:
             "/agent state - 查看最近一次正式 runtime AgentState、projected messages 和 token budget\n"
             "/feishu - 查看当前飞书监听状态\n"
             "/feishu status - 查看当前飞书监听状态\n"
+            "/feishu dm - 拉取默认 p2p 私信窗口用于 collector 调试\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
             "/feishu doctor - 进入飞书长连接诊断模式\n"
             "/feishu latest - 查看最近一条飞书接入结果\n"
@@ -256,6 +263,9 @@ def _feishu_help_text() -> str:
         "/feishu - 查看当前飞书监听状态\n"
         "/feishu status - 查看当前飞书监听状态\n"
         "/feishu help - 查看飞书接入层调试命令\n"
+        "/feishu dm - 使用默认 p2p chat_id 拉取最近私信用于 collector 调试\n"
+        "/feishu dm oc_xxx 3600 - 指定 p2p chat_id，拉取最近 3600 秒\n"
+        "/feishu dm oc_xxx start end - 指定 p2p chat_id 和秒级时间窗口\n"
         "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
         "/feishu doctor - 进入飞书长连接诊断模式\n"
         "/feishu doctor status - 查看当前 doctor 诊断快照\n"
@@ -319,6 +329,10 @@ class _SelfTestApp:
         """返回自测飞书 fixture 结果。"""
         return f'{{"action": "fixture", "detail": "{user_text}"}}'
 
+    def run_feishu_dm_debug(self, arg_text: str) -> str:
+        """返回自测私信 collector 结果。"""
+        return f'{{"action": "dm_collect", "detail": "{arg_text}"}}'
+
     def get_feishu_status_debug(self) -> str:
         """返回自测飞书状态。"""
         return '{"action": "listener_status", "detail": "running"}'
@@ -352,6 +366,7 @@ def _self_test() -> None:
     assert '"action": "accepted"' in cli.handle_command("/chat ping")
     assert '"action": "agent_state"' in cli.handle_command("/agent state")
     assert "listener_status" in cli.handle_command("/feishu")
+    assert '"action": "dm_collect"' in cli.handle_command("/feishu dm")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")
     assert '"action": "no_state"' in cli.handle_command("/context compress")

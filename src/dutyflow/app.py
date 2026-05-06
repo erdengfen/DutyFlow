@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import os
 from typing import Any, Mapping, Sequence
 
@@ -29,7 +30,10 @@ from dutyflow.agent.model_client import OpenAICompatibleModelClient
 from dutyflow.agent.skills import SkillRegistry
 from dutyflow.cli.main import CliConsole
 from dutyflow.config.env import load_env_config
+from dutyflow.feishu.collectors.direct_message_collector import DirectMessageCollector
+from dutyflow.feishu.oauth import FeishuOAuthManager
 from dutyflow.feishu.runtime import FeishuIngressService
+from dutyflow.feishu.user_client import FeishuUserClient
 from dutyflow.feedback.gateway import FeedbackGateway
 from dutyflow.logging.audit_log import AuditLogger, build_audit_preview
 from dutyflow.storage.file_store import FileStore
@@ -37,6 +41,11 @@ from dutyflow.storage.markdown_store import MarkdownStore
 from dutyflow.agent.tools.registry import create_runtime_tool_registry
 from dutyflow.tasks.task_scheduler import TaskDispatchItem, TaskSchedulerService
 from dutyflow.tasks.task_state import TaskStore
+
+# 关键开关：CLI 私信 collector 调试默认回拉最近 3600 秒，避免一次命令误扫过大历史窗口。
+DEFAULT_DM_COLLECT_LOOKBACK_SECONDS = 3600
+# 关键开关：CLI 私信 collector 调试最大允许回拉 604800 秒，即 7 天，避免人工误输导致大范围拉取。
+MAX_DM_COLLECT_LOOKBACK_SECONDS = 604800
 
 
 @dataclass
@@ -263,6 +272,29 @@ class DutyFlowApp:
             detail=result.detail,
             payload=result.payload,
         )
+
+    def run_feishu_dm_debug(self, arg_text: str) -> str:
+        """用 owner 用户身份运行 direct_message_collector 的本地调试入口。"""
+        config = load_env_config(self.project_root)
+        parsed = _parse_dm_debug_args(arg_text, config.feishu_owner_report_chat_id)
+        if parsed.error_kind:
+            return _feishu_error(parsed.error_kind, parsed.detail)
+        try:
+            oauth_manager = FeishuOAuthManager(config, self.project_root)
+            user_client = FeishuUserClient.from_oauth_manager(
+                oauth_manager,
+                audit_logger=self._create_audit_logger(config),
+                raw_response_enabled=True,
+            )
+            result = DirectMessageCollector(self.project_root, user_client).collect(
+                parsed.chat_id,
+                start_time=parsed.start_time,
+                end_time=parsed.end_time,
+                save_raw=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("dm_collect_failed", str(exc))
+        return _dm_collect_debug_payload(result, parsed)
 
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态，不再承担启动监听的语义。"""
@@ -697,6 +729,119 @@ def _feishu_error(error_kind: str, message: str) -> str:
         record_path="",
         detail=message,
     )
+
+
+@dataclass(frozen=True)
+class _DmDebugArgs:
+    """表示 /feishu dm 调试命令解析后的参数。"""
+
+    chat_id: str
+    start_time: int
+    end_time: int
+    error_kind: str = ""
+    detail: str = ""
+
+
+def _parse_dm_debug_args(arg_text: str, default_chat_id: str) -> _DmDebugArgs:
+    """解析 /feishu dm 的短参数形式。"""
+    now = _now_unix_seconds()
+    tokens = [_clean_dm_token(token) for token in arg_text.split()]
+    tokens = [token for token in tokens if token]
+    chat_id = ""
+    time_tokens: list[str] = []
+    if not tokens:
+        chat_id = default_chat_id
+    elif _is_integer_text(tokens[0]):
+        chat_id = default_chat_id
+        time_tokens = tokens
+    else:
+        chat_id = tokens[0]
+        time_tokens = tokens[1:]
+    if not _is_real_env_value(chat_id):
+        return _dm_parse_error("missing_chat_id", _dm_usage_text())
+    return _parse_dm_time_tokens(chat_id, time_tokens, now)
+
+
+def _parse_dm_time_tokens(
+    chat_id: str,
+    time_tokens: list[str],
+    now: int,
+) -> _DmDebugArgs:
+    """解析 lookback 或 start/end 时间参数。"""
+    if not time_tokens:
+        return _DmDebugArgs(chat_id, now - DEFAULT_DM_COLLECT_LOOKBACK_SECONDS, now)
+    if len(time_tokens) == 1 and _is_integer_text(time_tokens[0]):
+        lookback = _bounded_dm_lookback(int(time_tokens[0]))
+        return _DmDebugArgs(chat_id, now - lookback, now)
+    if len(time_tokens) == 2 and all(_is_integer_text(value) for value in time_tokens):
+        start_time = int(time_tokens[0])
+        end_time = int(time_tokens[1])
+        if start_time >= end_time:
+            return _dm_parse_error("invalid_time_window", "start_time must be before end_time")
+        return _DmDebugArgs(chat_id, start_time, end_time)
+    return _dm_parse_error("invalid_args", _dm_usage_text())
+
+
+def _bounded_dm_lookback(value: int) -> int:
+    """把回拉秒数限制在 CLI 调试允许范围内。"""
+    if value <= 0:
+        return DEFAULT_DM_COLLECT_LOOKBACK_SECONDS
+    return min(value, MAX_DM_COLLECT_LOOKBACK_SECONDS)
+
+
+def _dm_collect_debug_payload(result: object, parsed: _DmDebugArgs) -> str:
+    """把 direct_message_collector 结果格式化为 CLI 调试 JSON。"""
+    record_paths = tuple(getattr(result, "record_paths", ()) or ())
+    return _feishu_debug_payload(
+        status="ok" if bool(getattr(result, "ok", False)) else "error",
+        action="dm_collect",
+        event_id="",
+        message_id="",
+        record_path=record_paths[0] if record_paths else "",
+        detail=str(getattr(result, "detail", "") or getattr(result, "status", "")),
+        payload={
+            "chat_id": parsed.chat_id,
+            "start_time": parsed.start_time,
+            "end_time": parsed.end_time,
+            "collector_status": str(getattr(result, "status", "")),
+            "items_written": int(getattr(result, "items_written", 0) or 0),
+            "record_paths": record_paths,
+            "cursor": str(getattr(result, "cursor", "")),
+            "next_cursor": str(getattr(result, "next_cursor", "")),
+            "has_more": bool(getattr(result, "has_more", False)),
+            "next_page_token": str(getattr(result, "next_page_token", "")),
+            "sync_state_path": str(getattr(result, "sync_state_path", "")),
+            "stopped_reason": str(getattr(result, "stopped_reason", "")),
+        },
+    )
+
+
+def _dm_parse_error(error_kind: str, detail: str) -> _DmDebugArgs:
+    """构造 /feishu dm 参数错误。"""
+    return _DmDebugArgs("", 0, 0, error_kind=error_kind, detail=detail)
+
+
+def _dm_usage_text() -> str:
+    """返回 /feishu dm 的短用法说明。"""
+    return (
+        "usage: /feishu dm [chat_id] [lookback_seconds] "
+        "or /feishu dm [chat_id] <start_time> <end_time>"
+    )
+
+
+def _is_integer_text(value: str) -> bool:
+    """判断字符串是否为整数。"""
+    return value.strip().isdigit()
+
+
+def _clean_dm_token(value: str) -> str:
+    """清理 CLI 参数尾随标点，兼容复制命令时带入的中英文冒号。"""
+    return value.strip().rstrip(":：")
+
+
+def _now_unix_seconds() -> int:
+    """返回当前 UTC 秒级时间戳。"""
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 def _is_real_env_value(value: str) -> bool:

@@ -121,6 +121,22 @@ class TestFeishuUserRequestClient(unittest.TestCase):
         self.assertEqual(provider.force_refresh_count, 0)
         self.assertEqual(mocked.call_count, 1)
 
+    def test_http_400_with_permission_code_maps_permission_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            provider = _FakeTokenProvider()
+            client = FeishuUserRequestClient(provider, Path(tmp))
+            forbidden = _FakeHttpResponse(
+                400,
+                {"code": 99991679, "msg": "missing user privilege"},
+            )
+
+            with patch("httpx.request", return_value=forbidden):
+                result = client.request_with_token_retry(_request())
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "permission_denied")
+        self.assertEqual(result.feishu_code, 99991679)
+
     def test_timeout_maps_timeout_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FeishuUserRequestClient(
