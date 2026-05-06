@@ -64,8 +64,26 @@ class TestAmbientContextStore(unittest.TestCase):
 
         self.assertEqual(document.frontmatter["text_preview"], "- needs review")
 
+    def test_project_absolute_refs_are_written_as_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = AmbientContextStore(root)
+            raw_path = root / "data/feishu/raw/2026-05-06/raw_1.md"
 
-def _record(text: str = "见文档 https://example.feishu.cn/docx/token_1") -> AmbientContextRecord:
+            result = store.write(_record(raw_message_ref=str(raw_path)))
+            detail = result.path.read_text(encoding="utf-8")
+            document = MarkdownStore(FileStore(root)).read_document(result.path)
+
+        self.assertEqual(document.frontmatter["raw_message_ref"], "data/feishu/raw/2026-05-06/raw_1.md")
+        self.assertIn("- raw_message_ref: data/feishu/raw/2026-05-06/raw_1.md", detail)
+        self.assertNotIn(str(root), detail)
+
+
+def _record(
+    text: str = "见文档 https://example.feishu.cn/docx/token_1",
+    *,
+    raw_message_ref: str = "data/feishu/raw/2026-05-06/raw_1.md",
+) -> AmbientContextRecord:
     """构造测试用 ambient_context 记录。"""
     return AmbientContextRecord(
         record_id="dm_om_1",
@@ -77,7 +95,7 @@ def _record(text: str = "见文档 https://example.feishu.cn/docx/token_1") -> A
         fetched_at="2026-05-06T12:01:00+08:00",
         text=text,
         text_preview=text,
-        raw_message_ref="data/feishu/raw/2026-05-06/raw_1.md",
+        raw_message_ref=raw_message_ref,
         sync_state_ref="data/feishu/sync_state/direct_message_collector/oc_1.md",
         doc_links=(AmbientDocLink("https://example.feishu.cn/docx/token_1", "docx", "token_1"),),
         file_clues=(AmbientFileClue("om_1", "file", "file_key_1", "demo.txt"),),

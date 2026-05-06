@@ -45,7 +45,8 @@ class TestDirectMessageCollector(unittest.TestCase):
     def test_collect_text_message_writes_ambient_context_and_sync_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            client = _FakeUserClient([_ok_response([_text_message()])])
+            raw_path = root / "data/feishu/raw/2026-05-06/raw_dmc.md"
+            client = _FakeUserClient([_ok_response([_text_message()], raw_path=str(raw_path))])
             collector = DirectMessageCollector(root, client)  # type: ignore[arg-type]
 
             result = collector.collect("oc_1", start_time=1778039900, end_time=1778040100)
@@ -61,6 +62,8 @@ class TestDirectMessageCollector(unittest.TestCase):
         self.assertEqual(params["page_size"], 50)
         self.assertIn("om_1", detail)
         self.assertIn("token_1", detail)
+        self.assertIn("raw_message_ref: data/feishu/raw/2026-05-06/raw_dmc.md", detail)
+        self.assertNotIn(str(root), detail)
         self.assertEqual(state.cursor, "1778040000000")
         self.assertEqual(state.next_cursor, "1778040000")
 
@@ -155,6 +158,7 @@ def _ok_response(
     *,
     has_more: bool = False,
     page_token: str = "",
+    raw_path: str = "data/feishu/raw/2026-05-06/raw_dmc.md",
 ) -> FeishuUserResponse:
     """构造成功的飞书用户面响应。"""
     return FeishuUserResponse(
@@ -166,7 +170,7 @@ def _ok_response(
         data={"items": items, "has_more": has_more, "page_token": page_token},
         page_token=page_token,
         has_more=has_more,
-        raw_path="data/feishu/raw/2026-05-06/raw_dmc.md",
+        raw_path=raw_path,
     )
 
 

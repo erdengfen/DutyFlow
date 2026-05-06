@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -87,6 +87,7 @@ class AmbientContextStore:
 
     def write(self, record: AmbientContextRecord) -> AmbientContextWriteResult:
         """写入单条记录，并更新总索引和 source_type 子索引。"""
+        record = self._record_with_relative_refs(record)
         path = self.path_for(record)
         document = MarkdownDocument(
             frontmatter=_frontmatter_from_record(record),
@@ -101,6 +102,14 @@ class AmbientContextStore:
             row,
         )
         return AmbientContextWriteResult(record.record_id, written_path, global_index, source_index)
+
+    def _record_with_relative_refs(self, record: AmbientContextRecord) -> AmbientContextRecord:
+        """把项目内引用路径规整为相对路径，避免 Markdown 记录绑定本机绝对目录。"""
+        return replace(
+            record,
+            raw_message_ref=_relative_reference(self.project_root, record.raw_message_ref),
+            sync_state_ref=_relative_reference(self.project_root, record.sync_state_ref),
+        )
 
     def path_for(self, record: AmbientContextRecord) -> Path:
         """按 source_type、日期和 record_id 返回工作区内绝对路径。"""
@@ -351,6 +360,20 @@ def _relative_path(root: Path, path: Path) -> str:
         return str(path.resolve().relative_to(root.resolve()))
     except ValueError:
         return str(path)
+
+
+def _relative_reference(root: Path, value: str) -> str:
+    """返回项目内引用的相对路径；项目外路径保持原值用于排查。"""
+    text = str(value).strip()
+    if not text:
+        return ""
+    path = Path(text)
+    if not path.is_absolute():
+        return text
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return text
 
 
 def _safe_file_part(value: str) -> str:

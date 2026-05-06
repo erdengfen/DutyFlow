@@ -2582,318 +2582,74 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
 
 ## Step 12B: 用户面主动感知 collector 设计
 
-### 当前决策
+### 当前状态
 
-状态：推进中。6 个 collector 共享 Step 12A 的 `FeishuUserClient`、统一请求封装、collector budget 和 sync_state，不再各自处理 token、重试、分页和状态续跑。`direct_message_collector` 已完成第一版实现和测试，其余 collector 继续按“先设计字段和落盘，再实现代码”的节奏推进。
+状态：推进中。6 个 collector 共享 Step 12A 的 `FeishuUserClient`、统一请求封装、collector budget 和 sync_state，不再各自处理 token、重试、分页和状态续跑。
 
-第一批 collector 设计顺序：
+第一批 collector：
 
-1. 【已完成】direct_message_collector
-2. 【未完成】group_message_collector
-3. 【未完成】user_document_collector
-4. 【未完成】group_document_collector
-5. 【未完成】meeting_minutes_collector
-6. 【未完成】bitable_collector
+1. 【已完成】`direct_message_collector`
+2. 【未完成】`group_message_collector`
+3. 【未完成】`user_document_collector`
+4. 【未完成】`group_document_collector`
+5. 【未完成】`meeting_minutes_collector`
+6. 【未完成】`bitable_collector`
 
-### 统一落盘约定
+### 统一落盘
 
-6 个用户面 collector 的 Markdown 结果统一落在 `data/ambient_context/` 总目录下，每个 collector 使用独立子目录。这样后续检索工具可以只扫描一个总目录，再按 `source_type/collector_name` 过滤，不需要散扫多个不相关路径。
+- 【已完成】6 个用户面 collector 的结果统一落在 `data/ambient_context/`，按 `direct_message/`、`group_message/`、`user_document/`、`group_document/`、`meeting_minutes/`、`bitable/` 分子目录。
+- 【已完成】共享 `AmbientContextStore`，维护 `data/ambient_context/index.md` 和各 source 子索引。
+- 【已完成】单条记录使用 Markdown + frontmatter，保留来源、scope、时间、摘要、文本预览、文档 token 线索、附件线索、raw 响应引用和 sync_state 引用。
+- 【已完成】2026-05-06 修复：项目内 `raw_message_ref` / `sync_state_ref` 统一写为 `data/...` 相对路径，避免新记录绑定本机绝对目录。
+- 【未完成】大正文、大文档全文、会议记录全文、多维表格大快照仍需按 collector 单独设计，只在 ambient_context 中保留摘要、token/source_id、hash 和 Evidence 路径。
 
-统一目录形态：
-
-```text
-data/ambient_context/
-  direct_message/
-  group_message/
-  user_document/
-  group_document/
-  meeting_minutes/
-  bitable/
-```
-
-统一索引建议：
-
-```text
-data/ambient_context/index.md
-data/ambient_context/<collector_family>/index.md
-```
-
-统一规则：
-
-- 单条记录必须是 Markdown，便于人工检查和现有本地检索工具扫描。
-- 单条记录 frontmatter 必须包含 `source_type`、`collector_name`、`record_id`、`source_id`、`created_at/fetched_at`、`sync_scope_id`。
-- 各 collector 可以有自己的子目录和字段，但必须共享一套 ambient_context 基础 formatter。
-- 大正文、大文档全文、会议记录全文、多维表格大快照不直接塞进单条 ambient_context；只保留摘要、hash、token/source_id 和 Evidence 或等价大对象路径。
-- 具体 schema 必须先补 `docs/DATA_MODEL.md`，再开始实现。
-
-### 预计新增/调整文件
-
-Step 12B 预计新增：
-
-- 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
-- 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
-- `src/dutyflow/feishu/collectors/group_message_collector.py`
-- `src/dutyflow/feishu/collectors/user_document_collector.py`
-- `src/dutyflow/feishu/collectors/group_document_collector.py`
-- `src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
-- `src/dutyflow/feishu/collectors/bitable_collector.py`
-- 【已完成】`src/dutyflow/feishu/ambient_context.py`
-- 【已完成】`test/test_feishu_ambient_context.py`
-- 【已完成】`test/test_feishu_direct_message_collector.py`
-- 后续对应其他 collector 测试文件。
-
-Step 12B 预计调整：
-
-- 【已完成】`docs/DATA_MODEL.md`：补充 ambient_context 基础 schema、direct_message 子类型 schema、索引表字段。
-- 【已完成】`docs/ARCHITECTURE.md`：补充主动感知 collector 层和统一落盘链路。
-- 【进行中】`PLANS.md`：逐个 collector 记录设计、状态和验收。
-- 【已完成】`src/dutyflow/feishu/__init__.py`：导出 ambient_context 和 direct_message_collector 类型。
-- `src/dutyflow/config/env.py` / `.env.example`：如实现需要，补充允许同步的 p2p/group/resource scope 配置和默认预算开关。
-- 【已完成】CLI 相关文件：已补 `/feishu dm` 轻量调试入口，用于手动触发 `direct_message_collector`。
-
-### 1. direct_message_collector
-
-状态：【已完成】2026-05-06 已完成第一版实现、文档更新、测试和轻量 CLI 调试入口。当前只提供手动调试入口，不接正式 loop 调度。
-
-#### 目标
-
-采集用户私信面，但第一版不承诺“全量监听用户所有私聊”。第一版只同步明确授权和明确范围内的 p2p 会话，作为用户面 ambient_context 的输入来源之一。
-
-第一版同步范围：
-
-- 用户显式绑定的 p2p `chat_id`。
-- 用户和 Bot 建立过上下文的 p2p 会话。
-- 用户指定 `message_id` / `chat_id` 的私聊范围。
-
-第一版不做：
-
-- 不做全量私信同步。
-- 不做“监听用户所有私聊”的产品承诺。
-- 不扫未知 p2p 会话列表。
-- 不把私信采集结果直接升级为任务或提醒；先作为 ambient_context 落盘，后续由权重层读取。
-
-#### 权限
-
-核心权限：
-
-- `im:message.p2p_msg:get_as_user`
-
-该权限用于以用户身份获取单聊消息。后续实现时如果接口返回权限错误，再按飞书权限页和错误码补充最小必要权限。
-
-可能需要但第一版不预先扩大：
-
-- `im:chat` 相关只读权限。
-- `im:message` 相关只读权限。
-
-权限原则：
-
-- 只读取用户授权范围内的 p2p 消息。
-- 权限错误映射为 `permission_denied`，写 sync_state 失败状态，不盲目重试。
-- 任何新增权限都必须在计划和 `.env`/OAuth scope 说明中可见。
-
-#### 请求方式
-
-不是长连接，不依赖飞书应用事件回调。使用 REST 拉取历史消息：
-
-```text
-GET /open-apis/im/v1/messages
-Authorization: Bearer <user_access_token>
-```
-
-Query 参数第一版形态：
-
-```json
-{
-  "container_id": "oc_xxx 或 p2p chat id",
-  "container_id_type": "chat",
-  "start_time": "Unix 秒级时间戳",
-  "end_time": "Unix 秒级时间戳",
-  "sort_type": "ByCreateTimeAsc 或 ByCreateTimeDesc",
-  "page_size": 50,
-  "page_token": "上一页返回的 page_token"
-}
-```
-
-请求约束：
-
-- 使用 `FeishuUserClient.get()` 或 `FeishuUserRequestClient.paged_request()`。
-- `collector_name` 固定为 `direct_message_collector`。
-- `scope_id` 使用 p2p `chat_id`。
-- `container_id_type` 第一版固定为 `chat`。
-- `page_size` 第一版使用 50，并受 collector budget 控制。
-- `start_time/end_time` 必须来自显式同步窗口或 sync_state，不做无边界历史回溯。
-- `sort_type` 第一版优先使用 `ByCreateTimeAsc`，便于按时间推进 cursor。
-
-#### 返回结构
-
-接口概念返回：
-
-```json
-{
-  "code": 0,
-  "msg": "success",
-  "data": {
-    "items": [
-      {
-        "message_id": "om_xxx",
-        "root_id": "om_xxx",
-        "parent_id": "om_xxx",
-        "create_time": "毫秒时间戳字符串",
-        "update_time": "毫秒时间戳字符串",
-        "chat_id": "oc_xxx",
-        "sender": {
-          "id": "ou_xxx",
-          "id_type": "open_id"
-        },
-        "body": {
-          "content": "{\"text\":\"...\"}"
-        },
-        "msg_type": "text | image | file | post | interactive"
-      }
-    ],
-    "has_more": true,
-    "page_token": "xxx"
-  }
-}
-```
-
-第一版解析字段：
-
-- `message_id`
-- `root_id`
-- `parent_id`
-- `create_time`
-- `update_time`
-- `chat_id`
-- `sender.id`
-- `sender.id_type`
-- `msg_type`
-- `body.content`
-
-第一版内容提取：
-
-- `text`：解析 `body.content` 中的文本。
-- `file_clues`：记录文件类消息的 `message_id`、`msg_type` 和可解析附件线索；正文和二进制不在本 collector 拉取。
-- `doc_links`：从文本或富文本内容中解析飞书云文档链接，保留 URL、资源类型和 token 线索。
-
-#### sync_state
-
-状态范围：
-
-```text
-collector_name = direct_message_collector
-surface_type = direct_message
-scope_id = <p2p_chat_id>
-```
-
-第一版 cursor 约定：
-
-- `cursor` 保存本轮已成功处理到的最大 `create_time`。
-- `next_cursor` 保存下一轮建议 `start_time`，从最大 `create_time` 推导为秒级时间戳。
-- 如果本轮失败，不推进 `cursor/next_cursor`，只写 `last_failure_at`、`last_error_kind`、`last_error_detail`。
-
-后续如果发现同毫秒多消息导致边界重复或遗漏，再补 `last_message_id` 或复合 cursor；第一版不引入复杂对象。
-
-#### 落盘目标
-
-第一版落盘为 ambient_context，不直接进入任务层。路径必须位于统一总目录 `data/ambient_context/` 下，便于后续本地检索工具集中扫描。
-
-建议路径：
-
-```text
-data/ambient_context/direct_message/YYYY-MM-DD/dm_<message_id>.md
-```
-
-建议索引路径：
-
-```text
-data/ambient_context/direct_message/index.md
-```
-
-单条 ambient_context 记录至少保留：
-
-- `source_type = direct_message`
-- `collector_name = direct_message_collector`
-- `chat_id`
-- `message_id`
-- `root_id`
-- `parent_id`
-- `sender_id`
-- `sender_id_type`
-- `msg_type`
-- `create_time`
-- `update_time`
-- `text_preview`
-- `doc_links`
-- `file_clues`
-- `raw_message_ref`
-- `sync_scope_id`
-- `fetched_at`
-
-注意：具体 frontmatter、section 和索引表结构必须先补进 `docs/DATA_MODEL.md`，再写实现代码。
-
-#### 第一版触发机制
-
-第一版只支持受限触发：
-
-- 手动触发：用户指定 `chat_id` 或 `message_id` 后补拉对应 p2p 范围。
-- 绑定触发：用户显式绑定 p2p `chat_id` 后，collector 才可按预算拉取最近 N 条。
-- 调试触发：CLI `/feishu dm` 或本地命令指定同步窗口，便于验证权限和落盘结构。
-
-不做实时性承诺。后续可在被动事件线索、用户显式绑定和轻量轮询之间组合，但第一版不建设复杂调度器。
-
-#### p2p scope 获取策略
-
-第一版不是主动发现用户所有私聊，而是显式 scope 注册模型：
-
-- 【已完成】用户与 bot 私聊发送 `/bind` 后，接入层会把当前 p2p `chat_id` 写入 `DUTYFLOW_FEISHU_OWNER_REPORT_CHAT_ID`，`/feishu dm` 默认使用该 scope。
-- 【已完成】如果已有 bot 可见事件落盘，可从 `data/perception/YYYY-MM-DD/per_*.md` 中筛选 `chat_type: p2p` 的 `chat_id` 作为 scope。
-- 【已完成】CLI 调试允许显式传入 `chat_id`：`/feishu dm oc_xxx 3600` 或 `/feishu dm oc_xxx start end`。
-- 【未完成】后续如要“自助收集更多私聊”，应先建设 p2p scope registry，让用户用明确命令登记允许同步的 p2p 会话；不默认扫未知私聊列表。
-- 【未完成】主动发现只能作为后续增强，前提是飞书权限、接口和产品确认都允许列出用户会话；即便支持，也必须先生成候选 scope 供用户确认，不直接同步正文。
-
-#### 2026-05-06 调试修复
-
-- 【已完成】修复 `/feishu dm 3600：` 尾随中英文冒号导致 `3600：` 被误解析为 `chat_id` 的问题。
-- 【已完成】修复飞书 HTTP 400 + `code=99991679` 被归一为 `api_error` 的问题；现在会映射为 `permission_denied`。
-- 【已确认】真实 `oc_xxx` 失败的 raw 响应来自飞书端用户授权不足，缺少用户身份下 `im:message.history:readonly`、`im:message:readonly` 或 `im:message` 之一；需要在飞书开放平台增加权限并重新执行 `/oauth`。
-- 【已完成】修复 OAuth callback 临时 server 未显式 `server_close()` 的问题，并允许短时间端口重绑。
-- 【已完成】同一进程内重复发送 `/oauth` 时不再启动第二个 callback server，避免固定端口 `9768` 被并发流程抢占。
-- 【已调整】OAuth callback 单测改用动态临时端口，避免测试占用真实飞书 redirect URI 端口。
-
-#### 第一版验收
-
-- 【已完成】能对一个已绑定 p2p `chat_id` 按显式时间窗口拉取消息。
-- 【已完成】能按 `page_token/has_more` 分页，并受 `CollectorBudget` 页数和条数上限控制。
-- 【已完成】能把 text 消息解析为 ambient_context。
-- 【已完成】能从消息文本中抽取飞书文档链接线索。
-- 【已完成】能把文件/附件类消息保留为 file clue，不拉二进制正文。
-- 【已完成】能按 `chat_id` 写入 sync_state 成功和失败状态。
-- 【已完成】权限错误不推进 cursor，不写 ambient_context，并可在 sync_state 中看到原因。
-
-实现文件：
+### 文件范围
 
 - 【已完成】`src/dutyflow/feishu/ambient_context.py`
 - 【已完成】`src/dutyflow/feishu/collectors/__init__.py`
 - 【已完成】`src/dutyflow/feishu/collectors/direct_message_collector.py`
-- 【已完成】`src/dutyflow/cli/main.py`
-- 【已完成】`src/dutyflow/app.py`
-- 【已完成】`test/test_feishu_ambient_context.py`
-- 【已完成】`test/test_feishu_direct_message_collector.py`
-- 【已完成】`test/test_cli_chat.py`
-- 【已完成】`test/test_app_entry.py`
+- 【未完成】`src/dutyflow/feishu/collectors/group_message_collector.py`
+- 【未完成】`src/dutyflow/feishu/collectors/user_document_collector.py`
+- 【未完成】`src/dutyflow/feishu/collectors/group_document_collector.py`
+- 【未完成】`src/dutyflow/feishu/collectors/meeting_minutes_collector.py`
+- 【未完成】`src/dutyflow/feishu/collectors/bitable_collector.py`
+- 【已完成】`docs/DATA_MODEL.md`：已补 ambient_context 和 direct_message 第一版数据结构。
+- 【已完成】`docs/ARCHITECTURE.md`：已补主动感知 collector 层和统一落盘链路。
+- 【已完成】`src/dutyflow/app.py`、`src/dutyflow/cli/main.py`：已补 `/feishu dm` 手动调试入口。
+- 【已完成】`test/test_feishu_ambient_context.py`、`test/test_feishu_direct_message_collector.py`、`test/test_cli_chat.py`、`test/test_app_entry.py`
 
-测试记录：
+### direct_message_collector
 
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，90 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector`，9 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，559 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_app_entry test.test_cli_chat test.test_feishu_user_request test.test_feishu_direct_message_collector`，40 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，92 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，561 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_oauth test.test_feishu_user_token_provider test.test_feishu_user_request`，67 tests OK。
-- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_cli_chat test.test_app_entry test.test_feishu_oauth test.test_feishu_ambient_context test.test_feishu_direct_message_collector test.test_feishu_collector_budget test.test_feishu_sync_state test.test_feishu_user_client test.test_feishu_user_request test.test_feishu_user_resource test.test_feishu_user_token_provider`，142 tests OK。
+状态：【已完成】2026-05-06 完成第一版实现、测试和轻量 CLI 调试入口。当前只提供手动调试，不接正式 loop 调度。
+
+核心边界：
+
+- 【已完成】只同步显式 p2p scope：用户与 bot 已绑定会话、用户显式传入的 `chat_id`，或已有 bot 可见事件中可追溯的 p2p `chat_id`。
+- 【已完成】使用用户身份 REST 拉取历史消息，不依赖长连接事件；权限不足归一为 `permission_denied`，不推进 cursor。
+- 【已完成】消息按 `chat_id` 写 sync_state，cursor 保存本轮最大 `create_time`，next_cursor 给下一轮秒级窗口使用。
+- 【已完成】文本消息落盘为 ambient_context，飞书文档链接会提取 URL、资源类型和 token；文件类消息只保留 file clue，不拉二进制。
+- 【已完成】`/feishu dm` 支持默认 owner p2p scope、显式 `chat_id`、lookback 秒数和 start/end 调试窗口。
+
+已确认的人工测试：
+
+- 【已完成】`/feishu dm 3600` 成功拉取用户与 bot 的 p2p 历史消息并落盘 14 条。
+- 【已完成】`/feishu dm 600` 成功拉取 9 条窗口内消息，普通文本、长文本和 wiki 链接均可落盘；wiki token `ETu9w4qYlity6Akiqypcy2kwnTf` 可被提取。
+
+### 已知缺陷和后续项
+
+- 【未完成】当前不是“全量私信监听”，也不主动发现用户所有私聊；后续如要扩大范围，需要 p2p scope registry，让用户显式登记或确认候选 scope。
+- 【未完成】正式 loop 调度尚未接入；当前只能通过 `/feishu dm` 或本地调试路径触发。
+- 【未完成】`/bind`、`/oauth`、OAuth 链接和授权结果会被 direct_message_collector 作为普通私信落盘，后续应过滤或标记为 `system_control`，避免污染检索。
+- 【未完成】CLI 返回的 `record_path` 当前指向本轮第一条记录，不一定是最新或最有业务价值的记录；后续可改为最新非控制消息。
+- 【未完成】`items_written` 代表本轮写入/覆盖数量，不等同于新增数量；后续可补 `items_created/items_updated`。
+- 【未完成】sync_state 成功后仍保留上一次 `last_error_*`，便于排查但容易误读；后续可增加 `last_run_status` 或成功后清理展示字段。
+- 【未完成】2026-05-06 修复前已经落盘的历史 ambient_context 记录可能仍保留绝对 `raw_message_ref`；如需要统一历史数据，需要补一次离线回填脚本。
+
+### 测试记录
+
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，562 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_feishu_ambient_context test.test_feishu_direct_message_collector`，10 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，563 tests OK。
 
 ## Step 13: 完整 Demo 链路验收
 
