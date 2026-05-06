@@ -50,6 +50,12 @@ class HealthCheckProvider(Protocol):
     def run_feishu_discover_groups_debug(self) -> str:
         """发现飞书群组并写入 scope registry candidate。"""
 
+    def get_feishu_proactive_status_debug(self) -> str:
+        """返回主动感知服务当前状态。"""
+
+    def run_feishu_proactive_once_debug(self) -> str:
+        """手动触发一次主动感知调度 tick。"""
+
     def get_feishu_status_debug(self) -> str:
         """返回当前飞书监听状态。"""
 
@@ -223,6 +229,10 @@ class CliConsole:
             return self.app.get_latest_feishu_debug()
         if normalized == "/feishu discover groups":
             return self.app.run_feishu_discover_groups_debug()
+        if normalized == "/feishu proactive status":
+            return self.app.get_feishu_proactive_status_debug()
+        if normalized == "/feishu proactive once":
+            return self.app.run_feishu_proactive_once_debug()
         if normalized == "/feishu gm" or normalized.startswith("/feishu gm "):
             arg_text = normalized.removeprefix("/feishu gm").strip()
             return self.app.run_feishu_gm_debug(arg_text)
@@ -270,6 +280,8 @@ class CliConsole:
             "/feishu gm - 拉取 enabled 群消息范围用于 collector 调试\n"
             "/feishu docs - 拉取 enabled 云盘文件夹清单用于 collector 调试\n"
             "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
+            "/feishu proactive status - 查看主动感知服务状态\n"
+            "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
             "/feishu scopes - 查看飞书同步范围注册表\n"
             "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
             "/feishu fixture 文本 - 以本地 fixture 事件测试接入层\n"
@@ -318,6 +330,8 @@ def _feishu_help_text() -> str:
         "/feishu docs discover root - 发现我的空间 root folder 并写入 candidate\n"
         "/feishu docs - 拉取所有 enabled drive_folder 的当前层级清单\n"
         "/feishu discover groups - 发现飞书群组并写入 scope registry candidate\n"
+        "/feishu proactive status - 查看主动感知服务状态\n"
+        "/feishu proactive once - 手动触发一次主动感知调度 tick\n"
         "/feishu scopes - 查看 enabled/candidate 飞书同步范围\n"
         "/feishu scopes candidates - 只查看 candidate scope\n"
         "/feishu request <scope_id> - 发送飞书审批卡片请求启用 candidate scope\n"
@@ -418,6 +432,14 @@ class _SelfTestApp:
         """返回自测群组发现结果。"""
         return '{"action": "discover_groups", "detail": "ok"}'
 
+    def get_feishu_proactive_status_debug(self) -> str:
+        """返回自测主动感知服务状态。"""
+        return '{"action": "proactive_status", "detail": "initialized"}'
+
+    def run_feishu_proactive_once_debug(self) -> str:
+        """返回自测主动感知 once 结果。"""
+        return '{"action": "proactive_once", "detail": "tick completed"}'
+
     def get_feishu_status_debug(self) -> str:
         """返回自测飞书状态。"""
         return '{"action": "listener_status", "detail": "running"}'
@@ -457,6 +479,8 @@ def _self_test() -> None:
     assert '"action": "scopes"' in cli.handle_command("/feishu scopes")
     assert '"action": "approval_requested"' in cli.handle_command("/feishu request oc_1")
     assert '"action": "discover_groups"' in cli.handle_command("/feishu discover groups")
+    assert '"action": "proactive_status"' in cli.handle_command("/feishu proactive status")
+    assert '"action": "proactive_once"' in cli.handle_command("/feishu proactive once")
     assert '"action": "fixture"' in cli.handle_command("/feishu fixture ping")
     assert '"action": "cleared"' in cli.handle_command("/context clear")
     assert '"action": "no_state"' in cli.handle_command("/context compress")

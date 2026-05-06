@@ -2821,9 +2821,9 @@ FeishuProactiveService
 - [x] 13.2 扩展 ambient_context 读取层，支持按 source_type、collector_name、created_at、record_id 扫描新增主动感知记录，并返回稳定 context packet。
 - [x] 13.3 实现 `AmbientAnalysisIntakeService`，把新 ambient_context 批量封装为正式 runtime 输入，不伪装成用户实时消息。
 - [x] 13.4 扩展 `RuntimeLoopInput` / `RuntimeAgentLoop`，支持 `trigger_kind=ambient_context_batch`，并把 context packet 注入 tool_content。
-- [ ] 13.5 实现 `FeishuProactiveService`，随 app bootstrap 常驻运行，按预算和间隔执行发现、审批请求、enabled scope 采集和 ambient 分析入队。
-- [ ] 13.6 为 scope 审批补去重状态，避免同一个 candidate 反复发送审批卡片；状态必须可人工查看。
-- [ ] 13.7 将 `group_candidate_discovery`、`user_document_collector.discover_root()`、`collect_enabled_scopes()` 接入主动感知调度层。
+- [x] 13.5 实现 `FeishuProactiveService`，随 app bootstrap 常驻运行，按预算和间隔执行发现、审批请求、enabled scope 采集和 ambient 分析入队。
+- [x] 13.6 为 scope 审批补去重状态，避免同一个 candidate 反复发送审批卡片；状态必须可人工查看。
+- [x] 13.7 将 `group_candidate_discovery`、`user_document_collector.discover_root()`、`collect_enabled_scopes()` 接入主动感知调度层。
 - [ ] 13.8 对 `docx` 类型文档线索建立正文补读策略：默认只保存 token 和元数据，Agent 需要正文时通过 `feishu_read_doc` 按 token 读取并写入 Evidence Store。
 - [ ] 13.9 创建系统预制的定时总结任务：按日或按固定间隔汇总私聊、群聊、云盘文档线索，输出提醒、摘要、待办和风险。
 - [ ] 13.10 补 CLI 可观察入口，查看 proactive service 状态、最近采集批次、最近 ambient 分析任务、最近审批请求和最近总结任务。
@@ -3029,7 +3029,7 @@ FeishuProactiveService
 
 ### 阶段状态
 
-当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和 bounded scan。13.3 已完成 `AmbientAnalysisIntakeService`，按 source_type watermark 扫描新增记录，打包后送入 runtime queue。13.4 已完成 `RuntimeAgentLoop` ambient_context_batch 支持，payload 直接注入 tool_content，专用提示文本区分批次分析与实时消息；下一步进入 13.5，实现 `FeishuProactiveService`。
+当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和 bounded scan。13.3 已完成 `AmbientAnalysisIntakeService`，按 source_type watermark 扫描新增记录，打包后送入 runtime queue。13.4 已完成 `RuntimeAgentLoop` ambient_context_batch 支持，payload 直接注入 tool_content，专用提示文本区分批次分析与实时消息。13.5 已完成 `FeishuProactiveService`，background thread 按间隔运行 tick，发现/采集/审批/intake 各阶段按到期判断执行。13.6 已完成 scope 审批去重：`FeishuScopeRecord.last_approval_requested_at` 字段 + `mark_approval_requested()` + 24h 冷却判断。13.7 已完成全部 collector 接入主动感知调度层，CI 658 tests OK；下一步进入 13.8。
 
 ### Step 13 测试记录
 

@@ -46,6 +46,7 @@ from dutyflow.feishu.scope_registry import (
     seed_owner_p2p_scope,
     scope_account_id_from_config,
 )
+from dutyflow.feishu.proactive_service import FeishuProactiveService
 from dutyflow.feishu.scope_approval import FeishuScopeApprovalService
 from dutyflow.feishu.user_client import FeishuUserClient
 from dutyflow.feedback.gateway import FeedbackGateway
@@ -107,6 +108,7 @@ class DutyFlowApp:
         self._runtime_loop: RuntimeAgentLoop | None = None
         self._background_task_worker: BackgroundTaskWorker | None = None
         self._task_scheduler_service: TaskSchedulerService | None = None
+        self._feishu_proactive_service: FeishuProactiveService | None = None
 
     def health_check(self) -> HealthStatus:
         """返回 Step 1 可验证的占位健康检查结果。"""
@@ -447,6 +449,37 @@ class DutyFlowApp:
         )
         return UserDocumentCollector(self.project_root, user_client)
 
+    def get_feishu_proactive_status_debug(self) -> str:
+        """返回主动感知服务当前状态。"""
+        service = self._get_or_create_feishu_proactive_service()
+        state = service.get_state()
+        return _feishu_debug_payload(
+            status="ok",
+            action="proactive_status",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=state.status,
+            payload=_proactive_state_payload(state),
+        )
+
+    def run_feishu_proactive_once_debug(self) -> str:
+        """手动触发一次主动感知调度 tick。"""
+        service = self._get_or_create_feishu_proactive_service()
+        try:
+            state = service.run_once()
+        except Exception as exc:  # noqa: BLE001
+            return _feishu_error("proactive_once_failed", str(exc))
+        return _feishu_debug_payload(
+            status="ok" if not state.last_error else "error",
+            action="proactive_once",
+            event_id="",
+            message_id="",
+            record_path="",
+            detail=state.last_error or "tick completed",
+            payload=_proactive_state_payload(state),
+        )
+
     def disable_feishu_scope_debug(self, identifier: str) -> str:
         """禁用一个飞书 scope。"""
         config = load_env_config(self.project_root)
@@ -751,12 +784,13 @@ class DutyFlowApp:
         return self._runtime_loop
 
     def _bootstrap_background_services(self) -> None:
-        """在应用启动时静默拉起正式 runtime、后台任务执行面、调度器和飞书监听。"""
+        """在应用启动时静默拉起正式 runtime、后台任务执行面、调度器、飞书监听和主动感知。"""
         self._ensure_runtime_layout()
         self._get_or_create_runtime_service().start()
         self._get_or_create_background_task_worker().start()
         self._get_or_create_task_scheduler_service().start()
         self._get_or_create_feishu_ingress_service().start_long_connection()
+        self._get_or_create_feishu_proactive_service().start()
 
     def _get_or_create_background_task_worker(self) -> BackgroundTaskWorker:
         """构造并复用正式 runtime 之外的后台任务 worker。"""
@@ -779,6 +813,35 @@ class DutyFlowApp:
             self._enqueue_scheduled_task_to_background_worker,
         )
         return self._task_scheduler_service
+
+    def _get_or_create_feishu_proactive_service(self) -> FeishuProactiveService:
+        """构造并复用飞书主动感知调度服务。"""
+        if self._feishu_proactive_service is not None:
+            return self._feishu_proactive_service
+        config = load_env_config(self.project_root)
+        registry = FeishuScopeRegistry(self.project_root)
+
+        def _user_client_factory() -> FeishuUserClient:
+            oauth_manager = FeishuOAuthManager(config, self.project_root)
+            return FeishuUserClient.from_oauth_manager(
+                oauth_manager,
+                audit_logger=self._create_audit_logger(config),
+                raw_response_enabled=False,
+            )
+
+        approval_service = FeishuScopeApprovalService(
+            self.project_root,
+            registry=registry,
+        )
+        self._feishu_proactive_service = FeishuProactiveService(
+            self.project_root,
+            config,
+            user_client_factory=_user_client_factory,
+            runtime_service=self._get_or_create_runtime_service(),
+            approval_service=approval_service,
+            registry=registry,
+        )
+        return self._feishu_proactive_service
 
     def _enqueue_scheduled_task_to_background_worker(self, dispatch: TaskDispatchItem) -> None:
         """把调度器发现的到时任务送入后台任务 worker。"""
@@ -1300,6 +1363,26 @@ def _is_real_env_value(value: str) -> bool:
     """判断配置值是否已脱离示例占位，便于 doctor 模式快速查看。"""
     normalized = value.strip().lower()
     return bool(normalized) and not normalized.startswith("replace-with-")
+
+
+def _proactive_state_payload(state: object) -> dict[str, Any]:
+    """把 FeishuProactiveState 转换为 CLI 调试 payload。"""
+    return {
+        "status": getattr(state, "status", ""),
+        "worker_alive": bool(getattr(state, "worker_alive", False)),
+        "tick_count": int(getattr(state, "tick_count", 0)),
+        "last_tick_at": str(getattr(state, "last_tick_at", "")),
+        "last_discovery_at": str(getattr(state, "last_discovery_at", "")),
+        "last_collect_at": str(getattr(state, "last_collect_at", "")),
+        "last_approval_requests_at": str(getattr(state, "last_approval_requests_at", "")),
+        "last_intake_at": str(getattr(state, "last_intake_at", "")),
+        "last_scopes_discovered": int(getattr(state, "last_scopes_discovered", 0)),
+        "last_records_collected": int(getattr(state, "last_records_collected", 0)),
+        "last_approval_requests_sent": int(getattr(state, "last_approval_requests_sent", 0)),
+        "last_packets_enqueued": int(getattr(state, "last_packets_enqueued", 0)),
+        "last_error": str(getattr(state, "last_error", "")),
+        "updated_at": str(getattr(state, "updated_at", "")),
+    }
 
 
 def _debug_payload_is_error(text: str) -> bool:

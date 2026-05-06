@@ -54,6 +54,7 @@ class FeishuScopeRecord:
     permission_error: str = ""
     last_success_at: str = ""
     last_attempt_at: str = ""
+    last_approval_requested_at: str = ""
     updated_at: str = ""
 
     @property
@@ -138,6 +139,15 @@ class FeishuScopeRegistry:
                 last_attempt_at=_now_iso(),
                 updated_at=_now_iso(),
             )
+        )
+
+    def mark_approval_requested(
+        self, account_id: str, scope_type: str, scope_id: str
+    ) -> FeishuScopeRecord:
+        """记录 scope 最近一次发起审批卡片的时间，用于防止重复发送。"""
+        record = self._require_record(account_id, scope_type, scope_id)
+        return self._write(
+            replace(record, last_approval_requested_at=_now_iso(), updated_at=_now_iso())
         )
 
     def mark_success(self, account_id: str, scope_type: str, scope_id: str) -> FeishuScopeRecord:
@@ -300,6 +310,7 @@ def _frontmatter(record: FeishuScopeRecord) -> dict[str, str]:
         "permission_error": record.permission_error,
         "last_success_at": record.last_success_at,
         "last_attempt_at": record.last_attempt_at,
+        "last_approval_requested_at": record.last_approval_requested_at,
         "updated_at": record.updated_at or _now_iso(),
     }
     return {key: _frontmatter_value(value) for key, value in values.items()}
@@ -348,6 +359,7 @@ def _record_from_frontmatter(frontmatter: Mapping[str, str]) -> FeishuScopeRecor
         permission_error=frontmatter.get("permission_error", ""),
         last_success_at=frontmatter.get("last_success_at", ""),
         last_attempt_at=frontmatter.get("last_attempt_at", ""),
+        last_approval_requested_at=frontmatter.get("last_approval_requested_at", ""),
         updated_at=frontmatter.get("updated_at", ""),
     )
 
@@ -366,6 +378,7 @@ def _merge_candidate(existing: FeishuScopeRecord, incoming: FeishuScopeRecord) -
         permission_error=existing.permission_error,
         last_success_at=existing.last_success_at,
         last_attempt_at=existing.last_attempt_at,
+        last_approval_requested_at=existing.last_approval_requested_at,
         updated_at=_now_iso(),
     )
 
