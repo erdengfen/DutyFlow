@@ -3048,7 +3048,135 @@ FeishuProactiveService
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_summary_task_intake test.test_feishu_proactive_integration test.test_background_task_worker`，45 tests OK。
 - 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.feishu.summary_task_intake`，总结任务 intake 自测通过。
 
-## Step 14: 完整 Demo 链路验收
+## Step 14: 业务信息面 Skills 与短句工具链路补齐
+
+状态：进行中。2026-05-07 复核发现：主动感知、collector、审批和周期总结底层链路已经存在，但主 Agent 面对“今天有什么事项”“项目卡在哪里”这类真实用户短句时，缺少稳定的工具使用规范和本地信息面枚举入口，容易误判为“缺少权限或工具”。本阶段先补齐业务 skills 和必要的只读枚举工具，让模型默认先读取 DutyFlow 本地已落盘信息，再判断是否需要飞书 scope 审批。
+
+### 最终效果
+
+用户可以用自然短句触发 DutyFlow 的本地工作信息面读取和任务处理能力。系统应优先使用本地 `data/` 中已落盘的 ambient context、task、approval、evidence、report 和 summary 结果；只有确实需要读取未授权飞书 scope 时，才发起飞书审批卡片。
+
+第一版目标回答包括：
+
+- “今天有什么事项？”
+- “项目现在卡在哪里？”
+- “哪些需要我亲自处理？”
+- “帮我把支付问题设个提醒。”
+- “客户群里有没有反馈？”
+- “帮我总结一下今天。”
+
+### 已确认问题
+
+- 当前 `read_context_ref` 只能按已知 `ref_id` 读取，不能枚举“今天有哪些事项”。
+- 当前正式 runtime 默认排除 CLI tools，因此不能依赖 CLI 读取本地 index 作为正式飞书链路方案。
+- `FeishuScopeApprovalService` 已存在，但尚未作为主 Agent 可调用工具注册；CLI/proactive 可请求 scope 审批，普通主 loop 不稳定。
+- 预制总结任务已有 `resolved_tools`，但缺少 `resolved_skills`，后台 subagent 没有明确的总结执行规范。
+- 静态 system prompt 只说明“使用 skills 和 tools”，没有说明“短句工作查询先读本地落盘信息”。
+
+### 分步开发进度
+
+- [x] 14.1 新增 `dutyflow_work_context_reader` skill，明确短句工作查询先读本地落盘上下文，不要直接误判为缺少飞书权限。
+- [x] 14.2 新增只读本地工作上下文枚举工具 `list_work_context`，用于按日期、来源类型、任务状态、审批状态枚举可读 refs。
+- [ ] 14.3 新增 `dutyflow_summary_runner` skill，约束周期总结任务如何读取 `context_refs`、何时补读 docx 正文、如何输出可见总结。
+- [ ] 14.4 新增 `dutyflow_task_operator` skill，约束“提醒我 / 帮我盯 / 记待办 / 到点总结”的后台任务与定时任务创建方式。
+- [ ] 14.5 新增 `request_feishu_scope_access` 主 Agent 工具，并新增 `dutyflow_permission_operator` skill，把 candidate scope 转为飞书审批卡片。
+- [ ] 14.6 新增 `dutyflow_relationship_weighting` skill，约束联系人、来源、责任归属到优先级和打断判断的转换。
+- [ ] 14.7 让系统预制总结任务写入 `resolved_skills=dutyflow_summary_runner`，并保留 `resolved_tools=read_context_ref,feishu_read_doc`。
+- [ ] 14.8 更新短句人工测试流程，覆盖本地 mock 数据下的工作摘要、定时提醒、权限审批和周期总结。
+
+### 第一部分：`dutyflow_work_context_reader`
+
+目标：让模型知道“今天有什么事项”等问题默认是在询问 DutyFlow 已落盘的本地信息面，而不是要求实时飞书搜索或直接触发缺权限回复。
+
+已新增文件：
+
+- `skills/dutyflow_work_context_reader/SKILL.md`
+
+当前能力边界：
+
+- 可指导模型在已有 `context_refs`、`ambient record_id`、`task_id`、`approval_id`、`evidence_id` 时优先调用 `read_context_ref`。
+- 可指导模型在没有稳定引用时先调用 `list_work_context` 枚举本地 refs，再选择关键条目调用 `read_context_ref` 展开。
+- 可指导本地 `/chat` 调试链路在 CLI tools 可用时只读查看本地 index 作为兜底，但正式链路应优先使用 `list_work_context`。
+
+### 建议新增工具：本地工作上下文枚举
+
+第一版工具：
+
+- `list_work_context`
+
+职责：
+
+- 只读扫描项目内固定目录，不访问项目外路径。
+- 支持按日期、source_type、task_status、approval_status、limit 过滤。
+- 返回轻量 refs，而不是展开全文。
+- 返回结果应可直接作为 `read_context_ref` 的输入。
+
+建议覆盖目录：
+
+- `data/ambient_context/index.md`
+- `data/ambient_context/direct_message/index.md`
+- `data/ambient_context/group_message/index.md`
+- `data/ambient_context/user_document/index.md`
+- `data/tasks/`
+- `data/tasks/results/`
+- `data/approvals/pending/`
+- `data/approvals/completed/`
+- `data/reports/`
+
+已新增或修改：
+
+- `src/dutyflow/context/work_context_index.py`
+  - `WorkContextIndexService`
+  - `WorkContextQuery`
+  - `WorkContextItem`
+- `src/dutyflow/agent/tools/contracts/context_tools/list_work_context_contract.py`
+- `src/dutyflow/agent/tools/logic/context_tools/list_work_context.py`
+- `src/dutyflow/context/context_ref_reader.py`
+  - 补充 `ref_type=report` 读取能力。
+- `src/dutyflow/agent/tools/contracts/context_tools/read_context_ref_contract.py`
+- `src/dutyflow/agent/tools/registry.py`
+- `skills/dutyflow_work_context_reader/SKILL.md`
+- `test/test_work_context_index.py`
+- `test/test_context_ref_tools.py`
+- `test/test_runtime_tool_registry.py`
+
+### 验收标准
+
+- [ ] 用户问“今天有什么事项？”时，Agent 能读取本地 mock 数据并输出事项摘要。
+- [ ] 用户问“青桐项目现在卡在哪里？”时，Agent 能综合私聊、群聊和云文档线索回答。
+- [ ] 用户说“帮我把支付问题设个提醒”时，Agent 能创建带 context_refs 的后台或定时任务。
+- [ ] 用户问 candidate 群聊信息时，Agent 能发起飞书 scope 审批，不再以缺权限直接结束。
+- [ ] 周期总结任务能加载总结 skill，逐条读取 context_refs 并落盘可见结果。
+- [ ] 所有新增 skill 可被 `SkillRegistry` 扫描并可通过 `load_skill` 读取。
+- [ ] 新增工具必须有自测入口和对应测试。
+
+### 测试计划
+
+- [x] `test/test_agent_skills.py`：补充 `dutyflow_work_context_reader` 扫描和读取验证。
+- [x] 新增本地上下文枚举工具测试，覆盖 ambient、task、approval、evidence、report 轻量 refs。
+- [ ] 更新 `test/test_cli_chat.py`，覆盖“今天有什么事项”短句不再直接缺权限。
+- [ ] 更新总结任务测试，验证 `resolved_skills` 写入。
+- [ ] 完整回归：`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`。
+
+### Step 14 测试记录
+
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_work_context_index test.test_runtime_tool_registry test.test_context_ref_tools`，16 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_work_context_index test.test_runtime_tool_registry test.test_context_ref_tools test.test_agent_skills`，30 tests OK。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest test.test_work_context_index test.test_runtime_tool_registry test.test_context_ref_tools test.test_agent_skills`，31 tests OK。补充验证 `read_context_ref(ref_type=report)`。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.context.work_context_index`，模块自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.agent.tools.logic.context_tools.list_work_context`，工具逻辑自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.agent.tools.contracts.context_tools.list_work_context_contract`，工具 contract 自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.context.context_ref_reader`，context ref reader 自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.agent.tools.logic.context_tools.read_context_ref`，read_context_ref 工具逻辑自测通过。
+- 【通过】`UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m dutyflow.agent.tools.contracts.context_tools.read_context_ref_contract`，read_context_ref contract 自测通过。
+
+### 人工确认
+
+- [x] 本地工作上下文枚举工具名称采用 `list_work_context`。
+- [ ] 开发者确认正式飞书 runtime 是否允许该工具读取 `data/reports` 和 `data/tasks/results`。
+- [ ] 开发者确认短句查询默认时间范围：当天、近 24 小时，或最近一次 proactive summary。
+
+## Step 15: 完整 Demo 链路验收
 
 ### 最终效果
 
@@ -3126,3 +3254,5 @@ FeishuProactiveService
 | Step 11 | pending |  |  |
 | Step 12 | pending |  |  |
 | Step 13 | completed | 2026-05-07 | 已完成主动感知与正式 Agent Loop 集成；复核补齐 user_document 主动采集和 `/feishu proactive summary` 手动总结入口。 |
+| Step 14 | in_progress | 2026-05-07 | 正在补齐业务信息面 skills 与短句工具链路；已新增 `dutyflow_work_context_reader` skill 和 `list_work_context` 只读本地上下文枚举工具，后续补总结/任务/权限 skills 和 scope 审批工具。 |
+| Step 15 | pending |  | 完整 Demo 链路验收由原 Step 14 顺延。 |

@@ -10,6 +10,8 @@ from dutyflow.approval.approval_flow import ApprovalStore
 from dutyflow.context.evidence_store import EvidenceStore
 from dutyflow.feishu.ambient_context import AmbientContextStore
 from dutyflow.perception.store import PerceptionRecordService
+from dutyflow.storage.file_store import FileStore
+from dutyflow.storage.markdown_store import MarkdownStore
 from dutyflow.tasks.task_result import TaskResultStore
 from dutyflow.tasks.task_state import TaskStore
 
@@ -24,6 +26,7 @@ _REF_TYPE_ALIASES = {
     "evidence": "evidence",
     "task": "task",
     "approval": "approval",
+    "report": "report",
 }
 
 
@@ -68,6 +71,7 @@ class ContextRefReader:
         self.task_store = TaskStore(self.project_root)
         self.task_result_store = TaskResultStore(self.project_root)
         self.approval_store = ApprovalStore(self.project_root)
+        self.markdown_store = MarkdownStore(FileStore(self.project_root))
 
     def read(self, ref_type: str, ref_id: str) -> ContextRefReadResult:
         """按 ref_type 和 ref_id 读取对应上下文。"""
@@ -83,6 +87,7 @@ class ContextRefReader:
             "evidence": self._read_evidence,
             "task": self._read_task,
             "approval": self._read_approval,
+            "report": self._read_report,
         }
         return readers[normalized_type](normalized_id)
 
@@ -173,6 +178,26 @@ class ContextRefReader:
             _approval_payload(record),
         )
 
+    def _read_report(self, ref_id: str) -> ContextRefReadResult:
+        """读取本地报告记录。"""
+        path = _find_report_path(self.project_root, self.markdown_store, ref_id)
+        if path is None:
+            return _missing("not_found", "report", ref_id)
+        document = self.markdown_store.read_document(path)
+        summary = self.markdown_store.extract_section(path, "Summary") or document.body
+        report_id = _report_id(path, document.frontmatter)
+        return ContextRefReadResult(
+            True,
+            "ok",
+            "report",
+            report_id,
+            _relative_path(self.project_root, path),
+            _trim(summary),
+            _trim(document.body),
+            _report_anchors(path, document.frontmatter, report_id),
+            _report_payload(document.frontmatter),
+        )
+
 
 def _perception_anchors(record) -> dict[str, str]:
     """生成感知记录锚点。"""
@@ -229,6 +254,15 @@ def _approval_anchors(record) -> dict[str, str]:
     }
 
 
+def _report_anchors(path: Path, frontmatter: dict[str, str], report_id: str) -> dict[str, str]:
+    """生成报告记录锚点。"""
+    return {
+        "report_id": report_id,
+        "source_task_id": frontmatter.get("source_task_id", ""),
+        "report_file": str(path.name),
+    }
+
+
 def _ambient_payload(record) -> dict[str, Any]:
     """构造主动感知记录的结构化摘要。"""
     return {
@@ -270,6 +304,16 @@ def _approval_payload(record) -> dict[str, str]:
     }
 
 
+def _report_payload(frontmatter: dict[str, str]) -> dict[str, str]:
+    """构造报告记录结构化摘要。"""
+    return {
+        "created_at": frontmatter.get("created_at", ""),
+        "updated_at": frontmatter.get("updated_at", ""),
+        "status": frontmatter.get("status", ""),
+        "source_task_id": frontmatter.get("source_task_id", ""),
+    }
+
+
 def _task_result_payload(result) -> dict[str, str]:
     """构造任务结果摘要；不存在时返回空对象。"""
     if result is None:
@@ -308,7 +352,29 @@ def _normalize_ref_id(ref_type: str, ref_id: str) -> str:
         return Path(text.removeprefix("evidence:")).stem
     if ref_type == "evidence" and text.endswith(".md"):
         return Path(text).stem
+    if ref_type == "report" and text.endswith(".md"):
+        return Path(text).stem
     return text
+
+
+def _find_report_path(project_root: Path, markdown_store: MarkdownStore, ref_id: str) -> Path | None:
+    """按 report_id、id 或文件名查找报告文件。"""
+    report_root = project_root / "data" / "reports"
+    if not report_root.exists():
+        return None
+    for path in sorted(report_root.rglob("*.md")):
+        try:
+            document = markdown_store.read_document(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if ref_id in {_report_id(path, document.frontmatter), path.stem}:
+            return path
+    return None
+
+
+def _report_id(path: Path, frontmatter: dict[str, str]) -> str:
+    """返回报告稳定 ID。"""
+    return frontmatter.get("report_id") or frontmatter.get("id") or path.stem
 
 
 def _missing(status: str, ref_type: str, ref_id: str) -> ContextRefReadResult:

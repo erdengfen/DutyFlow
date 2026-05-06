@@ -22,6 +22,7 @@ from dutyflow.agent.tools.logic.contact_tools.add_contact_knowledge import AddCo
 from dutyflow.agent.tools.logic.contact_tools.get_contact_knowledge_detail import GetContactKnowledgeDetailTool
 from dutyflow.agent.tools.logic.contact_tools.search_contact_knowledge_headers import SearchContactKnowledgeHeadersTool
 from dutyflow.agent.tools.logic.contact_tools.update_contact_knowledge import UpdateContactKnowledgeTool
+from dutyflow.agent.tools.logic.context_tools.list_work_context import ListWorkContextTool
 from dutyflow.agent.tools.logic.context_tools.read_context_ref import ReadContextRefTool
 from dutyflow.agent.tools.logic.identity_tools.lookup_contact_identity import LookupContactIdentityTool
 from dutyflow.agent.tools.logic.identity_tools.lookup_responsibility_context import LookupResponsibilityContextTool
@@ -48,6 +49,7 @@ TOOL_REGISTRY = {
     FeishuSearchDriveTool.name: FeishuSearchDriveTool(),
     AddContactKnowledgeTool.name: AddContactKnowledgeTool(),
     CreateApprovalRequestTool.name: CreateApprovalRequestTool(),
+    ListWorkContextTool.name: ListWorkContextTool(),
     ReadContextRefTool.name: ReadContextRefTool(),
     CloseCliSessionTool.name: CloseCliSessionTool(),
     CreateBackgroundTaskTool.name: CreateBackgroundTaskTool(),
@@ -157,6 +159,7 @@ def _self_test() -> None:
         assert runtime_registry.has("feishu_search_drive")
         assert runtime_registry.has("add_contact_knowledge")
         assert runtime_registry.has("create_approval_request")
+        assert runtime_registry.has("list_work_context")
         assert runtime_registry.has("read_context_ref")
         assert runtime_registry.has("close_cli_session")
         assert runtime_registry.has("create_background_task")

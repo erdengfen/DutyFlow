@@ -26,6 +26,8 @@ from dutyflow.feishu.ambient_context import (  # noqa: E402
 )
 from dutyflow.feishu.events import FeishuEventAdapter  # noqa: E402
 from dutyflow.perception.store import PerceptionRecordService  # noqa: E402
+from dutyflow.storage.file_store import FileStore  # noqa: E402
+from dutyflow.storage.markdown_store import MarkdownDocument, MarkdownStore  # noqa: E402
 from dutyflow.tasks.task_result import TaskResultStore  # noqa: E402
 from dutyflow.tasks.task_state import TaskStore  # noqa: E402
 
@@ -112,6 +114,18 @@ class TestReadContextRefTool(unittest.TestCase):
         self.assertEqual(payload["anchors"]["task_id"], "task_ctx_approval")
         self.assertEqual(payload["payload"]["requested_action"], "enable_feishu_scope")
 
+    def test_read_report_ref(self) -> None:
+        """工具应可读取本地 report 记录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_report(root)
+            result = _read(root, "report", "report_ctx_001")
+        self.assertTrue(result.ok)
+        payload = _payload(result)
+        self.assertEqual(payload["ref_type"], "report")
+        self.assertEqual(payload["anchors"]["source_task_id"], "task_ctx_001")
+        self.assertIn("今日重点", payload["text_preview"])
+
     def test_missing_ref_returns_error_envelope(self) -> None:
         """不存在的引用应返回稳定错误，不抛出异常。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,6 +200,22 @@ def _write_task_with_result(root: Path) -> None:
         tool_result_count=1,
         query_id="bg_task_ctx_001",
         raw_result="用户可见结果：风险有三项。",
+    )
+
+
+def _write_report(root: Path) -> None:
+    """写入测试用 report 记录。"""
+    MarkdownStore(FileStore(root)).write_document(
+        "data/reports/report_ctx_001.md",
+        MarkdownDocument(
+            {
+                "schema": "dutyflow.report.v1",
+                "report_id": "report_ctx_001",
+                "source_task_id": "task_ctx_001",
+                "created_at": "2026-05-07T10:00:00+08:00",
+            },
+            "# 今日重点\n\n## Summary\n\n项目风险有三项。",
+        ),
     )
 
 
