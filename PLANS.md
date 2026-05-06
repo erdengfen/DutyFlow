@@ -2819,8 +2819,8 @@ FeishuProactiveService
 
 - [x] 13.1 设计并实现 `read_context_ref` 只读工具，使 Agent 和后台 subagent 能按 `perception_id`、`ambient record_id`、`evidence_id`、`task_id` 读取已落盘上下文详情。
 - [x] 13.2 扩展 ambient_context 读取层，支持按 source_type、collector_name、created_at、record_id 扫描新增主动感知记录，并返回稳定 context packet。
-- [ ] 13.3 实现 `AmbientAnalysisIntakeService`，把新 ambient_context 批量封装为正式 runtime 输入，不伪装成用户实时消息。
-- [ ] 13.4 扩展 `RuntimeLoopInput` / `RuntimeAgentLoop`，支持 `trigger_kind=ambient_context_batch`，并把 context packet 注入 tool_content。
+- [x] 13.3 实现 `AmbientAnalysisIntakeService`，把新 ambient_context 批量封装为正式 runtime 输入，不伪装成用户实时消息。
+- [x] 13.4 扩展 `RuntimeLoopInput` / `RuntimeAgentLoop`，支持 `trigger_kind=ambient_context_batch`，并把 context packet 注入 tool_content。
 - [ ] 13.5 实现 `FeishuProactiveService`，随 app bootstrap 常驻运行，按预算和间隔执行发现、审批请求、enabled scope 采集和 ambient 分析入队。
 - [ ] 13.6 为 scope 审批补去重状态，避免同一个 candidate 反复发送审批卡片；状态必须可人工查看。
 - [ ] 13.7 将 `group_candidate_discovery`、`user_document_collector.discover_root()`、`collect_enabled_scopes()` 接入主动感知调度层。
@@ -3029,7 +3029,7 @@ FeishuProactiveService
 
 ### 阶段状态
 
-当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和按 source_type、collector_name、created_at、record_id 的 bounded scan；下一步进入 13.3，实现 `AmbientAnalysisIntakeService`，把 packet 送入正式 runtime 输入。
+当前状态：进行中。13.1 已完成 `read_context_ref` 只读工具、ContextRefReader 服务和 ambient_context 按 record_id 读回能力。13.2 已完成 `AmbientContextScanQuery`、`AmbientContextPacket` 和 bounded scan。13.3 已完成 `AmbientAnalysisIntakeService`，按 source_type watermark 扫描新增记录，打包后送入 runtime queue。13.4 已完成 `RuntimeAgentLoop` ambient_context_batch 支持，payload 直接注入 tool_content，专用提示文本区分批次分析与实时消息；下一步进入 13.5，实现 `FeishuProactiveService`。
 
 ### Step 13 测试记录
 

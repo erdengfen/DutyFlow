@@ -71,13 +71,38 @@ class RuntimeAgentLoop:
 
     def handle_work_item(self, work_item: RuntimeWorkItem) -> None:
         """消费一条 runtime work item，并把结果通过统一反馈接口发回会话。"""
+        if work_item.loop_input.trigger_kind == "ambient_context_batch":
+            self._handle_ambient_batch(work_item)
+            return
         loop_input = self._require_loop_input(work_item.perception_id)
+        self._run_loop_and_store_result(work_item, loop_input)
+
+    def _handle_ambient_batch(self, work_item: RuntimeWorkItem) -> None:
+        """消费一条主动感知批次分析任务，直接使用 payload 而不读取感知记录文件。"""
+        loop_input = work_item.loop_input.payload
+        self._run_loop_and_store_result(
+            work_item,
+            loop_input,
+            user_text_builder=_build_ambient_batch_user_text,
+            tool_content_builder=_build_ambient_batch_tool_content,
+        )
+
+    def _run_loop_and_store_result(
+        self,
+        work_item: RuntimeWorkItem,
+        loop_input: Mapping[str, Any],
+        user_text_builder=None,
+        tool_content_builder=None,
+    ) -> None:
+        """执行 AgentLoop 并把结果写回 latest 状态，供回馈和调试复用。"""
+        build_text = user_text_builder or _build_runtime_user_text
+        build_content = tool_content_builder or _build_runtime_tool_content
         chat_id = str(loop_input.get("chat_id", "")).strip()
         existing_state = self._chat_sessions.get(chat_id)
         loop_result = self.agent_loop.run_until_stop(
-            _build_runtime_user_text(loop_input),
+            build_text(loop_input),
             query_id=work_item.work_id,
-            tool_content=_build_runtime_tool_content(work_item, loop_input),
+            tool_content=build_content(work_item, loop_input),
             state=existing_state,
         )
         if chat_id:
@@ -215,6 +240,41 @@ def _build_runtime_tool_content(
     """把正式 runtime 的工作上下文挂入现有 AgentLoop 工具上下文。"""
     return {
         "perception": dict(loop_input),
+        "runtime": {
+            "work_id": work_item.work_id,
+            "perception_id": work_item.perception_id,
+            "trigger_kind": work_item.loop_input.trigger_kind,
+        },
+    }
+
+
+def _build_ambient_batch_user_text(loop_input: Mapping[str, Any]) -> str:
+    """为主动感知批次分析任务构造专用 Agent 提示。"""
+    packet = loop_input.get("packet") or {}
+    source_type = str(packet.get("source_type") or loop_input.get("source_type") or "")
+    record_count = int(packet.get("record_count") or 0)
+    time_window = packet.get("time_window") or {}
+    start = str(time_window.get("start") or "")
+    end = str(time_window.get("end") or "")
+    return (
+        "你正在执行主动感知批次分析任务，这不是用户实时发送的消息。\n"
+        f"本批次包含 {record_count} 条来源为 {source_type} 的新增感知记录，"
+        f"时间窗口：{start} 至 {end}。\n"
+        f"{_build_time_context(loop_input)}\n"
+        "请阅读 tool_content 中的 ambient_context_batch，判断是否有需要提醒用户、"
+        "创建后台任务、安排定时总结或发起审批的事项。"
+        "可以使用 read_context_ref 补充记录详情；"
+        "只在有明确判断结果时才输出回复或创建任务。"
+    )
+
+
+def _build_ambient_batch_tool_content(
+    work_item: RuntimeWorkItem,
+    loop_input: Mapping[str, Any],
+) -> dict[str, Any]:
+    """为主动感知批次任务把 packet 注入工具上下文。"""
+    return {
+        "ambient_context_batch": loop_input.get("packet") or {},
         "runtime": {
             "work_id": work_item.work_id,
             "perception_id": work_item.perception_id,
