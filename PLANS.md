@@ -2209,9 +2209,9 @@ edit_time   最后编辑时间（Unix 秒）
 
 ### 当前决策
 
-状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步和对应测试。继续补用户面请求封装、预算控制、sync_state 和现有用户资源客户端迁移。
+状态：进行中。已完成用户 token provider、首次 OAuth 授权后的进程内过期时间同步、用户面请求封装、请求日志、raw 响应落盘和对应测试。继续补预算控制、sync_state 和现有用户资源客户端迁移。
 
-验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，518 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
+验证记录：2026-05-06，执行 `UV_CACHE_DIR=/tmp/dutyflow-uv-cache uv run python -m unittest discover -s test`，528 个测试通过；其中 OAuth callback 测试需要允许本地监听 socket。
 
 主动感知后续会拆成 6 个 collector：
 
@@ -2471,18 +2471,18 @@ data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
    - 覆盖 `force_refresh()` 更新 `.env` 和进程内 config。
    - 覆盖刷新失败进入 `reauth_required/refresh_failed`。
 
-5. 【未完成】新增 `src/dutyflow/feishu/user_request.py`。
+5. 【已完成】新增 `src/dutyflow/feishu/user_request.py`。
    - 实现 `FeishuUserRequest`、`FeishuUserResponse` 和 `FeishuUserRequestClient`。
    - 统一 Authorization 注入、timeout、有限重试、错误归一化、请求日志和可选 raw 落盘。
    - HTTP 401 或飞书 token 失效码只触发一次 `force_refresh()` 后重试。
    - 权限错误、资源不存在、限流、超时、瞬时错误和非零飞书 code 必须映射为稳定状态。
 
-6. 【未完成】补充用户面请求日志与 raw 响应落盘。
+6. 【已完成】补充用户面请求日志与 raw 响应落盘。
    - 默认不落完整 raw。
    - 调试或审计需要时写入 `data/feishu/raw/YYYY-MM-DD/raw_<trace_id>.md`。
    - 日志和 raw 必须脱敏 Authorization、token、refresh_token、app_secret、secret 字段。
 
-7. 【未完成】补充 `FeishuUserRequestClient` 测试。
+7. 【已完成】补充 `FeishuUserRequestClient` 测试。
    - 覆盖 Authorization 注入但日志不泄露 token。
    - 覆盖 `code=0` 正常返回。
    - 覆盖 401/token 失效后强制刷新并只重试一次。
