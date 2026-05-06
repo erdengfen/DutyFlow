@@ -103,6 +103,16 @@ class AmbientContextStore:
         )
         return AmbientContextWriteResult(record.record_id, written_path, global_index, source_index)
 
+    def read_by_record_id(self, record_id: str) -> AmbientContextRecord | None:
+        """按 ambient_context 的 record_id 读取详情记录。"""
+        target = record_id.strip()
+        if not target:
+            return None
+        for path in self._iter_record_paths():
+            if path.stem == target:
+                return self._read_record(path)
+        return None
+
     def _record_with_relative_refs(self, record: AmbientContextRecord) -> AmbientContextRecord:
         """把项目内引用路径规整为相对路径，避免 Markdown 记录绑定本机绝对目录。"""
         return replace(
@@ -121,6 +131,35 @@ class AmbientContextStore:
             / f"{_safe_file_part(record.record_id)}.md"
         )
         return self.markdown_store.file_store.resolve(relative)
+
+    def _iter_record_paths(self) -> tuple[Path, ...]:
+        """枚举 ambient_context 详情文件，不读取索引文件。"""
+        root = self.markdown_store.file_store.resolve("data/ambient_context")
+        if not root.exists():
+            return ()
+        return tuple(sorted(root.glob("*/*/*.md")))
+
+    def _read_record(self, path: Path) -> AmbientContextRecord:
+        """从已落盘 Markdown 重建 ambient_context 记录。"""
+        document = self.markdown_store.read_document(path)
+        raw_refs = _parse_key_value_section(self.markdown_store.extract_section(path, "Raw Reference"))
+        return AmbientContextRecord(
+            record_id=document.frontmatter.get("record_id", ""),
+            source_type=document.frontmatter.get("source_type", ""),
+            collector_name=document.frontmatter.get("collector_name", ""),
+            source_id=document.frontmatter.get("source_id", ""),
+            sync_scope_id=document.frontmatter.get("sync_scope_id", ""),
+            created_at=document.frontmatter.get("created_at", ""),
+            fetched_at=document.frontmatter.get("fetched_at", ""),
+            text=self.markdown_store.extract_section(path, "Extracted Text"),
+            text_preview=document.frontmatter.get("text_preview", ""),
+            summary=self.markdown_store.extract_section(path, "Summary"),
+            raw_message_ref=raw_refs.get("raw_message_ref", document.frontmatter.get("raw_message_ref", "")),
+            sync_state_ref=raw_refs.get("sync_state", ""),
+            doc_links=_parse_doc_links(self.markdown_store.extract_section(path, "Doc Links")),
+            file_clues=_parse_file_clues(self.markdown_store.extract_section(path, "File Clues")),
+            frontmatter_extra=_extra_frontmatter(document.frontmatter),
+        )
 
     def _update_index(
         self,
@@ -293,6 +332,48 @@ def _parse_table_rows(body: str) -> list[dict[str, str]]:
     return rows
 
 
+def _parse_doc_links(section_text: str) -> tuple[AmbientDocLink, ...]:
+    """从 Doc Links 表格还原文档链接线索。"""
+    rows = _parse_table_rows(section_text)
+    return tuple(
+        AmbientDocLink(row.get("url", ""), row.get("resource_type", ""), row.get("token", ""))
+        for row in rows
+        if row.get("url") or row.get("token")
+    )
+
+
+def _parse_file_clues(section_text: str) -> tuple[AmbientFileClue, ...]:
+    """从 File Clues 表格还原附件线索。"""
+    rows = _parse_table_rows(section_text)
+    return tuple(
+        AmbientFileClue(
+            row.get("message_id", ""),
+            row.get("msg_type", ""),
+            row.get("file_key", ""),
+            row.get("file_name", ""),
+        )
+        for row in rows
+        if row.get("message_id") or row.get("file_key")
+    )
+
+
+def _parse_key_value_section(section_text: str) -> dict[str, str]:
+    """解析 `- key: value` 风格的 section 内容。"""
+    parsed: dict[str, str] = {}
+    for raw_line in section_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- ") or ":" not in line:
+            continue
+        key, value = line[2:].split(":", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _extra_frontmatter(frontmatter: Mapping[str, str]) -> dict[str, str]:
+    """保留调用方额外写入的 frontmatter 字段。"""
+    return {key: value for key, value in frontmatter.items() if key not in _BASE_FRONTMATTER_KEYS}
+
+
 def _table_header(headers: tuple[str, ...]) -> str:
     """渲染 Markdown 表头和分隔行。"""
     head = "| " + " | ".join(headers) + " |"
@@ -385,6 +466,26 @@ def _safe_file_part(value: str) -> str:
 def _now_iso() -> str:
     """返回 UTC ISO 时间字符串。"""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+_BASE_FRONTMATTER_KEYS = frozenset(
+    {
+        "schema",
+        "record_id",
+        "source_type",
+        "collector_name",
+        "source_id",
+        "sync_scope_id",
+        "created_at",
+        "fetched_at",
+        "text_preview",
+        "doc_links",
+        "doc_link_count",
+        "file_clues",
+        "file_clue_count",
+        "raw_message_ref",
+    }
+)
 
 
 def _self_test() -> None:

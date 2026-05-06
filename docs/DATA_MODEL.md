@@ -1826,6 +1826,36 @@ trace_id: ""
 trace_file: ""
 ```
 
+### 10.7 `read_context_ref`
+
+输入：
+
+```yaml
+ref_type: perception | ambient_context | evidence | task | approval
+ref_id: ""
+```
+
+输出：
+
+```yaml
+ok: true
+status: ok
+ref_type: ""
+ref_id: ""
+detail_file: ""
+summary: ""
+text_preview: ""
+anchors: {}
+payload: {}
+```
+
+约束：
+
+- 只读本地 Markdown 运行产物，不访问飞书 API，不读取项目外文件。
+- 长正文只返回 `text_preview` 和 `detail_file`；完整正文仍由原始 Markdown 或 Evidence Store 承载。
+- 输出必须保留稳定锚点，例如 `perception_id`、`ambient_record_id`、`evidence_id`、`task_id`、`approval_id`。
+- 后台 task 的 `context_refs` 可以引用这些 ID，后台 subagent 通过本工具按需读取详情。
+
 ## 11. 日志与报告
 
 日志文件建议按日期分 Markdown：

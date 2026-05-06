@@ -7,6 +7,7 @@ from dutyflow.context.context_budget import (
     ContextBudgetReport,
 )
 from dutyflow.context.compression_journal import CompressionJournalRecord, CompressionJournalStore
+from dutyflow.context.context_ref_reader import ContextRefReader, ContextRefReadResult
 from dutyflow.context.evidence_store import EvidenceRecord, EvidenceStore
 from dutyflow.context.phase_summary import (
     PhaseBoundaryDetector,
@@ -33,6 +34,8 @@ __all__ = [
     "ContextBudgetReport",
     "CompressionJournalRecord",
     "CompressionJournalStore",
+    "ContextRefReader",
+    "ContextRefReadResult",
     "EvidenceRecord",
     "EvidenceStore",
     "PhaseBoundaryDetector",
@@ -60,6 +63,8 @@ def _self_test() -> None:
     assert ContextBudgetReport is not None
     assert CompressionJournalRecord is not None
     assert CompressionJournalStore is not None
+    assert ContextRefReader is not None
+    assert ContextRefReadResult is not None
     assert EvidenceRecord is not None
     assert EvidenceStore is not None
     assert PhaseBoundaryDetector is not None
