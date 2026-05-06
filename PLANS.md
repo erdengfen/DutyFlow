@@ -2222,6 +2222,42 @@ edit_time   最后编辑时间（Unix 秒）
 
 这些信息面不能靠一个飞书 API 解决。第一阶段只建设公共底层，避免每个 collector 各自处理 token、请求、分页、限流和状态续跑。
 
+### 可复用现有能力
+
+当前 `agent/feishu` 及周边已有以下能力可复用：
+
+- `src/dutyflow/feishu/oauth.py`
+  - 复用 OAuth 授权 URL、code 换 token、用户信息补全、refresh token、过期判断和飞书统一响应解析。
+  - 欠账：不能让 6 个 collector 各自实例化并调用 `ensure_valid_token()`；需要在其上包一层带锁 token provider。
+
+- `src/dutyflow/config/env.py`
+  - 复用 `EnvConfig`、`load_env_config()`、`save_env_values()` 作为 `.env` 唯一配置入口和 token 持久化入口。
+  - 欠账：`/oauth` 首次授权后当前进程内 config 应同步 `feishu_owner_user_token_expires_at`。
+
+- `src/dutyflow/feishu/user_resource.py`
+  - 复用当前 `FeishuUserResourceClient` 的结构化结果风格：用户面 API 返回 `ok/status/detail`，不直接把异常抛给上层业务。
+  - 复用 HTTP 状态和飞书 code 归一化方向。
+  - 欠账：该文件当前混合 token 获取、具体 API 调用和工具服务方法，不适合作为 6 个 collector 的公共请求底座；后续应改为依赖新 `FeishuUserClient`。
+
+- `src/dutyflow/feishu/client.py`
+  - 复用 `FeishuClientResult` 的 `ok/status/detail/payload` 结果形态。
+  - 继续保持 bot/app 身份能力在 `FeishuClient` 内，用户身份能力不要混入该类。
+
+- `src/dutyflow/storage/file_store.py`、`src/dutyflow/storage/markdown_store.py`、`src/dutyflow/storage/structured_markdown.py`
+  - 复用工作区边界检查、简单 frontmatter 约束、section 抽取和结构化 Markdown 扫描能力。
+  - 后续 `sync_state` 和主动感知索引仍使用 Markdown，不引入数据库。
+
+- `src/dutyflow/logging/audit_log.py`
+  - 复用 `AuditLogger` 和 `build_audit_preview()` 的脱敏能力记录请求摘要。
+  - 请求日志不得写入 token、refresh_token、app_secret、Authorization 原文。
+
+- `src/dutyflow/agent/runtime_service.py`、`src/dutyflow/agent/debug_chat_service.py`、`src/dutyflow/tasks/task_scheduler.py`
+  - 复用单进程内 worker、状态快照、可停止线程和周期扫描的实现模式。
+  - 第一阶段不直接接入正式 runtime worker，只为后续 collector runner 提供设计范式。
+
+- `src/dutyflow/context/evidence_store.py`
+  - 复用大正文外置能力。主动感知拉到的大文档、会议记录正文、多维表格快照等大对象后续应写 Evidence 或等价大对象存储，索引记录只保留摘要、hash 和路径。
+
 ### 第一阶段公共底层
 
 #### A. Feishu User Client
@@ -2235,6 +2271,33 @@ edit_time   最后编辑时间（Unix 秒）
 - 统一附带 `Authorization`。
 - 区分用户身份请求与 bot/app 身份请求。
 - 记录当前 account scope，至少能说明当前请求代表哪个 owner 用户、哪个 tenant/app 空间、使用哪些授权 scope。
+
+拟新增/调整：
+
+- 新增 `src/dutyflow/feishu/user_token_provider.py`
+  - `FeishuUserTokenProvider`
+    - 持有 `EnvConfig`、`project_root` 和 `FeishuOAuthManager`。
+    - 对 token 刷新加进程内锁，避免并发 collector 重复刷新。
+    - 提供 `get_token() -> str`，只返回有效 user token。
+    - 提供 `force_refresh() -> str`，供 401 后单次强制刷新重试。
+    - 提供 `account_scope()`，返回 app_id、tenant_key、owner_open_id、owner_user_id、owner_union_id、scope 列表等非敏感身份边界信息。
+    - 提供 `health_snapshot()`，返回 `valid/refreshed/reauth_required/latest_error` 等可观测状态，不包含 token 原文。
+  - 关键实现点：
+    - `get_token()` 先走本地过期判断，未过期直接返回。
+    - 需要刷新时进入锁；进入锁后再次检查，避免重复刷新。
+    - 刷新成功后更新 `.env` 和当前 `config`。
+    - 刷新失败时记录 `reauth_required` 或 `refresh_failed`，由上层 collector 进入明确失败状态。
+
+- 新增 `src/dutyflow/feishu/user_client.py`
+  - `FeishuUserClient`
+    - 只代表 owner 用户身份发请求。
+    - 内部依赖 `FeishuUserTokenProvider` 和统一请求封装。
+    - 不提供 bot/app 发送消息能力，避免和 `FeishuClient` 混淆。
+    - 后续 6 个 collector 只依赖该 client，不直接依赖 `FeishuOAuthManager`。
+
+- 调整 `src/dutyflow/feishu/user_resource.py`
+  - 保留现有工具兼容入口。
+  - 后续将 `read_doc()`、`get_file_meta()`、`search_drive()` 改为调用 `FeishuUserClient`，避免两套 token 和请求逻辑并存。
 
 #### B. 统一请求封装
 
@@ -2256,6 +2319,52 @@ edit_time   最后编辑时间（Unix 秒）
 - 不把 token、refresh_token、app_secret 写入日志或落盘产物。
 - 不绕过审批和权限边界扩大用户面读取范围。
 
+拟新增：
+
+- 新增 `src/dutyflow/feishu/user_request.py`
+  - `FeishuUserRequest`
+    - `method`
+    - `url`
+    - `params`
+    - `json_body`
+    - `timeout_seconds`
+    - `trace_id`
+    - `collector_name`
+  - `FeishuUserResponse`
+    - `ok`
+    - `status`
+    - `http_status`
+    - `feishu_code`
+    - `detail`
+    - `data`
+    - `page_token`
+    - `has_more`
+    - `raw_path`
+  - `FeishuUserRequestClient`
+    - `request()`：统一加 Authorization、timeout、错误归一化、日志和可选 raw 落盘。
+    - `paged_request()`：按 `page_token/has_more` 或等价字段迭代，受预算上限控制。
+    - `request_with_token_retry()`：遇到 401/飞书 token 失效码时，调用 `force_refresh()` 后只重试一次。
+
+错误状态第一版统一为：
+
+- `ok`
+- `token_missing`
+- `reauth_required`
+- `permission_denied`
+- `not_found`
+- `rate_limited`
+- `timeout`
+- `transient_error`
+- `api_error`
+- `invalid_response`
+
+原始响应可选落盘：
+
+- 默认不落完整 raw。
+- collector 调试或需要审计时，写入 `data/feishu/raw/YYYY-MM-DD/raw_<trace_id>.md`。
+- raw frontmatter 只保存 trace、collector、endpoint、http_status、feishu_code、created_at 等非敏感字段。
+- raw 正文必须脱敏 Authorization、token、secret 字段。
+
 #### C. 限流和预算
 
 目标：先控制主动拉取的成本和失败面，比复杂调度器更优先。
@@ -2270,6 +2379,30 @@ edit_time   最后编辑时间（Unix 秒）
 
 所有页数、条数、正文大小、超时、重试和退避上限在代码旁必须有中文注释说明用途，禁止保留无说明 magic number。
 
+拟新增：
+
+- 新增 `src/dutyflow/feishu/collector_budget.py`
+  - `CollectorBudget`
+    - `collector_name`
+    - `max_pages_per_run`
+    - `max_items_per_run`
+    - `max_content_chars`
+    - `request_timeout_seconds`
+    - `max_retries`
+    - `base_backoff_seconds`
+  - `CollectorBudgetUsage`
+    - `pages_used`
+    - `items_used`
+    - `content_chars_used`
+    - `stopped_reason`
+  - `CollectorBudgetGuard`
+    - `can_request_next_page()`
+    - `can_accept_item()`
+    - `trim_content()`
+    - `backoff_seconds_for_failure()`
+
+第一版默认预算以保守值放在代码常量中，并在常量旁写中文注释。不同 collector 后续可覆盖预算，但必须显式传入，不能散落 magic number。
+
 #### D. sync_state 最小接口
 
 目标：让每个 collector 能从上次位置继续，不先设计复杂状态机。
@@ -2280,6 +2413,162 @@ edit_time   最后编辑时间（Unix 秒）
 - 上次成功是什么时候？
 - 上次失败是什么？
 - 下次从哪里继续？
+
+拟新增：
+
+- 新增 `src/dutyflow/feishu/sync_state.py`
+  - `FeishuCollectorSyncState`
+    - `collector_name`
+    - `surface_type`
+    - `scope_id`
+    - `cursor`
+    - `last_success_at`
+    - `last_failure_at`
+    - `last_error_kind`
+    - `last_error_detail`
+    - `next_cursor`
+    - `updated_at`
+  - `FeishuSyncStateStore`
+    - `read(collector_name, scope_id)`
+    - `mark_success(..., cursor, next_cursor)`
+    - `mark_failure(..., error_kind, error_detail)`
+    - `next_cursor(...) -> str`
+
+落盘位置：
+
+```text
+data/feishu/sync_state/<collector_name>/<safe_scope_id>.md
+```
+
+说明：
+
+- `scope_id` 用于区分同一个 collector 下的不同同步范围，例如单聊会话、群聊、用户云盘、会议空间或多维表格 app。
+- `cursor` 和 `next_cursor` 第一版只作为字符串保存，不在 frontmatter 里放复杂对象。
+- 复杂分页状态、多个游标、按资源类型拆分的状态表后续再补。
+
+### 分步开发计划
+
+1. 【已完成】梳理当前 `agent/feishu` 及周边可复用底层能力。
+   - 明确可复用 `oauth.py`、`env.py`、`user_resource.py`、`client.py`、Markdown storage、audit log、runtime worker 模式和 evidence store。
+   - 明确现有能力不能直接承载 6 个用户面 collector，需要先补公共底层。
+
+2. 【未完成】新增 `src/dutyflow/feishu/user_token_provider.py`。
+   - 实现 `FeishuUserTokenProvider`。
+   - 收束 user token 获取、过期前刷新、强制刷新、刷新失败状态和 account scope。
+   - 使用进程内锁避免多个 collector 并发重复刷新。
+   - 刷新成功后同时更新 `.env` 和当前进程内 `EnvConfig`。
+
+3. 【未完成】修复 `/oauth` 首次授权后的进程内 token 过期时间同步。
+   - 当前 OAuth completion 需要同步 `feishu_owner_user_token_expires_at`。
+   - 避免首次授权后当前进程仍误判 token 状态。
+
+4. 【未完成】补充 `FeishuUserTokenProvider` 测试。
+   - 覆盖 token 未过期直接返回。
+   - 覆盖临近过期刷新。
+   - 覆盖并发刷新只实际刷新一次。
+   - 覆盖 `force_refresh()` 更新 `.env` 和进程内 config。
+   - 覆盖刷新失败进入 `reauth_required/refresh_failed`。
+
+5. 【未完成】新增 `src/dutyflow/feishu/user_request.py`。
+   - 实现 `FeishuUserRequest`、`FeishuUserResponse` 和 `FeishuUserRequestClient`。
+   - 统一 Authorization 注入、timeout、有限重试、错误归一化、请求日志和可选 raw 落盘。
+   - HTTP 401 或飞书 token 失效码只触发一次 `force_refresh()` 后重试。
+   - 权限错误、资源不存在、限流、超时、瞬时错误和非零飞书 code 必须映射为稳定状态。
+
+6. 【未完成】补充用户面请求日志与 raw 响应落盘。
+   - 默认不落完整 raw。
+   - 调试或审计需要时写入 `data/feishu/raw/YYYY-MM-DD/raw_<trace_id>.md`。
+   - 日志和 raw 必须脱敏 Authorization、token、refresh_token、app_secret、secret 字段。
+
+7. 【未完成】补充 `FeishuUserRequestClient` 测试。
+   - 覆盖 Authorization 注入但日志不泄露 token。
+   - 覆盖 `code=0` 正常返回。
+   - 覆盖 401/token 失效后强制刷新并只重试一次。
+   - 覆盖 403 不重试并映射 `permission_denied`。
+   - 覆盖 timeout、5xx、非零 code、无效响应和分页预算停止。
+
+8. 【未完成】新增 `src/dutyflow/feishu/collector_budget.py`。
+   - 实现 `CollectorBudget`、`CollectorBudgetUsage` 和 `CollectorBudgetGuard`。
+   - 控制每轮最大页数、最大条数、正文最大读取量、请求超时、最大重试和失败退避。
+   - 所有页数、条数、大小、超时、重试、退避默认值旁必须写中文注释说明用途。
+
+9. 【未完成】补充 collector budget 测试。
+   - 覆盖页数上限。
+   - 覆盖条数上限。
+   - 覆盖正文大小裁剪。
+   - 覆盖失败退避增长。
+   - 覆盖权限错误不进入普通重试路径。
+
+10. 【未完成】新增 `src/dutyflow/feishu/sync_state.py`。
+    - 实现 `FeishuCollectorSyncState`。
+    - 实现 `FeishuSyncStateStore` 的 `read()`、`mark_success()`、`mark_failure()`、`next_cursor()`。
+    - 使用 Markdown 落盘到 `data/feishu/sync_state/<collector_name>/<safe_scope_id>.md`。
+    - 第一版 cursor 和 next_cursor 只保存字符串，不保存复杂对象。
+
+11. 【未完成】补充 sync_state 测试。
+    - 覆盖状态不存在时返回空 cursor 初始状态。
+    - 覆盖成功后写入 cursor、next_cursor、last_success_at。
+    - 覆盖失败后写入 last_failure_at、last_error_kind、last_error_detail。
+    - 覆盖 `scope_id` 安全文件名转换，不能路径逃逸。
+
+12. 【未完成】新增 `src/dutyflow/feishu/user_client.py`。
+    - 实现 `FeishuUserClient`。
+    - 只代表 owner 用户身份发请求。
+    - 内部依赖 `FeishuUserTokenProvider` 和 `FeishuUserRequestClient`。
+    - 不提供 bot/app 发送能力，继续和 `FeishuClient` 分离。
+
+13. 【未完成】迁移 `src/dutyflow/feishu/user_resource.py` 到新用户面底层。
+    - 保留现有 `read_doc()`、`get_file_meta()`、`search_drive()` 对外兼容。
+    - 内部改为依赖 `FeishuUserClient`。
+    - 移除重复 token 获取和重复请求错误处理。
+
+14. 【未完成】跑通现有用户资源工具回归。
+    - `test/test_feishu_oauth.py`
+    - `test/test_feishu_user_resource.py`
+    - `test/test_feishu_tools.py`
+
+15. 【未完成】跑通 Step 12A 新增测试与全量测试。
+    - 新增 token provider、user request、collector budget、sync_state 测试全部通过。
+    - 全量 `python -m unittest discover -s test` 通过。
+
+16. 【未完成】进入 6 个 collector 的具体设计前更新数据模型文档。
+    - 补充 `docs/DATA_MODEL.md` 中主动感知记录 schema。
+    - 补充用户面资源索引 schema。
+    - 明确用户私信、用户群聊、用户文档、群聊内文档、会议记录、多维表格的落盘边界。
+
+### 测试清单
+
+- `test/test_feishu_user_token_provider.py`
+  - token 未过期直接返回。
+  - token 临近过期触发刷新。
+  - 并发刷新只实际调用一次刷新。
+  - `force_refresh()` 会更新 `.env` 和进程内 config。
+  - 刷新失败返回明确 `reauth_required/refresh_failed` 状态。
+
+- `test/test_feishu_user_request.py`
+  - 自动附带 Authorization，且日志不包含 token 原文。
+  - 200 + `code=0` 返回 `ok`。
+  - HTTP 401 或飞书 token 失效码触发一次强制刷新重试。
+  - 403 映射 `permission_denied`，不重试。
+  - 超时、5xx、非零 code 映射稳定错误状态。
+  - 分页在预算页数内停止，并返回 `has_more/next_cursor`。
+
+- `test/test_feishu_collector_budget.py`
+  - 页数、条数、正文大小上限生效。
+  - 失败退避随失败次数增长。
+  - 权限错误不进入普通重试路径。
+
+- `test/test_feishu_sync_state.py`
+  - 不存在状态时返回空 cursor 的初始状态。
+  - 成功后写入 cursor、next_cursor、last_success_at。
+  - 失败后写入 last_failure_at、last_error_kind、last_error_detail。
+  - `scope_id` 被安全转成文件名，不能路径逃逸。
+
+- 回归测试
+  - `test/test_feishu_oauth.py`
+  - `test/test_feishu_user_resource.py`
+  - `test/test_feishu_tools.py`
+  - 全量 `python -m unittest discover -s test`
 
 ### 第一版已知欠账
 
