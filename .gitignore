@@ -23,3 +23,6 @@ test
 test/*
 
 docs/*
+
+*:Zone.Identifier
+*_Zone.Identifier
