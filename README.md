@@ -115,25 +115,7 @@ OAuth 授权完成，已记录用户身份和访问凭证（N 个字段已更新
 
 ### 第七步：发现和授权采集范围
 
-完成 OAuth 后，通过 CLI 或主动感知自动发现可采集的群组和云盘范围。
-
-**通过 CLI 手动操作：**
-
-```
-# 发现你所在的飞书群组
-/feishu discover groups
-
-# 查看已发现但待审批的 candidate scope
-/feishu scopes candidates
-
-# 向自己发送飞书审批卡片请求授权某个群聊
-/feishu request <scope_id>
-
-# 或直接在本地批准（仅限调试场景）
-/feishu approve <scope_id>
-```
-
-**主动感知自动流程：**
+完成 OAuth 后，主动感知会自动发现可采集的群组和云盘范围。CLI 端仅保留本地测试指令，用于开发阶段人工触发发现、查看 scope 和验证审批链路。
 
 应用启动后每 60 分钟自动发现新群组，每 24 小时对未请求过的 candidate scope 发送飞书审批卡片。收到审批卡片后，在飞书中点击确认即可。
 
@@ -156,69 +138,38 @@ docker compose up -d
 
 ---
 
-## CLI 命令
+## CLI 调试入口
 
-进入交互 CLI 后，可使用以下命令：
-
-```
-/health                          — 应用健康检查
-
-/feishu                          — 当前飞书监听状态
-/feishu doctor                   — 进入飞书长连接诊断模式
-/feishu latest                   — 最近一条飞书接入事件
-/feishu dm                       — 拉取 owner 私信（collector 调试）
-/feishu gm [秒数]                — 拉取 enabled 群消息（collector 调试）
-/feishu docs                     — 拉取 enabled 云盘清单（collector 调试）
-/feishu discover groups          — 发现群组，写入 candidate scope
-/feishu scopes                   — 查看所有 scope 注册表
-/feishu scopes candidates        — 只看 candidate scope
-/feishu request <scope_id>       — 发送飞书审批卡片请求启用 scope
-/feishu approve <scope_id>       — 本地直接批准并启用 scope（调试用）
-/feishu disable <scope_id>       — 禁用 scope
-
-/feishu proactive status         — 主动感知调度服务状态
-/feishu proactive ambient        — 最近 24h ambient_context 记录摘要
-/feishu proactive tasks          — 最近主动感知创建的后台任务（总结/分析）
-/feishu proactive approvals      — 各 scope 的审批请求记录
-/feishu proactive once           — 手动触发一次完整调度 tick
-
-/chat run <输入>                 — 提交一条非阻塞 Agent 调试任务
-/chat status                     — 调试 worker 状态
-/chat latest                     — 最近一条调试任务结果
-
-/agent state                     — 运行时 AgentState、投影消息、Token Budget
-
-/context clear                   — 清空运行时上下文投影缓存
-/context compress                — 手动触发 LLM Phase Summary
-
-/exit                            — 退出 CLI
-```
+交互 CLI 预留了健康检查、飞书接入、主动感知、后台任务和 Agent Loop 的本地测试指令，便于开发阶段观察链路状态和人工触发关键流程。
 
 ---
 
 ## 工作流概览
 
 ```
-飞书私聊 / 群聊 / 云盘事件
+飞书私聊 / 群聊 / 云盘事件 / 定时调度任务
         │
         ▼
-Ingress Layer         — 长连接 WebSocket 接收事件，落盘到 data/events/
+Ingress Layer         — 接收长连接事件、卡片回调、定时任务触发，落盘到 data/events/
         │
         ▼
-Perception Layer      — 标准化消息/文件/来源元数据，落盘到 data/perception/
+Perception Layer      — 标准化消息、文件、来源、触发方式，落盘到 data/perception/
         │
         ▼
-Identity & Source     — 绑定发送者、会话、租户、Owner 作用域
+Identity & Source     — 补全联系人、会话、群组、文档、责任上下文
         │
         ▼
-Weight / Permission   — 评估重要性、紧急性、责任归属
+Weight / Permission   — 评估重要性、紧急性、责任归属、是否需要审批
         │
         ▼
 Agent Loop
-        ├── Tool Runtime              — 权限管控工具执行链
-        ├── Background Subagent       — 隔离长任务执行面
-        ├── Runtime Context Manager   — 上下文投影、压缩、健康检查
-        └── Approval Recovery Chain   — 中断、恢复、审批记录
+        ├── Runtime Context Manager   — 构建模型可见工作视图，压缩长上下文
+        ├── Skill Selection           — 按任务类型选择读取、总结、任务、审批等业务 Skill
+        ├── Model Turn                — 生成下一步意图：回复、读上下文、建任务、请求审批
+        ├── Tool Runtime              — 路由工具、校验权限、执行只读或审批后的写操作
+        ├── Evidence / Receipt Store  — 大结果卸载为引用，工具结果写入可审计收据
+        ├── Background Subagent       — 将长任务、定时总结、延迟提醒交给隔离执行面
+        └── Approval Recovery Chain   — 权限不足时挂起，飞书卡片审批后恢复执行
         │
         ▼
 Feedback Layer        — 以 Bot 身份向飞书发送文本或卡片
@@ -226,6 +177,18 @@ Feedback Layer        — 以 Bot 身份向飞书发送文本或卡片
         ▼
 Local Evidence / Audit / Task Store  — 事件、任务、审批、收据、日志
 ```
+
+Agent Loop 的一次执行并不是简单地把所有历史消息塞给模型，而是按固定顺序推进：
+
+1. **归一输入。** 飞书事件、主动感知采集记录、后台任务和 CLI 调试输入都会先转成统一的运行时输入，保留来源、时间、触发方式和可追溯 ID。
+2. **加载状态。** 运行时读取当前任务状态、审批状态、最近工具收据、上下文引用和必要的身份信息，形成本轮可用的执行边界。
+3. **投影上下文。** `RuntimeContextManager` 只把模型需要的工作视图放入上下文窗口；完整事件、文档正文、长工具结果以 `context_ref` 或 evidence 文件保存，按需读取。
+4. **选择 Skill。** Agent 根据输入意图选择工作上下文读取、周期总结、任务操作、权限审批、关系权重等业务 Skill，用它们约束工具使用顺序和回答格式。
+5. **模型决策。** 模型只决定下一步动作：直接回复、调用只读工具、创建后台任务、发起审批、读取上下文引用或等待更多信息。
+6. **工具执行。** `ToolRouter` 找到工具，`PermissionGate` 判断是否允许执行；只读且已授权的工具直接运行，涉及外部状态变更、敏感读取或未批准 scope 时转入审批。
+7. **写入收据。** 工具结果不会无约束累积在对话中，而是写入 receipt、evidence、ambient context、task result 或 approval record，再把短引用交还给 Agent。
+8. **循环或挂起。** 如果工具结果足够，Agent 进入下一轮推理；如果等待用户审批或定时时间未到，任务挂起并保留恢复点。
+9. **反馈与落盘。** 最终结果通过飞书 Bot 回复用户，同时把任务状态、审批结果、摘要报告和审计日志落盘，便于事后检查。
 
 ### 主动感知调度层
 
@@ -338,44 +301,3 @@ data/                 本地运行时产物（不提交）
 - **密钥不写入产物。** `app_secret`、`access_token`、`refresh_token`、`api_key` 从所有事件记录、感知记录和日志中排除。
 - **本地文件可审计。** 每个运行时产物使用稳定 Schema，包含 `id`、`schema` 和时间戳，无需运行中的进程即可查阅。
 - **不允许隐式破坏性操作。** Agent 不能静默删除、覆写或代替用户发送内容，所有此类操作需要显式审批并留有决策记录。
-
----
-
-## 测试
-
-```bash
-# 运行全部 708 项测试
-uv run python -m unittest discover -s test
-```
-
-测试覆盖：Agent 状态机、Agent 循环、工具控制链、运行时上下文管理、后台 Subagent、审批流、飞书接入、主动感知调度、周期总结任务、CLI 命令、本地持久化。
-
----
-
-## 已完成能力
-
-- 飞书长连接事件接入（私聊、群聊 `@Bot`、卡片回调）
-- `/bind` 自动绑定 owner 身份，写回 `.env`
-- `/oauth` 完成用户 OAuth 授权，自动获取 user_access_token
-- 原始事件落盘与感知记录标准化
-- 身份、来源、责任查询工具
-- 联系人知识查询与写入工具
-- Agent 运行时：`AgentState`、`AgentLoop`、`ModelClient`、工具调用生命周期
-- `ToolRegistry / ToolRouter / PermissionGate / ToolExecutor` 控制链
-- Skill Registry 与基于文件的加载器
-- Runtime Context Manager（投影、Working Set、State Delta、Tool Receipt、Evidence Store、Context Budget、Phase Summary、Compression Journal、Context Health Check）
-- 后台任务运行时（Task Store、Scheduler、Worker、Subagent Executor、结果回馈）
-- 审批流（请求、飞书卡片、按钮回调、恢复链、审计记录）
-- 主动感知调度层（群组发现、scope 审批卡片、DM/群消息/云文档采集、ambient 分析入队、周期总结任务）
-- 本地工作上下文枚举工具 `list_work_context`
-- 业务 Skill：`dutyflow_work_context_reader`
-- CLI 调试接口（完整 `/feishu`、`/chat`、`/agent`、`/context` 命令树）
-- 所有运行时产物类型的本地 Markdown 落盘
-
-## 计划中
-
-- 权重与优先级决策层（重要性、紧急性、责任评分，含显式决策留痕）
-- 业务 Skills 补齐（总结执行规范、任务操作规范、权限操作、关系权重）
-- 联系人与责任画像
-- 多账号工作空间隔离
-- 外部 MCP 工具集成
